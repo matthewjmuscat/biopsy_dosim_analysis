@@ -9,3 +9,4 @@ from statsmodels.nonparametric.kernel_regression import KernelReg
 import misc_tools
 import plotly.express as px
 import plotting_funcs
+import kaleido # imported for exporting image files, although not referenced it is required
