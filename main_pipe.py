@@ -2,7 +2,6 @@ import pandas as pd
 import load_files
 from pathlib import Path
 import os 
-import statistical_tests_1_quick_and_dirty
 import shape_and_radiomic_features
 import misc_funcs
 import biopsy_information
@@ -75,10 +74,56 @@ def main():
 
 
 
+    # Cohort global dosimetry
+    cohort_global_dosimetry_path = cohort_csvs_directory.joinpath("Cohort: Global dosimetry (NEW).csv")  # Ensure the directory is a Path object
+    # this is a multiindex dataframe
+    cohort_global_dosimetry_df = load_files.load_multiindex_csv(cohort_global_dosimetry_path, header_rows=[0, 1])  # Load the CSV file into a DataFrame
+
+
+    # Cohort global dosimetry by voxel
+    cohort_global_dosimetry_by_voxel_path = cohort_csvs_directory.joinpath("Cohort: Global dosimetry by voxel.csv")  # Ensure the directory is a Path object
+    # this is a multiindex dataframe
+    cohort_global_dosimetry_by_voxel_df = load_files.load_multiindex_csv(cohort_global_dosimetry_by_voxel_path, header_rows=[0, 1])  # Load the CSV file into a DataFrame
+
+
+    # Cohort bx dvh metrics
+    cohort_global_dosimetry_dvh_metrics_path = cohort_csvs_directory.joinpath("Cohort: Bx DVH metrics (generalized).csv")  # Ensure the directory is a Path object
+    cohort_global_dosimetry_dvh_metrics_df = load_files.load_csv_as_dataframe(cohort_global_dosimetry_dvh_metrics_path)
+
+    
 
 
 
+    ### Load all individual bx csvs and concatenate ### (START)
 
+    # Point wise dose output by MC trial number (START)
+    mc_sim_results_path = csv_directory.joinpath("MC simulation")  # Ensure the directory is a Path object
+    all_paths_point_wise_dose_output = load_files.find_csv_files(mc_sim_results_path, ['Real-Bx_Track LT POST-Point-wise dose output by MC trial number.csv'])
+    # Load and concatenate 
+    # Loop through all the paths and load the csv files
+    all_point_wise_dose_dfs_list = []
+    for path in all_paths_point_wise_dose_output:
+        # Load the csv file into a dataframe
+        df = load_files.load_csv_as_dataframe(path)
+        # Append the dataframe to the list
+        all_point_wise_dose_dfs_list.append(df)
+
+        del df
+    # Concatenate all the dataframes into one dataframe
+    all_point_wise_dose_df = pd.concat(all_point_wise_dose_dfs_list, ignore_index=True)
+    del all_point_wise_dose_dfs_list
+    # Print the shape of the dataframe
+    print(f"Shape of all point wise dose dataframe: {all_point_wise_dose_df.shape}")
+    # Print the columns of the dataframe
+    print(f"Columns of all point wise dose dataframe: {all_point_wise_dose_df.columns}")
+    # Print the first 5 rows of the dataframe
+    print(f"First 5 rows of all point wise dose dataframe: {all_point_wise_dose_df.head()}")
+    # Print the last 5 rows of the dataframe
+    print(f"Last 5 rows of all point wise dose dataframe: {all_point_wise_dose_df.tail()}")
+    # point wise dose output by MC trial number (END)
+
+
+    ### Load all individual bx csvs and concatenate ### (END)
 
 
     ########### LOADING COMPLETE
