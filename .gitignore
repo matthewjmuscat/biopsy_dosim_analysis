@@ -1,0 +1,9 @@
+# Ignore all JPEG and PNG image files
+*.jpg
+*.png
+*.html
+*.svg
+*.svgz
+*.csv
+*.pdf
+output_data/
