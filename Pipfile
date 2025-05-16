@@ -11,6 +11,7 @@ matplotlib = "*"
 seaborn = "*"
 statsmodels = "*"
 kaleido = "*"
+pyarrow = "*"
 
 [dev-packages]
 

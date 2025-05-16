@@ -140,7 +140,7 @@ def load_master_dict(main_output_path,
     pickled_data_folder = found_folders[0]
 
     # master_structure_info_dict
-    results_master_structure_dict_path = pickled_data_folder.joinpath()
+    results_master_structure_dict_path = pickled_data_folder.joinpath(master_structure_dict)
     print(f'Loading {master_structure_dict} from: {results_master_structure_dict_path}')
     with open(results_master_structure_dict_path, "rb") as preprocessed_master_structure_dict_file:
         master_structure_dict = pickle.load(preprocessed_master_structure_dict_file) 
