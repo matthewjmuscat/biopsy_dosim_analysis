@@ -12,6 +12,7 @@ seaborn = "*"
 statsmodels = "*"
 kaleido = "*"
 pyarrow = "*"
+pingouin = "*"
 
 [dev-packages]
 

@@ -11,14 +11,14 @@ import pickle
 import pathlib # imported for navigating file system
 import summary_statistics
 import pyarrow # imported for loading parquet files, although not referenced it is required
-
+import helper_funcs
 
 def main():
     # This one is 10k containment and 10 (very low) dosim for speed, all vitesse patients, also 2.5^3 for dil, 2.5 only for OARs and bxs
     #main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-Apr-03-2025 Time-15,59,46")
     
     # This one is 10 (very low for speed) containment and 10k dosim, all vitesse patients, also 2.5^3 for dil, 2.5 only for OARs and bxs (not including variation in contouring - although this is negligible)
-    main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-01,37,51")
+    main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-18,11,24")
 
 
 
@@ -249,6 +249,11 @@ def main():
     all_voxel_wise_dose_df = pd.concat(all_voxel_wise_dose_dfs_list, ignore_index=True)
     """ NOTE: The columns of the dataframe are:
     print(all_voxel_wise_dose_df.columns)
+        Index(['Voxel index', 'MC trial num', 'Dose (Gy)', 'Dose grad (Gy/mm)',
+            'X (Bx frame)', 'Y (Bx frame)', 'Z (Bx frame)', 'R (Bx frame)',
+            'Simulated bool', 'Simulated type', 'Bx refnum', 'Bx index', 'Bx ID',
+            'Patient ID', 'Voxel begin (Z)', 'Voxel end (Z)'],
+            dtype='object')
     """
     del all_voxel_wise_dose_dfs_list
     # Print the shape of the dataframe
@@ -284,7 +289,12 @@ def main():
     all_mc_structure_transformation_df = pd.concat(all_mc_structure_transformation_dfs_list, ignore_index=True)
     """ NOTE: The columns of the dataframe are:
     print(all_mc_structure_transformation_df.columns)
-    Patient ID	Structure ID	Simulated bool	Simulated type	Structure type	Structure ref num	Structure index	Dilation (XY)	Dilation (Z)	Rotation (X)	Rotation (Y)	Rotation (Z)	Shift (X)	Shift (Y)	Shift (Z)	Shift (z_needle)	Trial
+        Index(['Patient ID', 'Structure ID', 'Simulated bool', 'Simulated type',
+            'Structure type', 'Structure ref num', 'Structure index',
+            'Dilation (XY)', 'Dilation (Z)', 'Rotation (X)', 'Rotation (Y)',
+            'Rotation (Z)', 'Shift (X)', 'Shift (Y)', 'Shift (Z)',
+            'Shift (z_needle)', 'Trial'],
+            dtype='object')
     """
     del all_mc_structure_transformation_dfs_list
     # Print the shape of the dataframe
@@ -296,6 +306,78 @@ def main():
     # Print the last 5 rows of the dataframe
     print(f"Last 5 rows of all MC structure transformation dataframe: {all_mc_structure_transformation_df.tail()}")
     # all MC structure transformation values (END)
+
+    
+
+
+    ### 4. cumulative dvh by mc trial number
+    all_paths_cumulative_dvh_by_mc_trial_number = load_files.find_csv_files(mc_sim_results_path, ['Cumulative DVH by MC trial.parquet'])
+    # Load and concatenate
+    # Loop through all the paths and load the csv files
+    all_cumulative_dvh_by_mc_trial_number_dfs_list = []
+    for path in all_paths_cumulative_dvh_by_mc_trial_number:
+        # Load the csv file into a dataframe
+        #df = load_files.load_csv_as_dataframe(path)
+        df = load_files.load_parquet_as_dataframe(path)
+        # Append the dataframe to the list
+        all_cumulative_dvh_by_mc_trial_number_dfs_list.append(df)
+
+        del df
+    # Concatenate all the dataframes into one dataframe
+    all_cumulative_dvh_by_mc_trial_number_df = pd.concat(all_cumulative_dvh_by_mc_trial_number_dfs_list, ignore_index=True)
+    """ NOTE: The columns of the dataframe are:
+    print(all_cumulative_dvh_by_mc_trial_number_df.columns)
+        Index(['Patient ID', 'Bx ID', 'Bx index', 'Simulated bool', 'Simulated type',
+            'Percent volume', 'Dose (Gy)', 'MC trial'],
+            dtype='object')
+    """
+    del all_cumulative_dvh_by_mc_trial_number_dfs_list
+    # Print the shape of the dataframe
+    print(f"Shape of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.shape}")
+    # Print the columns of the dataframe
+    print(f"Columns of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.columns}")
+    # Print the first 5 rows of the dataframe
+    print(f"First 5 rows of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.head()}")
+    # Print the last 5 rows of the dataframe
+    print(f"Last 5 rows of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.tail()}")
+    # cumulative dvh by mc trial number (END)
+
+    
+    ### 5. Differential DVH by MC trial number
+    all_paths_differential_dvh_by_mc_trial_number = load_files.find_csv_files(mc_sim_results_path, ['Differential DVH by MC trial.parquet'])
+    # Load and concatenate
+    # Loop through all the paths and load the csv files
+    all_differential_dvh_by_mc_trial_number_dfs_list = []
+    for path in all_paths_differential_dvh_by_mc_trial_number:
+        # Load the csv file into a dataframe
+        #df = load_files.load_csv_as_dataframe(path)
+        df = load_files.load_parquet_as_dataframe(path)
+        # Append the dataframe to the list
+        all_differential_dvh_by_mc_trial_number_dfs_list.append(df)
+
+        del df
+    # Concatenate all the dataframes into one dataframe
+    all_differential_dvh_by_mc_trial_number_df = pd.concat(all_differential_dvh_by_mc_trial_number_dfs_list, ignore_index=True)
+    """ NOTE: The columns of the dataframe are:
+    print(all_differential_dvh_by_mc_trial_number_df.columns)
+        Index(['Patient ID', 'Bx ID', 'Bx index', 'Simulated bool', 'Simulated type',
+            'Percent volume', 'Dose bin edge (left) (Gy)',
+            'Dose bin edge (right) (Gy)', 'Dose bin center (Gy)',
+            'Dose bin width (Gy)', 'Dose bin number', 'MC trial'],
+            dtype='object')
+    """
+    del all_differential_dvh_by_mc_trial_number_dfs_list
+    # Print the shape of the dataframe
+    print(f"Shape of all differential dvh by mc trial number dataframe: {all_differential_dvh_by_mc_trial_number_df.shape}")
+    # Print the columns of the dataframe
+    print(f"Columns of all differential dvh by mc trial number dataframe: {all_differential_dvh_by_mc_trial_number_df.columns}")
+    # Print the first 5 rows of the dataframe
+    print(f"First 5 rows of all differential dvh by mc trial number dataframe: {all_differential_dvh_by_mc_trial_number_df.head()}")
+    # Print the last 5 rows of the dataframe
+    print(f"Last 5 rows of all differential dvh by mc trial number dataframe: {all_differential_dvh_by_mc_trial_number_df.tail()}")
+    # differential dvh by mc trial number (END)
+
+
 
 
 
@@ -550,83 +632,677 @@ def main():
     ## Global dosimetry by voxel analysis (END)
 
 
+    # Generate effect sizes dataframe
+
+    ### Effect sizes analysis (START)
+    print("--------------------------------------------------")
+    print("Generating effect sizes analysis...")
+    print("--------------------------------------------------")
+
+    eff_sizes = ['cohen', 'hedges', 'mean_diff']
+    all_effect_sizes_df_dict = {}
+    for eff_size in eff_sizes:
+        print(f"Calculating effect sizes for {eff_size}...")
+        effect_size_dataframe = helper_funcs.create_eff_size_dataframe(all_voxel_wise_dose_df, "Patient ID", "Bx index", "Bx ID", "Voxel index", "Dose (Gy)", eff_size=eff_size, paired_bool=True)
+        # Append the effect size dataframe to the dictionary
+        all_effect_sizes_df_dict[eff_size] = effect_size_dataframe
+
+    
+    # Save the effect sizes dataframe to a CSV file
+    # Create output directory for effect size analysis
+    effect_sizes_analysis_dir = output_dir.joinpath("effect_sizes_analysis")
+    os.makedirs(effect_sizes_analysis_dir, exist_ok=True)
+    general_output_filename = 'effect_sizes_statistics_all_patients.csv'
+    for eff_size in eff_sizes:
+        effect_size_dataframe = all_effect_sizes_df_dict[eff_size] 
+        effect_size_dataframe.to_csv(effect_sizes_analysis_dir.joinpath(f"{general_output_filename}_{eff_size}.csv"), index=False)
+
+    
+    ### Effect sizes analysis (END)
+
+
+
+
+    # Generate dose differences voxel pairings of all length scales analysis
+
+    ### Dose differences voxel pairings of all length scales analysis (START)
+    print("--------------------------------------------------")
+    print("Generating dose differences voxel pairings of all length scales analysis...")
+    print("--------------------------------------------------")
+
+    dose_differences_cohort_df = helper_funcs.compute_dose_differences_vectorized(all_voxel_wise_dose_df)
+
+
+    ### Dose differences voxel pairings of all length scales analysis (END)
 
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ### Print break with horizontal lines
+    print(" ")
+    print("--------------------------------------------------")
+    print("--------------------------------------------------")
+    print("--------------------------------------------------")
+    print(" ")
 
 
 
     ### PLOTS FROM RAW DATA
+    print("--------------------------------------------------")
+    print("Generating plots from raw data...")
+    print("--------------------------------------------------")
+
+
     # make dirs
     output_fig_directory = output_dir.joinpath("figures")
     os.makedirs(output_fig_directory, exist_ok=True)
     cohort_output_figures_dir = output_fig_directory.joinpath("cohort_output_figures")
     os.makedirs(cohort_output_figures_dir, exist_ok=True)
+    pt_sp_figures_dir = output_fig_directory.joinpath("patient_specific_output_figures")
+    os.makedirs(pt_sp_figures_dir, exist_ok=True)
 
 
 
 
-    # 1. individual patient dosimetry and dose gradient kernel regressions
+
+
+
+    print("--------------------------------------------------")
+    print("Figures: Cohort figures...")
+    print("--------------------------------------------------")
+
+    if True:
+        print("Skipping!")
+    else:
+
+        # 1. all voxels histograms dosimetry and gradient
+
+        #dists_to_try = ['lognorm', 'gamma', 'gengamma', 'weibull_min', 'skewnorm'] # most likely correct
+        #dists_to_try = None # try all
+        dists_to_try = ['lognorm'] # lognorm is the best fit for most of the data, so we will use this for now
+        xrange_dose = (0, 100)  # Adjust the range as needed
+        xrange_dose_grad = (0, 50)  # Adjust the range as needed
+        production_plots.histogram_and_fit(all_voxel_wise_dose_df, dists_to_try = dists_to_try, bin_size = 1, dose_col="Dose (Gy)", save_path = cohort_output_figures_dir, custom_name = "histogram_fit_all_voxels_dose", xrange = xrange_dose, vertical_gridlines= True, horizontal_gridlines=True)
+
+        production_plots.histogram_and_fit(all_voxel_wise_dose_df, dists_to_try = dists_to_try, bin_size = 1, dose_col="Dose grad (Gy/mm)", save_path = cohort_output_figures_dir, custom_name = "histogram_fit_all_voxels_dose_gradient", xrange = xrange_dose_grad, vertical_gridlines= True, horizontal_gridlines=True)
+
+        # 1. DONE
+
+
+
+        # 2. Effect size heatmaps
+        print("Generating effect size heatmaps...")
+
+        eff_size_heatmaps_dir = cohort_output_figures_dir.joinpath(f"effect_sizes_heatmaps")
+        os.makedirs(eff_size_heatmaps_dir, exist_ok=True)
+        
+        for eff_size in eff_sizes:
+        
+            effect_size_dataframe = all_effect_sizes_df_dict[eff_size] 
+            for agg_abs in [False, True]:
+
+                
+                production_plots.plot_cohort_eff_size_heatmap_boxed_counts(effect_size_dataframe,
+                                                "Effect Size",
+                                                eff_size,
+                                                save_path_base=eff_size_heatmaps_dir,
+                                                annotation_info=None,
+                                                aggregate_abs=agg_abs,
+                                                vmin=None,
+                                                vmax=None)
+
+            
+            #production_plots.plot_eff_size_heatmaps(effect_size_dataframe, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir)
+
+        # 2. DONE
+
+
+
+        # 3. Cohort DVH metrics boxplot
+        print("Generating cohort DVH metrics boxplot...")
+
+        production_plots.dvh_boxplot(cohort_global_dosimetry_dvh_metrics_df, save_path = cohort_output_figures_dir, custom_name = "dvh_boxplot")
+
+
+
+
+        # 4. Voxel pairings length scales strip plot
+
+        print("Generating voxel pairings length scales strip plot...")
+        """
+        production_plots.plot_strip_scatter(
+                                        dose_differences_cohort_df,
+                                        'length_scale',
+                                        'dose_diff_abs',
+                                        save_dir = cohort_output_figures_dir,
+                                        file_name = "dose_differences_voxel_pairings_length_scales_strip_plot",
+                                        title = "Dose Differences Voxel Pairings Length Scales Strip Plot",
+                                        figsize=(10, 6),
+                                        dpi=300
+                                        )
+        """
+        production_plots.plot_dose_vs_length_with_summary(
+                                    dose_differences_cohort_df,
+                                    'length_scale',
+                                    'dose_diff_abs',
+                                    save_dir = cohort_output_figures_dir,
+                                    file_name = "dose_differences_voxel_pairings_length_scales_strip_plot",
+                                    title = "Dose Differences Voxel Pairings Length Scales Strip Plot",
+                                    figsize=(10, 6),
+                                    dpi=300,
+                                    show_points=False,
+                                    violin_or_box='box',
+                                    trend_lines = ['mean'],
+                                    annotate_counts=True,
+                                    y_trim=True,
+                                    y_min_quantile=0.05,
+                                    y_max_quantile=0.95,
+                                    y_min_fixed=0,
+                                    y_max_fixed=None,
+                                    xlabel = "Length Scale (mm)",
+                                    ylabel = "Absolute Dose Difference (Gy)",
+                                )
+
+
+
+
+        # 5. Cohort global scores boxplot
+        print("Generating cohort global scores boxplot...")
+
+        ### DOSE
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose (Gy)',  # e.g. 'Dose (Gy)'
+            ['nominal (spatial average)', 'argmax_density','mean', 'std'],  # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot",
+            title = 'Cohort Global Scores Boxplot',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dose (Gy)",
+            showfliers = True,
+            label_map={'argmax_density': 'Argmax Density',
+            'min': 'Minimum',
+            'mean': 'Mean',
+            'max': 'Maximum',
+            'std': 'STD',
+            'nominal (spatial average)': 'Nominal'
+        }
+        )
+
+        # horizontal 
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose (Gy)',  # e.g. 'Dose (Gy)'
+            ['nominal (spatial average)', 'argmax_density','mean', 'std'],  # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_horizontal",
+            title = 'Cohort Global Scores Boxplot',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Dose (Gy)",
+            ylabel = "Global Statistic",
+            showfliers = True,
+            label_map={'argmax_density': 'Argmax Density',
+            'min': 'Minimum',
+            'mean': 'Mean',
+            'max': 'Maximum',
+            'std': 'STD',
+            'nominal (spatial average)': 'Nominal'
+        },
+            horizontal=True
+        )
+
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose (Gy)',  # e.g. 'Dose (Gy)'
+            ['quantile_05', 'quantile_25', 'quantile_50', 'quantile_75', 'quantile_95'], # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_quantiles",
+            title = 'Cohort Global Scores Boxplot (Quantiles)',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dose (Gy)",
+            showfliers = True,
+            label_map={'quantile_05': 'Quantile 5%',
+            'quantile_25': 'Quantile 25%',
+            'quantile_50': 'Quantile 50%',
+            'quantile_75': 'Quantile 75%',
+            'quantile_95': 'Quantile 95%'
+            }
+        )
+
+
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose (Gy)',  # e.g. 'Dose (Gy)'
+            ['skewness','kurtosis'],  # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_skew_kurtosis",
+            title = 'Cohort Global Scores Boxplot (Skewness and Kurtosis)',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dimensionless Score",
+            showfliers = True,
+            label_map={
+            'skewness': 'Skewness',
+            'kurtosis': 'Kurtosis'
+        }
+        )
+
+        ### DOSE GRADIENT
+
+
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose grad (Gy/mm)',  # e.g. 'Dose (Gy)'
+            ['nominal (spatial average)', 'argmax_density','mean', 'std'],  # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_grad",
+            title = 'Cohort Global Scores Boxplot (Dose Gradient)',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dose grad (Gy/mm)",
+            showfliers = True,
+            label_map={'argmax_density': 'Argmax Density',
+            'min': 'Minimum',
+            'mean': 'Mean',
+            'max': 'Maximum',
+            'std': 'STD',
+            'nominal (spatial average)': 'Nominal'
+        }
+        )
+
+        # horizontal
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose grad (Gy/mm)',  # e.g. 'Dose (Gy)'
+            ['nominal (spatial average)', 'argmax_density','mean', 'std'],  # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_grad_horizontal",
+            title = 'Cohort Global Scores Boxplot (Dose Gradient)',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dose grad (Gy/mm)",
+            showfliers = True,
+            label_map={'argmax_density': 'Argmax Density',
+            'min': 'Minimum',
+            'mean': 'Mean',
+            'max': 'Maximum',
+            'std': 'STD',
+            'nominal (spatial average)': 'Nominal'
+        },
+            horizontal=True
+        )
+
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose grad (Gy/mm)',  # e.g. 'Dose (Gy)'
+            ['quantile_05', 'quantile_25', 'quantile_50', 'quantile_75', 'quantile_95'], # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_grad_quantiles",
+            title = 'Cohort Global Scores Boxplot (Dose Gradient, Quantiles)',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dose (Gy)",
+            showfliers = True,
+            label_map={'quantile_05': 'Quantile 5%',
+            'quantile_25': 'Quantile 25%',
+            'quantile_50': 'Quantile 50%',
+            'quantile_75': 'Quantile 75%',
+            'quantile_95': 'Quantile 95%'
+            }
+        )
+
+
+        production_plots.plot_global_dosimetry_boxplot(
+            cohort_global_dosimetry_df,
+            'Dose grad (Gy/mm)',  # e.g. 'Dose (Gy)'
+            ['skewness','kurtosis'],  # e.g. ['mean', 'min', 'max', 'quantile_05']
+            cohort_output_figures_dir,
+            file_name = "global_scores_boxplot_grad_skew_kurtosis",
+            title = 'Cohort Global Scores Boxplot (Dose Gradient, Skewness and Kurtosis)',
+            figsize=(10, 6),
+            dpi=300,
+            xlabel = "Global Statistic",
+            ylabel = "Dimensionless Score",
+            showfliers = True,
+            label_map={
+            'skewness': 'Skewness',
+            'kurtosis': 'Kurtosis'
+        }
+        )
+
+
+        # 6. cohort ridgeline dose
+        # this one takes a while, the annotate and fill function is slow
+        if True:
+            print("Skipping cohort ridgeline dose plot!")
+        else:
+            production_plots.plot_dose_ridge_cohort_by_voxel(
+                all_point_wise_dose_df,
+                cohort_output_figures_dir,
+                "Biopsy Voxel-Wise Dose Ridgeline Plot - Cohort",
+                "dose",
+                fig_scale=1.0,
+                dpi=300,
+                add_text_annotations=True,
+                x_label="Dose (Gy)",
+                y_label="Axial Dimension (mm)",
+                space_between_ridgeline_padding_multiplier=1.2,
+                ridgeline_vertical_padding_value=0.25
+            )
+
+    print("--------------------------------------------------")
+    print("Figures: Cohort figures DONE!")
+    print("--------------------------------------------------")
+
+
+
+
+
+
+
+
+    ### Pick patient and biopsy pairs to plot
+
     patient_id_and_bx_index_pairs = [('181 (F2)',0), ('181 (F2)', 1), ('184 (F2)', 0), ('184 (F2)', 1), ('184 (F2)', 2), ('195 (F2)', 0), ('195 (F2)', 1), ('201 (F2)', 0),('201 (F2)', 1),('201 (F2)', 2)]
-    for patient_id, bx_index in patient_id_and_bx_index_pairs:
-        # Create a directory for the patient
-        patient_dir = cohort_output_figures_dir.joinpath(patient_id)
-        os.makedirs(patient_dir, exist_ok=True)
-        general_plot_name_string = " - dosimetry-kernel-regression"
+
+    ###
+
+
+
+    print("--------------------------------------------------")
+    print("Figures: Individual patient dosimetry and dose gradient kernel regressions...")
+    print("--------------------------------------------------")
+
+
+    if True:
+        print("Skipping!")
+    else:
+        # 1. individual patient dosimetry and dose gradient kernel regressions
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            # Create a directory for the patient
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+            general_plot_name_string = " - dosimetry-kernel-regression"
+
+            # this option determines how the trials are annotated in the plot
+            random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
+            
+            num_rand_trials_to_show = 3
+            value_col_key = 'Dose (Gy)'
+            y_axis_label = 'Dose (Gy)'
+            custom_fig_title = 'Dosimetry Regression'
+            
+            sp_patient_all_structure_shifts_pandas_data_frame = all_mc_structure_transformation_df[all_mc_structure_transformation_df['Patient ID'] == patient_id]
+            dose_output_nominal_and_all_MC_trials_pandas_data_frame = all_point_wise_dose_df[(all_point_wise_dose_df['Patient ID'] == patient_id) & (all_point_wise_dose_df['Bx index'] == bx_index)]
+            dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame = all_voxel_wise_dose_df[(all_voxel_wise_dose_df['Patient ID'] == patient_id) & (all_voxel_wise_dose_df['Bx index'] == bx_index)]
+
+            bx_struct_roi = cohort_biopsy_basic_spatial_features_df[(cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) & (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+
+            production_plots.production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
+                                                                                        dose_output_nominal_and_all_MC_trials_pandas_data_frame,
+                                                                                        dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
+                                                                                        patient_id,
+                                                                                        bx_struct_roi,
+                                                                                        bx_index,
+                                                                                        bx_ref,
+                                                                                        value_col_key,
+                                                                                        patient_dir,
+                                                                                        general_plot_name_string,
+                                                                                        num_rand_trials_to_show,
+                                                                                        y_axis_label,
+                                                                                        custom_fig_title,
+                                                                                        trial_annotation_style = random_trial_annotation_style)
+            
+            general_plot_name_string = " - dosimetry-gradient-kernel-regression"
+            value_col_key = 'Dose grad (Gy/mm)'
+            y_axis_label = 'Dose Gradient Norm (Gy/mm)'
+            custom_fig_title = 'Dosimetry Gradient Regression'
+
+            production_plots.production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
+                                                                                        dose_output_nominal_and_all_MC_trials_pandas_data_frame,
+                                                                                        dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
+                                                                                        patient_id,
+                                                                                        bx_struct_roi,
+                                                                                        bx_index,
+                                                                                        bx_ref,
+                                                                                        value_col_key,
+                                                                                        patient_dir,
+                                                                                        general_plot_name_string,
+                                                                                        num_rand_trials_to_show,
+                                                                                        y_axis_label,
+                                                                                        custom_fig_title,
+                                                                                        trial_annotation_style = random_trial_annotation_style)
+
+    print("DONE!")
+    print("--------------------------------------------------")
+    print("Figures: Individual patient cumulative and differential DVH...")    
+    print("--------------------------------------------------")
+
+
+    # 2. individual patient cumulative and differential DVH
+    if True:
+        print("Skipping!")
+    else:
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            # Create a directory for the patient
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+
+            # global
+            num_rand_trials_to_show = 3
+            bx_struct_roi = cohort_biopsy_basic_spatial_features_df[(cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) & (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+            sp_patient_all_structure_shifts_pandas_data_frame = all_mc_structure_transformation_df[all_mc_structure_transformation_df['Patient ID'] == patient_id]
+
+
+            ### cumulative DVH
+
+
+            # options
+            random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
+            general_plot_name_string = " - cumulative-DVH" # file name
+            custom_fig_title = 'Cumulative DVH' # title of the plot
+
+
+            sp_bx_cumulative_dvh_pandas_dataframe = all_cumulative_dvh_by_mc_trial_number_df[(all_cumulative_dvh_by_mc_trial_number_df['Patient ID'] == patient_id) & (all_cumulative_dvh_by_mc_trial_number_df['Bx index'] == bx_index)]
+
+            dvh_option = {'dvh':'cumulative', 'x-col': 'Dose (Gy)', 'x-axis-label': 'Dose (Gy)', 'y-col': 'Percent volume', 'y-axis-label': 'Percent Volume (%)'}
+            
+            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v2(sp_patient_all_structure_shifts_pandas_data_frame,
+                                                                                            sp_bx_cumulative_dvh_pandas_dataframe,
+                                                                                                patient_dir,
+                                                                                                patient_id,
+                                                                                                bx_struct_roi,
+                                                                                                bx_index,
+                                                                                                bx_ref,
+                                                                                                general_plot_name_string,
+                                                                                                num_rand_trials_to_show,
+                                                                                                custom_fig_title,
+                                                                                                trial_annotation_style= random_trial_annotation_style,
+                                                                                                dvh_option = dvh_option
+                                                                                                )
+
+
+            ### differential DVH
+            random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
+            general_plot_name_string = " - differential-DVH" # file name
+            custom_fig_title = 'Differential DVH' # title of the plot
+
+            sp_bx_differential_dvh_pandas_dataframe = all_differential_dvh_by_mc_trial_number_df[(all_differential_dvh_by_mc_trial_number_df['Patient ID'] == patient_id) & (all_differential_dvh_by_mc_trial_number_df['Bx index'] == bx_index)]
+
+            dvh_option = {'dvh':'differential', 'x-col': 'Dose bin center (Gy)', 'x-axis-label': 'Dose (Gy)', 'y-col': 'Percent volume', 'y-axis-label': 'Percent Volume (%)'}
+            
+            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v2(sp_patient_all_structure_shifts_pandas_data_frame,
+                                                                                            sp_bx_differential_dvh_pandas_dataframe,
+                                                                                                patient_dir,
+                                                                                                patient_id,
+                                                                                                bx_struct_roi,
+                                                                                                bx_index,
+                                                                                                bx_ref,
+                                                                                                general_plot_name_string,
+                                                                                                num_rand_trials_to_show,
+                                                                                                custom_fig_title,
+                                                                                                trial_annotation_style=random_trial_annotation_style,
+                                                                                                dvh_option = dvh_option
+                                                                                                )
+            
+
+
+
+
+
+    print("DONE!")
+    print("--------------------------------------------------")
+    print("Figures: Individual patient effect sizes heatmaps...")    
+    print("--------------------------------------------------")
+
+
+    # 2. individual patient cumulative and differential DVH
+    if True:
+        print("Skipping!")
+    else:
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            # Create a directory for the patient
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+
+            # global
+            bx_struct_roi = cohort_biopsy_basic_spatial_features_df[(cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) & (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+            sp_patient_all_structure_shifts_pandas_data_frame = all_mc_structure_transformation_df[all_mc_structure_transformation_df['Patient ID'] == patient_id]
+
+
+            ### cumulative DVH
+
+
+            # options
+            random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
+            general_plot_name_string = " - cumulative-DVH" # file name
+            custom_fig_title = 'Cumulative DVH' # title of the plot
+
+            eff_size_heatmaps_dir = patient_dir.joinpath(f"effect_sizes_heatmaps")
+            os.makedirs(eff_size_heatmaps_dir, exist_ok=True)
+
+            for eff_size in eff_sizes:
+                eff_size_df = all_effect_sizes_df_dict[eff_size]
+                # Filter the effect size dataframe for the specific patient and biopsy index
+                eff_size_df = eff_size_df[(eff_size_df['Patient ID'] == patient_id) & (eff_size_df['Bx index'] == bx_index)]
+
+                # Create a directory for the patient
+                
+
+                production_plots.plot_eff_size_heatmaps(eff_size_df, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir)
+
+            
+
+    # 3. individual patient dose differences voxel pairings of all length scales analysis
+    print("--------------------------------------------------")
+    print("Figures: Individual patient dose differences voxel pairings of all length scales analysis...")
+    print("--------------------------------------------------")
+
+    if True:
+        print("Skipping!")
+    else:
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            # Create a directory for the patient
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+
+            # global
+            bx_struct_roi = cohort_biopsy_basic_spatial_features_df[(cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) & (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+
+
+            dose_differences_cohort_df_patient = dose_differences_cohort_df[(dose_differences_cohort_df['Patient ID'] == patient_id) & (dose_differences_cohort_df['Bx index'] == bx_index)]
+
+            production_plots.plot_dose_vs_length_with_summary(
+                                    dose_differences_cohort_df_patient,
+                                    'length_scale',
+                                    'dose_diff_abs',
+                                    save_dir = patient_dir,
+                                    file_name = f"{patient_id}-{bx_struct_roi}-dose_differences_voxel_pairings_length_scales_strip_plot",
+                                    title = f"{patient_id}-{bx_struct_roi} - Dose Differences Voxel Pairings Length Scales Strip Plot",
+                                    figsize=(10, 6),
+                                    dpi=300,
+                                    show_points=False,
+                                    violin_or_box='box',
+                                    trend_lines = ['mean'],
+                                    annotate_counts=True,
+                                    y_trim=True,
+                                    y_min_quantile=0.05,
+                                    y_max_quantile=0.95,
+                                    y_min_fixed=0,
+                                    y_max_fixed=None,
+                                    xlabel = "Length Scale (mm)",
+                                    ylabel = "Absolute Dose Difference (Gy)",
+                                )
+
+
+    # 4. individual patient dose ridgeline plots
+    print("--------------------------------------------------")
+    print("Figures: Individual patient dose ridgeline plots...")
+    print("--------------------------------------------------")
+
+    if False:
+        print("Skipping!")
+    else:
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            # Create a directory for the patient
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+
+            # global
+            bx_struct_roi = cohort_biopsy_basic_spatial_features_df[(cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) & (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+
+            #dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame = all_voxel_wise_dose_df[(all_voxel_wise_dose_df['Patient ID'] == patient_id) & (all_voxel_wise_dose_df['Bx index'] == bx_index)]
         
-        num_rand_trials_to_show = 10
-        value_col_key = 'Dose (Gy)'
-        y_axis_label = 'Dose (Gy)'
-        
-        sp_patient_all_structure_shifts_pandas_data_frame = all_mc_structure_transformation_df[all_mc_structure_transformation_df['Patient ID'] == patient_id]
-        dose_output_nominal_and_all_MC_trials_pandas_data_frame = all_point_wise_dose_df[(all_point_wise_dose_df['Patient ID'] == patient_id) & (all_point_wise_dose_df['Bx index'] == bx_index)]
-        dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame = all_voxel_wise_dose_df[(all_voxel_wise_dose_df['Patient ID'] == patient_id) & (all_voxel_wise_dose_df['Bx index'] == bx_index)]
 
-        bx_struct_roi = cohort_biopsy_basic_spatial_features_df[(cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) & (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)]['Bx ID'].values[0]
-
-        production_plots.production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
-                                                                                      dose_output_nominal_and_all_MC_trials_pandas_data_frame,
-                                                                                      dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
-                                                                                    patient_id,
-                                                                                    bx_struct_roi,
-                                                                                    bx_index,
-                                                                                    bx_ref,
-                                                                                    value_col_key,
-                                                                                    patient_dir,
-                                                                                    general_plot_name_string,
-                                                                                    num_rand_trials_to_show,
-                                                                                    y_axis_label)
-        
-        general_plot_name_string = " - dosimetry-gradient-kernel-regression"
-        value_col_key = 'Dose grad (Gy/mm)'
-        y_axis_label = 'Dose Gradient Norm (Gy/mm)'
-
-        production_plots.production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
-                                                                                      dose_output_nominal_and_all_MC_trials_pandas_data_frame,
-                                                                                      dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
-                                                                                    patient_id,
-                                                                                    bx_struct_roi,
-                                                                                    bx_index,
-                                                                                    bx_ref,
-                                                                                    value_col_key,
-                                                                                    patient_dir,
-                                                                                    general_plot_name_string,
-                                                                                    num_rand_trials_to_show,
-                                                                                    y_axis_label)
-        
+            sp_bx_all_point_wise_dose_df = all_point_wise_dose_df[(all_point_wise_dose_df['Patient ID'] == patient_id) & (all_point_wise_dose_df['Bx index'] == bx_index)]
+            sp_bx_cohort_global_dosimetry_by_voxel_df = cohort_global_dosimetry_by_voxel_df[(cohort_global_dosimetry_by_voxel_df['Patient ID'] == patient_id) & (cohort_global_dosimetry_by_voxel_df['Bx index'] == bx_index)]
 
 
-
-
-
-
-
-
-
-
-
+            svg_image_height = 1080
+            svg_image_width = 1920
+            cancer_tissue_label = 'DIL'
+            dpi = 300
+            production_plots.plot_dose_ridge_for_single_biopsy(
+                                sp_bx_all_point_wise_dose_df,
+                                sp_bx_cohort_global_dosimetry_by_voxel_df,
+                                None,
+                                patient_dir,
+                                "Biopsy Voxel-Wise Dose Ridgeline Plot",
+                                "dose",
+                                cancer_tissue_label,
+                                fig_scale=1.0,
+                                dpi=300,
+                                add_text_annotations=False,
+                                x_label="Dose (Gy)",
+                                y_label="Biopsy Axial Dimension (mm)",
+                                space_between_ridgeline_padding_multiplier = 1.2,
+                                ridgeline_vertical_padding_value = 0.5
+                            )
 
 
 if __name__ == "__main__":
