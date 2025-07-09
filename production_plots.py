@@ -1943,13 +1943,13 @@ def plot_global_dosimetry_boxplot(
     # Annotate mean as a dot and median as a line + label
     means = long_df.groupby('Metric')['Value'].mean()
 
-    for i, (metric, mean_val) in enumerate(means.items()):
+    for metric, mean_val in means.items():
         
         # Mean as dot
         if horizontal:
-            ax.plot(mean_val, i, 'x', color='black', markersize=6, label='_nolegend_')
+            ax.plot(mean_val, metric, 'x', color='black', markersize=6, label='_nolegend_')
         else:
-            ax.plot(i, mean_val, 'x', color='black', markersize=6, label='_nolegend_')
+            ax.plot(metric, mean_val, 'x', color='black', markersize=6, label='_nolegend_')
 
         
         

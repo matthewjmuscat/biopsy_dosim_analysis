@@ -499,8 +499,7 @@ def main():
 
 
 
-
-	### cumulatiove dil volume stats (START)
+	### cumulative dil volume stats (START)
     mean_cumulative_dil_vol, std_cumulative_dil_vol = shape_and_radiomic_features.cumulative_dil_volume_stats(unique_patient_ids_f2, cohort_3d_radiomic_features_all_oar_dil_df)
     # Print the statistics
     print(f"Mean cumulative DIL volume: {mean_cumulative_dil_vol}")
@@ -632,6 +631,79 @@ def main():
     ## Global dosimetry by voxel analysis (END)
 
 
+
+
+
+    # Get dvh summary statistics
+    ### DVH metrics analysis (START)
+    # Create output directory for DVH metrics
+    dvh_metrics_dir = output_dir.joinpath("dvh_metrics")
+    os.makedirs(dvh_metrics_dir, exist_ok=True)
+    # Output filename
+    output_filename = 'dvh_metrics_statistics_all_patients.csv'
+
+    # 1. Define which columns to exclude
+    """
+    NOTE: The columns of the dataframe are:
+    print(cohort_global_dosimetry_dvh_metrics_df.columns)
+	Index(['Patient ID', 'Metric', 'Bx ID', 'Struct type', 'Dicom ref num',
+		'Simulated bool', 'Simulated type', 'Struct index', 'Mean', 'STD',
+		'SEM', 'Max', 'Min', 'Skewness', 'Kurtosis', 'Q05', 'Q25', 'Q50', 'Q75',
+		'Q95'],
+		dtype='object')
+    """
+
+    # 2) which columns to carry along (but *not* summarize)
+    exclude = [
+        'Patient ID','Bx ID','Struct type','Dicom ref num',
+        'Simulated bool','Simulated type','Struct index'
+    ]
+
+    # 3) which columns *are* the numeric stats to roll up
+    value_cols = [c for c in cohort_global_dosimetry_dvh_metrics_df.columns if c not in exclude + ['Metric']]
+
+    # 4) pivot Metric into your columns by unstacking —  
+    #    since we first set_index on (all the exclude cols + 'Metric'), 
+    #    each (exclude_combo,Metric) pair is unique, so no duplicate errors.
+    wide = (
+        cohort_global_dosimetry_dvh_metrics_df
+        .set_index(exclude + ['Metric'])[value_cols]  # index=(all the things you want to keep + Metric)
+        .unstack(level='Metric')                      # -> columns = (value_col, Metric)
+        .swaplevel(0, 1, axis=1)                      # -> columns = (Metric, value_col)
+        .sort_index(axis=1, level=0)                  # group by Metric
+    )
+
+    # Get DVH metrics statistics
+    summary_statistics.generate_summary_csv(dvh_metrics_dir, output_filename, wide, 
+                                            col_pairs=None, 
+                                            exclude_columns=exclude)
+
+    # Print the statistics
+
+
+
+
+    # Get all mapped dose values statistics across all trials, voxels and biopsies (START)
+    # Create output directory for global dosimetry by voxel
+    all_dosimetry_cohort_dir = output_dir.joinpath("all_dosimetry_values_cohort")
+    os.makedirs(all_dosimetry_cohort_dir, exist_ok=True)
+    # Output filename
+    output_filename = 'all_dosimetry_values_cohort.csv'
+    # Get all mapped dose values statistics across all trials, voxels and biopsies
+    summary_statistics.compute_summary_non_multiindex(all_voxel_wise_dose_df, 
+                                                   ["Dose (Gy)", "Dose grad (Gy/mm)"], 
+                                                   output_dir=all_dosimetry_cohort_dir,
+                                                    csv_name=output_filename)
+
+    
+
+
+
+
+
+
+
+
     # Generate effect sizes dataframe
 
     ### Effect sizes analysis (START)
@@ -667,7 +739,7 @@ def main():
 
     ### Dose differences voxel pairings of all length scales analysis (START)
     print("--------------------------------------------------")
-    print("Generating dose differences voxel pairings of all length scales analysis...")
+    print("Generating dose differences voxel pairings of all length scales for analysis...")
     print("--------------------------------------------------")
 
     dose_differences_cohort_df = helper_funcs.compute_dose_differences_vectorized(all_voxel_wise_dose_df)
@@ -677,9 +749,37 @@ def main():
 
 
 
+    print("--------------------------------------------------")
+    print("Voxel pairings of all length scales analysis...")
+    print("--------------------------------------------------")
+
+    # Dose differences voxel pairings analysis (START)
+
+    # Create output directory for DVH metrics
+    length_scales_dir = output_dir.joinpath("length_scales_dosimetry")
+    os.makedirs(length_scales_dir, exist_ok=True)
+    # Output filename
+    output_cohort_filename = 'length_scales_dosimetry_statistics_cohort.csv'
+    output_per_biopsy_filename = 'length_scales_dosimetry_statistics_per_biopsy.csv'
 
 
+    # A) per (Patient ID, Bx index, length_scale)
+    _ = summary_statistics.compute_summary(
+        dose_differences_cohort_df,
+        ['Patient ID','Bx index','length_scale'],
+        ['dose_diff','dose_diff_abs'],
+        output_dir = length_scales_dir,
+        csv_name = output_per_biopsy_filename
+    )
 
+    # B) cohort-wide per length_scale
+    _ = summary_statistics.compute_summary(
+        dose_differences_cohort_df,
+        ['length_scale'],
+        ['dose_diff','dose_diff_abs'],
+        output_dir = length_scales_dir,
+        csv_name = output_cohort_filename
+    )
 
 
 
@@ -727,7 +827,7 @@ def main():
     print("Figures: Cohort figures...")
     print("--------------------------------------------------")
 
-    if True:
+    if False:
         print("Skipping!")
     else:
 
