@@ -730,6 +730,21 @@ def main():
         effect_size_dataframe.to_csv(effect_sizes_analysis_dir.joinpath(f"{general_output_filename}_{eff_size}.csv"), index=False)
 
     
+
+    # be more involved with mean difference
+    mean_diff_stats_output_filename = 'mean_diff_statistics_all_patients.csv'
+    mean_diff_stats_all_patients_df = helper_funcs.create_diff_stats_dataframe(
+        all_voxel_wise_dose_df,
+        "Patient ID", 
+        "Bx index", 
+        "Bx ID", 
+        "Voxel index", 
+        "Dose (Gy)",
+        output_dir = effect_sizes_analysis_dir,
+        csv_name = mean_diff_stats_output_filename
+    )
+
+
     ### Effect sizes analysis (END)
 
 
@@ -827,7 +842,7 @@ def main():
     print("Figures: Cohort figures...")
     print("--------------------------------------------------")
 
-    if False:
+    if True:
         print("Skipping!")
     else:
 
@@ -866,6 +881,17 @@ def main():
                                                 aggregate_abs=agg_abs,
                                                 vmin=None,
                                                 vmax=None)
+        for agg_abs in [False, True]:
+            production_plots.plot_cohort_eff_size_heatmap_boxed_counts_and_std(
+                mean_diff_stats_all_patients_df,
+                "mean_diff",
+                "mean_diff_with_std",
+                save_path_base=eff_size_heatmaps_dir,
+                annotation_info= None,
+                aggregate_abs= agg_abs,
+                vmin = None,
+                vmax = None
+            )
 
             
             #production_plots.plot_eff_size_heatmaps(effect_size_dataframe, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir)
@@ -1282,7 +1308,7 @@ def main():
 
 
     # 2. individual patient cumulative and differential DVH
-    if True:
+    if False:
         print("Skipping!")
     else:
         for patient_id, bx_index in patient_id_and_bx_index_pairs:
@@ -1315,6 +1341,22 @@ def main():
                 
 
                 production_plots.plot_eff_size_heatmaps(eff_size_df, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir)
+
+            # filter the mean difference stats dataframe for the specific patient and biopsy index
+            mean_diff_stats_all_patients_sp_bx_df = mean_diff_stats_all_patients_df[(mean_diff_stats_all_patients_df['Patient ID'] == patient_id) & (mean_diff_stats_all_patients_df['Bx index'] == bx_index)]
+            
+            production_plots.plot_diff_stats_heatmaps_with_std(
+                mean_diff_stats_all_patients_sp_bx_df,
+                "Patient ID", 
+                "Bx index", 
+                "Bx ID",
+                mean_col= "mean_diff",
+                std_col = "std_diff",
+                save_dir = eff_size_heatmaps_dir,
+                annotation_info = None,
+                vmin= None,
+                vmax= None
+            )
 
             
 

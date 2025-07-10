@@ -994,7 +994,141 @@ def plot_eff_size_heatmaps(eff_size_df,
         plt.close()
 
 
+def plot_diff_stats_heatmaps_with_std(
+    diff_stats_df,
+    patient_id_col,
+    bx_index_col,
+    bx_id_col,
+    mean_col: str = "mean_diff",
+    std_col: str = None,
+    save_dir: str = None,
+    annotation_info: dict = None,
+    vmin: float = None,
+    vmax: float = None
+):
+    """
+    One heatmap per biopsy, showing mean_diff (± std_diff if provided).
 
+    Args:
+        diff_stats_df (pd.DataFrame):
+            Must contain [patient_id_col, bx_index_col, bx_id_col,
+            'voxel1','voxel2', mean_col, optional std_col].
+        patient_id_col, bx_index_col, bx_id_col : str
+            Grouping columns in diff_stats_df.
+        mean_col : str
+            Column name for the mean differences.
+        std_col : str, optional
+            Column name for standard deviations. If given, cells show "mean±std".
+        save_dir : str, optional
+            Directory to save PNG/SVG. If None, plots are shown.
+        annotation_info : dict, optional
+            Extra key→value lines drawn on each plot.
+        vmin, vmax : float, optional
+            Global color‐scale limits for mean_diff.
+    """
+    
+    plt.ioff()  # turn interactive mode off, stops figures from displaying immediately
+
+
+    # defaults for different metrics (only mean_diff here)
+    default_vmin_vmax = {
+        "mean_diff": (None, None),
+    }
+
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    grouped = diff_stats_df.groupby([patient_id_col, bx_index_col, bx_id_col])
+    for (pid, bxi, bxid), grp in grouped:
+        # build per-plot annotations
+        ann = {} if annotation_info is None else dict(annotation_info)
+        ann["Patient ID"] = pid
+        ann["Biopsy ID"]  = bxid
+        ann["Voxel Pairs"] = grp.shape[0]
+
+        # pivot into square matrix
+        voxels = sorted(set(grp["voxel1"]) | set(grp["voxel2"]))
+        mean_mat = (
+            grp.pivot(index="voxel1", columns="voxel2", values=mean_col)
+               .reindex(index=voxels, columns=voxels)
+        )
+
+        # optional std mat
+        if std_col:
+            std_mat = (
+                grp.pivot(index="voxel1", columns="voxel2", values=std_col)
+                   .reindex(index=voxels, columns=voxels)
+            )
+
+        # determine local vmin/vmax
+        arr = mean_mat.values
+        nonnan = arr[~np.isnan(arr)]
+        key = mean_col.lower()
+        dvmin, dvmax = default_vmin_vmax.get(key, (None, None))
+        lvmin = vmin if vmin is not None else (dvmin if dvmin is not None else (np.min(nonnan) if nonnan.size else 0))
+        lvmax = vmax if vmax is not None else (dvmax if dvmax is not None else (np.max(nonnan) if nonnan.size else 1))
+
+        # build annotation matrix or fallback
+        if std_col:
+            annot = np.full(mean_mat.shape, "", dtype=object)
+            for i in range(len(voxels)):
+                for j in range(len(voxels)):
+                    m = mean_mat.iat[i, j]
+                    s = std_mat.iat[i, j]
+                    if np.isnan(m):
+                        continue
+                    if np.isnan(s):
+                        annot[i, j] = f"{m:.2f}"
+                    else:
+                        annot[i, j] = f"{m:.2f}\n±\n{s:.2f}"
+            fmt = ""
+        else:
+            annot = True
+            fmt = ".2f"
+
+        # plot
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(
+            mean_mat,
+            annot=annot,
+            fmt=fmt,
+            cmap="coolwarm",
+            vmin=lvmin,
+            vmax=lvmax,
+            cbar_kws={'label': mean_col},
+            annot_kws={
+            "ha": "center",
+            "va": "center",
+            "multialignment": "center",
+            "size": 9
+            },
+            linewidths=0.3,
+            linecolor="white",
+            square=True,
+        )
+        plt.title(f"Heatmap of {mean_col}" + (f" ±{std_col}" if std_col else ""))
+        plt.xlabel("voxel2")
+        plt.ylabel("voxel1")
+
+        # draw annotations block
+        text = "\n".join(f"{k}: {v}" for k, v in ann.items())
+        plt.gca().text(
+            0.02, 0.02, text,
+            transform=plt.gca().transAxes,
+            fontsize=9,
+            verticalalignment="bottom",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="gray", alpha=0.9)
+        )
+        plt.tight_layout()
+
+        if save_dir:
+            fname = f"MeanDiff_HM_P{pid}_Bx{bxi}_{bxid}" + (f"_pm_{std_col}" if std_col else "")
+            for ext in (".png", ".svg"):
+                plt.savefig(os.path.join(save_dir, fname + ext), bbox_inches="tight")
+            plt.close()
+            print(f"Saved heatmap for PID={pid}, BxID={bxid}: {fname}.png/.svg")
+        else:
+            plt.show()
 
 
 def plot_cohort_eff_size_heatmap(
@@ -1529,7 +1663,183 @@ def plot_cohort_eff_size_heatmap_boxed_counts(
     plt.close()
 
 
+def plot_cohort_eff_size_heatmap_boxed_counts_and_std(
+    diff_stats_df: pd.DataFrame,
+    eff_size_col: str,
+    eff_size_type: str,
+    save_path_base=None,
+    annotation_info: dict = None,
+    aggregate_abs: bool = False,
+    vmin: float = None,
+    vmax: float = None
+):
+    """
+    Plot a single cohort‐level heatmap from your per‐biopsy mean-difference table:
+      - Upper triangle: mean(eff_size_col) ± std(eff_size_col) across biopsies
+      - Lower triangle: number of biopsies (count), boxed by count‐change regions
 
+    Args:
+      diff_stats_df : DataFrame with columns ['Patient ID','Bx index','Bx ID',
+                      'voxel1','voxel2', eff_size_col, …].
+      eff_size_col  : e.g. "mean_diff"
+      eff_size_type : label for title/filenames (e.g. "Mean Difference")
+      save_path_base: dir (or Path) to save PNG/SVG; if None, show the plot.
+      annotation_info: extra key→value lines to draw on the plot.
+      aggregate_abs : if True, take abs(eff_size_col) before aggregating.
+      vmin, vmax    : optional color scale limits for the means.
+    """
+    plt.ioff()  # turn interactive mode off, stops figures from displaying immediately
+
+    # 1) Build annotation text
+    annotation_info = annotation_info or {}
+    if "Patient ID" in diff_stats_df.columns:
+        annotation_info["# Patients"] = diff_stats_df["Patient ID"].nunique()
+    if "Bx ID" in diff_stats_df.columns:
+        annotation_info["# Biopsies"] = diff_stats_df[["Patient ID","Bx ID"]].drop_duplicates().shape[0]
+    annotation_text = "\n".join(f"{k}: {v}" for k, v in annotation_info.items())
+
+    # 2) Optionally take absolute effect sizes
+    df = diff_stats_df.copy() if aggregate_abs else diff_stats_df
+    if aggregate_abs:
+        df[eff_size_col] = df[eff_size_col].abs()
+
+    # 3) Compute cohort‐level mean, std, and count per voxel‐pair
+    stats = (
+        df
+        .groupby(["voxel1", "voxel2"])[eff_size_col]
+        .agg(mean="mean", std="std", count="count")
+        .reset_index()
+    )
+
+    # 4) Pivot to square matrices
+    voxels   = sorted(set(stats["voxel1"]) | set(stats["voxel2"]))
+    mean_mat = (
+        stats
+        .pivot(index="voxel1", columns="voxel2", values="mean")
+        .reindex(index=voxels, columns=voxels)
+    )
+    std_mat  = (
+        stats
+        .pivot(index="voxel1", columns="voxel2", values="std")
+        .reindex(index=voxels, columns=voxels)
+    )
+    count_mat= (
+        stats
+        .pivot(index="voxel1", columns="voxel2", values="count")
+        .reindex(index=voxels, columns=voxels)
+    )
+
+    # 5) Mirror counts & zero diagonal
+    count_mat = count_mat.combine_first(count_mat.T)
+    np.fill_diagonal(count_mat.values, 0)
+
+    # 6) Determine vmin/vmax for mean
+    arr = mean_mat.values
+    nonan = arr[~np.isnan(arr)]
+    if vmin is None:
+        vmin = float(np.min(nonan)) if nonan.size else 0.0
+    if vmax is None:
+        vmax = float(np.max(nonan)) if nonan.size else 1.0
+
+    # 7) Ensure output directory
+    if save_path_base:
+        os.makedirs(save_path_base, exist_ok=True)
+
+    # 8) Build annotation matrix for upper triangle: "mean±std"
+    n = len(voxels)
+    mask_lower = np.tril(np.ones((n, n), dtype=bool))
+    annot = np.full((n, n), "", dtype=object)
+    for i in range(n):
+        for j in range(n):
+            if mask_lower[i, j]:
+                continue
+            m = mean_mat.iat[i, j]
+            s = std_mat.iat[i, j]
+            if np.isnan(m):
+                continue
+            annot[i, j] = (
+                f"{m:.2f}"
+                if np.isnan(s)
+                else f"{m:.2f}\n±\n{s:.2f}"
+            )
+    fmt = ""  # pre-built strings
+
+    # 9) Plot heatmap
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(
+        mean_mat,
+        mask=mask_lower,
+        annot=annot,
+        fmt=fmt,
+        cmap="coolwarm",
+        vmin=vmin,
+        vmax=vmax,
+        cbar_kws={"label": eff_size_col},
+        annot_kws={
+            "ha": "center",
+            "va": "center",
+            "multialignment": "center",
+            "size": 6
+        },
+        ax=ax,
+        linewidths=0.3,
+        linecolor="white",
+        square=True,
+    )
+
+    # 10) Draw boxed‐count regions on lower triangle
+    mask_lt = np.tril(np.ones((n, n), dtype=bool), k=-1)
+    unique_counts = np.unique(count_mat.values[mask_lt])
+    unique_counts = unique_counts[~np.isnan(unique_counts)]
+    for c in unique_counts:
+        region = (count_mat.values == c) & mask_lt
+        coords = np.argwhere(region)
+        if coords.size == 0:
+            continue
+        i_min, j_min = coords.min(axis=0)
+        i_max, j_max = coords.max(axis=0)
+        # horizontal line below the block
+        ax.hlines(y=i_max + 1, xmin=j_min, xmax=j_max + 2,
+                  colors="black", linewidth=1.5)
+        # vertical line right of the block
+        ax.vlines(x=j_max + 2, ymin=0, ymax=i_max + 1,
+                  colors="black", linewidth=1.5)
+        # label count in center
+        cx = j_min + (j_max - j_min + 1) / 2
+        cy = i_min + (i_max - i_min + 1) / 2
+        ax.text(cx, cy, f"n={int(c)}",
+                ha="center", va="center",
+                fontsize=8, color="black")
+
+    # Final touches
+    ax.set_title(f"{eff_size_type} & Sample Count")
+    ax.set_xlabel("voxel2")
+    ax.set_ylabel("voxel1")
+    if annotation_text:
+        ax.text(
+            0.02, 0.02, annotation_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment="bottom",
+            horizontalalignment="left",
+            bbox=dict(boxstyle="round,pad=0.3",
+                      edgecolor="gray", facecolor="white", alpha=0.9)
+        )
+    plt.tight_layout()
+
+    # 11) Save or show
+    if save_path_base:
+        base = os.path.join(
+            save_path_base,
+            f"{eff_size_type}_boxed_counts_abs-{aggregate_abs}"
+        )
+        plt.savefig(base + ".png", bbox_inches="tight",dpi=300)
+        plt.savefig(base + ".svg", bbox_inches="tight")
+        print(f"Saved boxed-counts heatmap to {base}.png/.svg")
+        plt.close(fig)
+    else:
+        plt.show()
+        plt.close(fig)
 
 
 def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None):
