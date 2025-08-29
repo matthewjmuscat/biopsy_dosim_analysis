@@ -570,6 +570,137 @@ def main():
 
 
 
+    ### voxel wise nominal-MC trial delta  (START)
+
+    # Build per-trial deltas relative to nominal (trial 0)
+    mc_deltas = summary_statistics.compute_mc_trial_deltas(all_voxel_wise_dose_df)
+    """print(mc_deltas.columns)
+    Index([                                       'Patient ID',
+                                                'Bx index',
+                                             'Voxel index',
+                                               'Bx refnum',
+                                                   'Bx ID',
+                                         'Voxel begin (Z)',
+                                           'Voxel end (Z)',
+                                          'Simulated bool',
+                                          'Simulated type',
+                                            'X (Bx frame)',
+                                            'Y (Bx frame)',
+                                            'Z (Bx frame)',
+                                            'R (Bx frame)',
+                                            'MC trial num',
+               ('Dose (Gy) deltas', 'nominal_minus_trial'),
+       ('Dose grad (Gy/mm) deltas', 'nominal_minus_trial')],
+      dtype='object')"""
+
+    print(f"Shape of mc_deltas dataframe: {mc_deltas.shape}")
+
+    # Create output directory for voxel-wise nominal-mode nominal-mean nominal-q50 analysis
+    voxel_wise_nominal_analysis_dir = output_dir.joinpath("voxel_wise_nominal_analysis")
+    os.makedirs(voxel_wise_nominal_analysis_dir, exist_ok=True)
+
+
+    # Save cohort summary (Dose and Dose grad)
+    summary_statistics.save_mc_delta_summary_csv(
+        mc_deltas,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name="mc_trial_deltas_summary.csv",
+        value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
+        include_patient_ids=None,  # or ['184', '201']
+        decimals=3
+    )
+    print('mc deltas summary csv saved to file')
+
+    """
+    csv_path = summary_statistics.save_paired_effect_sizes_by_trial_csv_fast(
+    mc_deltas,
+    output_dir=voxel_wise_nominal_analysis_dir,
+    csv_name="paired_effect_sizes_by_trial.csv",
+    value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
+    decimals=3
+    )
+    print('mc paired effect sizes by trial csv saved to file')
+    print(csv_path)
+    """
+
+    vox_path, voxel_stats, bio_path, biopsy_stats = summary_statistics.save_nominal_vs_trial_proportions_csv(
+        mc_deltas,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        base_name="paired_effect_sizes_by_trial",
+        value_cols = ('Dose (Gy)', 'Dose grad (Gy/mm)'),
+        exclude_nominal_trial = True,   # drop trial 0 rows if present
+        decimals = 3,
+    )
+    print('mc nominal vs trial proportions csv saved to file')
+    print(vox_path)
+    print(bio_path)
+
+
+    summary_statistics.save_cohort_cles_summary_csv(
+        voxel_stats,           # DataFrame OR path to "*_per_voxel.csv"
+        biopsy_stats,          # DataFrame OR path to "*_per_biopsy.csv"
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name = "cohort_cles_summary.csv",
+        metrics_col = "metric",
+        decimals = 3,
+    )
+
+
+    # mc_deltas = compute_mc_trial_deltas(all_voxel_wise_dose_df)
+    cohort_csv, pooled = summary_statistics.save_cohort_pooled_cles_from_mc_deltas(
+        mc_deltas,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name="cohort_pooled_cles.csv",
+        value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
+    )
+    print(cohort_csv)
+
+    ### voxel-wise nominal-mode nominal-mean nominal-q50 analysis (START)
+    
+    
+    nominal_deltas_df = summary_statistics.compute_biopsy_nominal_deltas(cohort_global_dosimetry_by_voxel_df)
+
+
+    nominal_gradient_deltas_df = summary_statistics.compute_biopsy_nominal_deltas(cohort_global_dosimetry_by_voxel_df,
+                                                                                           zero_level_index_str='Dose grad (Gy/mm)')
+
+
+
+
+    print('print to file')
+    csv_path = summary_statistics.save_delta_boxplot_summary_csv(
+        nominal_deltas_df,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name='dose_deltas_boxplot_summary.csv',
+        zero_level_index_str='Dose (Gy)',
+        include_patient_ids=None,   # or ['184','201']
+        decimals=3
+    )
+
+    csv_path = summary_statistics.save_delta_boxplot_summary_csv(
+        nominal_gradient_deltas_df,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name='dose_gradient_deltas_boxplot_summary.csv',
+        zero_level_index_str='Dose grad (Gy/mm)',
+        include_patient_ids=None,   # or ['184','201']
+        decimals=3
+    )
+    print(csv_path)
+
+
+
+    # Plot deltas plots 
+
+
+
+    
+
+
+
+
+
+
+
 
 
     ### Global dosimetry analysis (START)
@@ -713,11 +844,14 @@ def main():
 
     eff_sizes = ['cohen', 'hedges', 'mean_diff']
     all_effect_sizes_df_dict = {}
+    all_effect_sizes_df_dose_grad_dict = {}
     for eff_size in eff_sizes:
         print(f"Calculating effect sizes for {eff_size}...")
         effect_size_dataframe = helper_funcs.create_eff_size_dataframe(all_voxel_wise_dose_df, "Patient ID", "Bx index", "Bx ID", "Voxel index", "Dose (Gy)", eff_size=eff_size, paired_bool=True)
+        effect_size_dataframe_dose_grad = helper_funcs.create_eff_size_dataframe(all_voxel_wise_dose_df, "Patient ID", "Bx index", "Bx ID", "Voxel index", "Dose grad (Gy/mm)", eff_size=eff_size, paired_bool=True)
         # Append the effect size dataframe to the dictionary
         all_effect_sizes_df_dict[eff_size] = effect_size_dataframe
+        all_effect_sizes_df_dose_grad_dict[eff_size] = effect_size_dataframe_dose_grad
 
     
     # Save the effect sizes dataframe to a CSV file
@@ -728,12 +862,17 @@ def main():
     for eff_size in eff_sizes:
         effect_size_dataframe = all_effect_sizes_df_dict[eff_size] 
         effect_size_dataframe.to_csv(effect_sizes_analysis_dir.joinpath(f"{general_output_filename}_{eff_size}.csv"), index=False)
-
     
+    general_output_filename_dose_grad = 'effect_sizes_dose_gradient_statistics_all_patients.csv'
+    for eff_size in eff_sizes:
+        effect_size_dataframe_dose_grad = all_effect_sizes_df_dose_grad_dict[eff_size]
+        effect_size_dataframe_dose_grad.to_csv(effect_sizes_analysis_dir.joinpath(f"{general_output_filename_dose_grad}_{eff_size}.csv"), index=False)
+
 
     # be more involved with mean difference
     mean_diff_stats_output_filename = 'mean_diff_statistics_all_patients.csv'
-    mean_diff_stats_all_patients_df = helper_funcs.create_diff_stats_dataframe(
+    diffs_df_output_filename = 'mean_diff_values_all_patients.csv'
+    mean_diff_stats_all_patients_df, diffs_and_abs_diffs_output_df, mean_diffs_and_abs_diffs_patient_pooled_stats_df, mean_diffs_and_abs_diffs_cohort_pooled_stats_df = helper_funcs.create_diff_stats_dataframe(
         all_voxel_wise_dose_df,
         "Patient ID", 
         "Bx index", 
@@ -741,7 +880,22 @@ def main():
         "Voxel index", 
         "Dose (Gy)",
         output_dir = effect_sizes_analysis_dir,
-        csv_name = mean_diff_stats_output_filename
+        csv_name_stats_out = mean_diff_stats_output_filename,
+        csv_name_diffs_out = diffs_df_output_filename
+    )
+
+    mean_diff_stats_output_filename_dose_grad_filename = 'mean_diff_dose_gradient_statistics_all_patients.csv'
+    diffs_df_output_filename_dose_grad_filename = 'mean_diff_dose_gradient_values_all_patients.csv'
+    mean_diff_stats_all_patients_dose_grad_df, diffs_and_abs_diffs_gradient_output_df, mean_diffs_and_abs_diffs_gradient_patient_pooled_stats_df, mean_diffs_and_abs_diffs_gradient_cohort_pooled_stats_df = helper_funcs.create_diff_stats_dataframe(
+        all_voxel_wise_dose_df,
+        "Patient ID", 
+        "Bx index", 
+        "Bx ID", 
+        "Voxel index", 
+        "Dose grad (Gy/mm)",
+        output_dir = effect_sizes_analysis_dir,
+        csv_name_stats_out = mean_diff_stats_output_filename_dose_grad_filename,
+        csv_name_diffs_out = diffs_df_output_filename_dose_grad_filename
     )
 
 
@@ -757,7 +911,9 @@ def main():
     print("Generating dose differences voxel pairings of all length scales for analysis...")
     print("--------------------------------------------------")
 
-    dose_differences_cohort_df = helper_funcs.compute_dose_differences_vectorized(all_voxel_wise_dose_df)
+    dose_differences_cohort_df = helper_funcs.compute_dose_differences_vectorized(all_voxel_wise_dose_df,column_name = 'Dose (Gy)')
+    dose_differences_grad_cohort_df = helper_funcs.compute_dose_differences_vectorized(all_voxel_wise_dose_df,column_name = 'Dose grad (Gy/mm)')
+
 
 
     ### Dose differences voxel pairings of all length scales analysis (END)
@@ -777,6 +933,8 @@ def main():
     output_cohort_filename = 'length_scales_dosimetry_statistics_cohort.csv'
     output_per_biopsy_filename = 'length_scales_dosimetry_statistics_per_biopsy.csv'
 
+    output_cohort_filename_grad = 'length_scales_dose_gradient_statistics_cohort.csv'
+    output_per_biopsy_filename_grad = 'length_scales_dose_gradient_statistics_per_biopsy.csv'
 
     # A) per (Patient ID, Bx index, length_scale)
     _ = summary_statistics.compute_summary(
@@ -785,6 +943,14 @@ def main():
         ['dose_diff','dose_diff_abs'],
         output_dir = length_scales_dir,
         csv_name = output_per_biopsy_filename
+    )
+
+    _ = summary_statistics.compute_summary(
+        dose_differences_grad_cohort_df,
+        ['Patient ID','Bx index','length_scale'],
+        ['dose_diff','dose_diff_abs'],
+        output_dir = length_scales_dir,
+        csv_name = output_per_biopsy_filename_grad
     )
 
     # B) cohort-wide per length_scale
@@ -796,10 +962,13 @@ def main():
         csv_name = output_cohort_filename
     )
 
-
-
-
-
+    _ = summary_statistics.compute_summary(
+        dose_differences_grad_cohort_df,
+        ['length_scale'],
+        ['dose_diff','dose_diff_abs'],
+        output_dir = length_scales_dir,
+        csv_name = output_cohort_filename_grad
+    )
 
 
 
@@ -842,7 +1011,51 @@ def main():
     print("Figures: Cohort figures...")
     print("--------------------------------------------------")
 
-    if True:
+
+    print("Generating deltas cohort figures...")
+
+    if False:
+        print("Skipping!")
+    else:
+
+        _, _ = production_plots.plot_cohort_deltas_boxplot(nominal_deltas_df, save_dir=cohort_output_figures_dir, fig_name="dose_deltas_cohort",
+                            zero_level_index_str='Dose (Gy)', include_patient_ids=None,
+                            show_points=True)
+        _, _ = production_plots.plot_cohort_deltas_boxplot(nominal_gradient_deltas_df, save_dir=cohort_output_figures_dir, fig_name="dose_gradient_deltas_cohort",
+                            zero_level_index_str='Dose grad (Gy/mm)', include_patient_ids=None,
+                            show_points=True)
+        
+        _, _ = production_plots.plot_cohort_deltas_boxplot_by_voxel(
+            nominal_deltas_df,
+            cohort_output_figures_dir,
+            fig_name="dose_deltas_box_by_voxel_cohort",
+            zero_level_index_str = 'Dose (Gy)',   # must match what you passed to compute_biopsy_nominal_deltas
+            x_axis = 'Voxel index',               # or 'Voxel begin (Z)'
+            axes_label_fontsize = 14,
+            tick_label_fontsize= 12,
+            title= None,
+            show_points= False,   # new flag
+            point_size = 3,        # adjust visibility
+            alpha = 0.5, 
+        )
+
+        _, _ = production_plots.plot_cohort_deltas_boxplot_by_voxel(
+            nominal_gradient_deltas_df,
+            cohort_output_figures_dir,
+            fig_name="dose_gradient_deltas_box_by_voxel_cohort",
+            zero_level_index_str = 'Dose grad (Gy/mm)',   # must match what you passed to compute_biopsy_nominal_deltas
+            x_axis = 'Voxel index',               # or 'Voxel begin (Z)'
+            axes_label_fontsize = 14,
+            tick_label_fontsize= 12,
+            title= None,
+            show_points= False,   # new flag
+            point_size = 3,        # adjust visibility
+            alpha = 0.5, 
+        )
+        
+    print('stop')
+
+    if False:
         print("Skipping!")
     else:
 
@@ -870,6 +1083,7 @@ def main():
         for eff_size in eff_sizes:
         
             effect_size_dataframe = all_effect_sizes_df_dict[eff_size] 
+            effect_size_dataframe_dose_grad = all_effect_sizes_df_dose_grad_dict[eff_size]
             for agg_abs in [False, True]:
 
                 
@@ -877,21 +1091,177 @@ def main():
                                                 "Effect Size",
                                                 eff_size,
                                                 save_path_base=eff_size_heatmaps_dir,
+                                                save_name_base = 'dose',
                                                 annotation_info=None,
                                                 aggregate_abs=agg_abs,
                                                 vmin=None,
                                                 vmax=None)
+                
+                production_plots.plot_cohort_eff_size_heatmap_boxed_counts(effect_size_dataframe_dose_grad,
+                                                "Effect Size",
+                                                eff_size,
+                                                save_path_base=eff_size_heatmaps_dir,
+                                                save_name_base = 'dose_gradient',
+                                                annotation_info=None,
+                                                aggregate_abs=agg_abs,
+                                                vmin=None,
+                                                vmax=None)
+                
         for agg_abs in [False, True]:
             production_plots.plot_cohort_eff_size_heatmap_boxed_counts_and_std(
                 mean_diff_stats_all_patients_df,
                 "mean_diff",
                 "mean_diff_with_std",
                 save_path_base=eff_size_heatmaps_dir,
+                save_name_base = 'dose',
                 annotation_info= None,
-                aggregate_abs= agg_abs,
                 vmin = None,
                 vmax = None
             )
+
+            production_plots.plot_cohort_eff_size_heatmap_boxed_counts_and_std(
+                mean_diff_stats_all_patients_dose_grad_df,
+                "mean_diff",
+                "mean_diff_with_std",
+                save_path_base=eff_size_heatmaps_dir,
+                save_name_base = 'dose_gradient',
+                annotation_info= None,
+                vmin = None,
+                vmax = None
+            )
+
+            # New: dual-triangle cohort plot (upper=dose, lower=dose gradient)
+            production_plots.plot_cohort_eff_size_dualtri_mean_std(
+                upper_df=mean_diff_stats_all_patients_df,
+                lower_df=mean_diff_stats_all_patients_dose_grad_df,
+                eff_size_col="mean_diff",
+                eff_size_type_upper="Dose mean±std",
+                eff_size_type_lower="Dose-Gradient mean±std",
+                save_path_base=eff_size_heatmaps_dir,
+                save_name_base=f"dose_upper__dosegrad_lower_{'abs' if agg_abs else 'signed'}",
+                annotation_info=None,
+                aggregate_abs=agg_abs,
+                vmin=None, vmax=None,
+                # counts overlay
+                show_counts_boxes = True,
+                counts_source = "lower",       # "lower" or "upper"
+                # typography controls
+                tick_label_fontsize = 12,
+                axis_label_fontsize = 14,
+                cbar_tick_fontsize = 12,
+                cbar_label_fontsize = 14,
+                cbar_label_upper = "Mean Difference (Gy, Upper triangle)",
+                cbar_label_lower = "Mean Difference (Gy/mm, Lower triangle)",
+                show_title = False,
+                # n= annotation fontsize
+                n_label_fontsize = 7,
+                show_annotation_box=False
+            )
+
+            ## USING POOLED DATA STATISTICS!! THIS SHOULD BE BETTER
+            # signed differences
+            production_plots.plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs(
+                mean_diffs_and_abs_diffs_cohort_pooled_stats_df,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+                mean_diffs_and_abs_diffs_gradient_cohort_pooled_stats_df,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+
+                # tell the function which columns to render in cells:
+                upper_mean_col = "mean_diff",
+                upper_std_col = "std_diff",
+                lower_mean_col = "mean_diff",
+                lower_std_col = "std_diff",
+
+                # which column to use for the "n=" boxes (per voxel pair)
+                n_col = "n_biopsies",
+
+                eff_size_type_upper = "Dose mean±std",
+                eff_size_type_lower = "Dose-Gradient mean±std",
+
+                save_path_base=eff_size_heatmaps_dir,
+                save_name_base=f"dose_upper__dosegrad_lower_signed_pooledstats",
+                annotation_info = None,
+
+                # color range controls
+                vmin = None,
+                vmax = None,
+                vmin_upper = None,
+                vmax_upper = None,
+                vmin_lower = None,
+                vmax_lower = None,
+
+                # counts overlay
+                show_counts_boxes = True,
+                counts_source = "lower",       # "lower" or "upper"
+
+                # typography
+                tick_label_fontsize = 12,
+                axis_label_fontsize = 14,
+                cbar_tick_fontsize = 12,
+                cbar_label_fontsize = 14,
+                cbar_label_upper = "Mean of Signed Difference (Gy, Upper triangle)",
+                cbar_label_lower = "Mean of Signed Difference (Gy/mm, Lower triangle)",
+
+                # title
+                show_title = False,
+
+                # n= caption fontsize inside boxes
+                n_label_fontsize = 7,
+
+                # corner annotation box
+                show_annotation_box = False,
+            )
+
+            # Absolute differences 
+            production_plots.plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs(
+                mean_diffs_and_abs_diffs_cohort_pooled_stats_df,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+                mean_diffs_and_abs_diffs_gradient_cohort_pooled_stats_df,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+
+                # tell the function which columns to render in cells:
+                upper_mean_col = "mean_abs_diff",
+                upper_std_col = "std_abs_diff",
+                lower_mean_col = "mean_abs_diff",
+                lower_std_col = "std_abs_diff",
+
+                # which column to use for the "n=" boxes (per voxel pair)
+                n_col = "n_biopsies",
+
+                eff_size_type_upper = "Dose mean±std",
+                eff_size_type_lower = "Dose-Gradient mean±std",
+
+                save_path_base=eff_size_heatmaps_dir,
+                save_name_base=f"dose_upper__dosegrad_lower_absolute_pooledstats",
+                annotation_info = None,
+
+                # color range controls
+                vmin = None,
+                vmax = None,
+                vmin_upper = None,
+                vmax_upper = None,
+                vmin_lower = None,
+                vmax_lower = None,
+
+                # counts overlay
+                show_counts_boxes = True,
+                counts_source = "lower",       # "lower" or "upper"
+
+                # typography
+                tick_label_fontsize = 12,
+                axis_label_fontsize = 14,
+                cbar_tick_fontsize = 12,
+                cbar_label_fontsize = 14,
+                cbar_label_upper = "Mean of Absolute Differences (Gy, Upper triangle)",
+                cbar_label_lower = "Mean of Absolute Differences (Gy/mm, Lower triangle)",
+
+                # title
+                show_title = False,
+
+                # n= caption fontsize inside boxes
+                n_label_fontsize = 7,
+
+                # corner annotation box
+                show_annotation_box = False,
+            )
+
+
 
             
             #production_plots.plot_eff_size_heatmaps(effect_size_dataframe, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir)
@@ -945,6 +1315,27 @@ def main():
                                     ylabel = "Absolute Dose Difference (Gy)",
                                 )
 
+        production_plots.plot_dose_vs_length_with_summary(
+                                    dose_differences_grad_cohort_df,
+                                    'length_scale',
+                                    'dose_diff_abs',
+                                    save_dir = cohort_output_figures_dir,
+                                    file_name = "dose_gradient_differences_voxel_pairings_length_scales_strip_plot",
+                                    title = "Dose Gradient Differences Voxel Pairings Length Scales Strip Plot",
+                                    figsize=(10, 6),
+                                    dpi=300,
+                                    show_points=False,
+                                    violin_or_box='box',
+                                    trend_lines = ['mean'],
+                                    annotate_counts=True,
+                                    y_trim=True,
+                                    y_min_quantile=0.05,
+                                    y_max_quantile=0.95,
+                                    y_min_fixed=0,
+                                    y_max_fixed=None,
+                                    xlabel = "Length Scale (mm)",
+                                    ylabel = "Absolute Dose Gradient Difference (Gy/mm)",
+                                )
 
 
 
@@ -1161,8 +1552,63 @@ def main():
 
 
     print("--------------------------------------------------")
+    print("Figures: Individual patient dosimetry and dose gradient deltas...")
+    print("--------------------------------------------------")
+
+
+
+    if False:
+        print("Skipping!")
+    else:
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+
+            # Create a directory for the patient
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+            
+            bx_id = nominal_deltas_df[(nominal_deltas_df['Patient ID'] == patient_id) & (nominal_deltas_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+
+
+            general_plot_name_string = f"{patient_id} - {bx_id} - dosimetry-deltas-plot"
+
+            zero_level_index_str = 'Dose (Gy)'   # must match what you passed to compute_biopsy_nominal_deltas
+
+            production_plots.plot_biopsy_deltas_line(
+                nominal_deltas_df,
+                patient_id,
+                bx_index,
+                patient_dir,
+                general_plot_name_string,
+                zero_level_index_str = zero_level_index_str,   # must match what you passed to compute_biopsy_nominal_deltas
+                x_axis = 'Voxel index',               # or 'Voxel begin (Z)'
+                axes_label_fontsize = 14,
+                tick_label_fontsize = 12,
+                title = zero_level_index_str+ ' Deltas line plot - Patient '+patient_id+', Bx index '+str(bx_index)+', Bx ID '+str(bx_id),
+            )
+
+            # Dose gradient deltas
+            general_plot_name_string = f"{patient_id} - {bx_id} - dosimetry-gradient-deltas-plot"
+            zero_level_index_str = 'Dose grad (Gy/mm)'   # must match what you passed to compute_biopsy_nominal_deltas
+
+            bx_id = nominal_gradient_deltas_df[(nominal_gradient_deltas_df['Patient ID'] == patient_id) & (nominal_gradient_deltas_df['Bx index'] == bx_index)]['Bx ID'].values[0]
+            production_plots.plot_biopsy_deltas_line(
+                nominal_gradient_deltas_df,
+                patient_id,
+                bx_index,
+                patient_dir,
+                general_plot_name_string,
+                zero_level_index_str = zero_level_index_str,   # must match what you passed to compute_biopsy_nominal_deltas
+                x_axis = 'Voxel index',               # or 'Voxel begin (Z)'
+                axes_label_fontsize = 14,
+                tick_label_fontsize = 12,
+                title = zero_level_index_str+ ' Deltas line plot - Patient '+patient_id+', Bx index '+str(bx_index)+', Bx ID '+str(bx_id),
+            )
+
+    print("--------------------------------------------------")
     print("Figures: Individual patient dosimetry and dose gradient kernel regressions...")
     print("--------------------------------------------------")
+
+
 
 
     if True:
@@ -1307,7 +1753,7 @@ def main():
     print("--------------------------------------------------")
 
 
-    # 2. individual patient cumulative and differential DVH
+    # 2. individual patient heatmaps
     if False:
         print("Skipping!")
     else:
@@ -1321,13 +1767,6 @@ def main():
             sp_patient_all_structure_shifts_pandas_data_frame = all_mc_structure_transformation_df[all_mc_structure_transformation_df['Patient ID'] == patient_id]
 
 
-            ### cumulative DVH
-
-
-            # options
-            random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
-            general_plot_name_string = " - cumulative-DVH" # file name
-            custom_fig_title = 'Cumulative DVH' # title of the plot
 
             eff_size_heatmaps_dir = patient_dir.joinpath(f"effect_sizes_heatmaps")
             os.makedirs(eff_size_heatmaps_dir, exist_ok=True)
@@ -1340,7 +1779,10 @@ def main():
                 # Create a directory for the patient
                 
 
-                production_plots.plot_eff_size_heatmaps(eff_size_df, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir)
+                production_plots.plot_eff_size_heatmaps(eff_size_df, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir, save_name_base="dose")
+                eff_size_df_dose_grad = all_effect_sizes_df_dose_grad_dict[eff_size]
+                eff_size_df_dose_grad = eff_size_df_dose_grad[(eff_size_df_dose_grad['Patient ID'] == patient_id) & (eff_size_df_dose_grad['Bx index'] == bx_index)]
+                production_plots.plot_eff_size_heatmaps(eff_size_df_dose_grad, "Patient ID", "Bx index", "Bx ID", "Effect Size", eff_size, save_dir=eff_size_heatmaps_dir, save_name_base="dose_gradient")
 
             # filter the mean difference stats dataframe for the specific patient and biopsy index
             mean_diff_stats_all_patients_sp_bx_df = mean_diff_stats_all_patients_df[(mean_diff_stats_all_patients_df['Patient ID'] == patient_id) & (mean_diff_stats_all_patients_df['Bx index'] == bx_index)]
@@ -1353,19 +1795,107 @@ def main():
                 mean_col= "mean_diff",
                 std_col = "std_diff",
                 save_dir = eff_size_heatmaps_dir,
+                save_name_base="dose",
+                annotation_info = None,
+                vmin= None,
+                vmax= None
+            )
+            
+            mean_diff_stats_all_patients_sp_bx_df_dose_grad = mean_diff_stats_all_patients_dose_grad_df[(mean_diff_stats_all_patients_dose_grad_df['Patient ID'] == patient_id) & (mean_diff_stats_all_patients_dose_grad_df['Bx index'] == bx_index)]
+            production_plots.plot_diff_stats_heatmaps_with_std(
+                mean_diff_stats_all_patients_sp_bx_df_dose_grad,
+                "Patient ID", 
+                "Bx index", 
+                "Bx ID",
+                mean_col= "mean_diff",
+                std_col = "std_diff",
+                save_dir = eff_size_heatmaps_dir,
+                save_name_base="dose_gradient",
                 annotation_info = None,
                 vmin= None,
                 vmax= None
             )
 
-            
+
+
+            # Upper = dose, Lower = dose gradient
+            production_plots.plot_diff_stats_heatmap_upper_lower(
+                upper_df=mean_diff_stats_all_patients_sp_bx_df,
+                lower_df=mean_diff_stats_all_patients_sp_bx_df_dose_grad,   # your filtered grad DF
+                patient_id_col="Patient ID",
+                bx_index_col="Bx index",
+                bx_id_col="Bx ID",
+                upper_mean_col="mean_diff",
+                upper_std_col="std_diff",
+                lower_mean_col="mean_diff",
+                lower_std_col="std_diff",
+                save_dir=eff_size_heatmaps_dir,
+                save_name_base="dose_upper__dosegrad_lower_signed",
+                annotation_info=None,
+                # global fallback limits (used only if per-triangle limits not provided)
+                vmin = None,
+                vmax = None,
+                # OPTIONAL: per-triangle limits (take precedence if provided)
+                vmin_upper = None,
+                vmax_upper = None,
+                vmin_lower = None,
+                vmax_lower = None,
+                # typography
+                tick_label_fontsize = 12,
+                axis_label_fontsize = 14,
+                cbar_tick_fontsize = 12,
+                cbar_label_fontsize = 14,
+                cbar_label_upper = "Mean of Signed Differences (Gy, Upper triangle)",
+                cbar_label_lower = "Mean of Signed Differences (Gy/mm, Lower triangle)",
+                # title & corner annotation
+                show_title = False,
+                show_annotation_box = False,
+                cell_annot_fontsize = 8
+            )
+
+            # Upper = dose, Lower = dose gradient
+            production_plots.plot_diff_stats_heatmap_upper_lower(
+                upper_df=mean_diff_stats_all_patients_sp_bx_df,
+                lower_df=mean_diff_stats_all_patients_sp_bx_df_dose_grad,   # your filtered grad DF
+                patient_id_col="Patient ID",
+                bx_index_col="Bx index",
+                bx_id_col="Bx ID",
+                upper_mean_col="mean_abs_diff",
+                upper_std_col="std_abs_diff",
+                lower_mean_col="mean_abs_diff",
+                lower_std_col="std_abs_diff",
+                save_dir=eff_size_heatmaps_dir,
+                save_name_base="dose_upper__dosegrad_lower_absolute",
+                annotation_info=None,
+                # global fallback limits (used only if per-triangle limits not provided)
+                vmin = None,
+                vmax = None,
+                # OPTIONAL: per-triangle limits (take precedence if provided)
+                vmin_upper = None,
+                vmax_upper = None,
+                vmin_lower = None,
+                vmax_lower = None,
+                # typography
+                tick_label_fontsize = 12,
+                axis_label_fontsize = 14,
+                cbar_tick_fontsize = 12,
+                cbar_label_fontsize = 14,
+                cbar_label_upper = "Mean of Absolute Differences (Gy, Upper triangle)",
+                cbar_label_lower = "Mean of Absoulte Differences (Gy/mm, Lower triangle)",
+                # title & corner annotation
+                show_title = False,
+                show_annotation_box = False,
+                cell_annot_fontsize = 8
+            )
+    
+
 
     # 3. individual patient dose differences voxel pairings of all length scales analysis
     print("--------------------------------------------------")
     print("Figures: Individual patient dose differences voxel pairings of all length scales analysis...")
     print("--------------------------------------------------")
 
-    if True:
+    if False:
         print("Skipping!")
     else:
         for patient_id, bx_index in patient_id_and_bx_index_pairs:
@@ -1400,6 +1930,169 @@ def main():
                                     xlabel = "Length Scale (mm)",
                                     ylabel = "Absolute Dose Difference (Gy)",
                                 )
+            
+            dose_differences_grad_cohort_df_patient = dose_differences_grad_cohort_df[(dose_differences_grad_cohort_df['Patient ID'] == patient_id) & (dose_differences_grad_cohort_df['Bx index'] == bx_index)]    
+            production_plots.plot_dose_vs_length_with_summary(
+                                    dose_differences_grad_cohort_df_patient,
+                                    'length_scale',
+                                    'dose_diff_abs',
+                                    save_dir = patient_dir,
+                                    file_name = f"{patient_id}-{bx_struct_roi}-dose_gradient_differences_voxel_pairings_length_scales_strip_plot",
+                                    title = f"{patient_id}-{bx_struct_roi} - Dose Gradient Differences Voxel Pairings Length Scales Strip Plot",
+                                    figsize=(10, 6),
+                                    dpi=300,
+                                    show_points=False,
+                                    violin_or_box='box',
+                                    trend_lines = ['mean'],
+                                    annotate_counts=True,
+                                    y_trim=True,
+                                    y_min_quantile=0.05,
+                                    y_max_quantile=0.95,
+                                    y_min_fixed=0,
+                                    y_max_fixed=None,
+                                    xlabel = "Length Scale (mm)",
+                                    ylabel = "Absolute Dose Gradient Difference (Gy/mm)",
+                                )
+
+
+        # multi boxplot example
+
+        print('dose multi boxplot')
+        patient_id_and_bx_index_pairs_for_multi_boxplot = [('184 (F2)', 1), ('184 (F2)', 2)]
+
+
+        production_plots.plot_dose_vs_length_with_summary_mutlibox(
+            dose_differences_cohort_df,
+            'length_scale',
+            'dose_diff_abs',
+            save_dir=cohort_output_figures_dir,
+            file_name="multi-patient-box",
+            title=None,  # ✅ no title at all
+            figsize=(10, 6),
+            dpi=300,
+            show_points=False,
+            violin_or_box='box',
+            trend_lines=['mean'],
+            annotate_counts=True,
+            annotation_box=False,
+            y_trim=True,
+            y_min_fixed=0,
+            xlabel="Length Scale (mm)",
+            ylabel="Absolute Dose Difference (Gy)",
+            title_font_size=20,
+            axis_label_font_size=14,
+            tick_label_font_size=12,
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+        )
+        """
+        production_plots.plot_dose_vs_length_with_summary_mutlibox(
+            dose_differences_cohort_df,
+            'length_scale',
+            'dose_diff_abs',
+            save_dir=cohort_output_figures_dir,
+            file_name="multi-patient-box-annotated",
+            title=None,  # ✅ no title at all
+            figsize=(10, 6),
+            dpi=300,
+            show_points=True,
+            violin_or_box='box',
+            trend_lines=['mean'],
+            annotate_counts=True,
+            annotation_box=True,
+            y_trim=True,
+            y_min_fixed=0,
+            xlabel="Length Scale (mm)",
+            ylabel="Absolute Dose Difference (Gy)",
+            title_font_size=20,
+            axis_label_font_size=14,
+            tick_label_font_size=12,
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+        )
+
+        production_plots.plot_dose_vs_length_with_summary_mutlibox(
+            dose_differences_cohort_df,
+            'length_scale',
+            'dose_diff_abs',
+            save_dir=cohort_output_figures_dir,
+            file_name="multi-patient-violin",
+            title=None,  # ✅ no title at all
+            figsize=(10, 6),
+            dpi=300,
+            show_points=False,
+            violin_or_box='violin',
+            trend_lines=['mean'],
+            annotate_counts=True,
+            annotation_box=False,
+            y_trim=True,
+            y_min_fixed=0,
+            xlabel="Length Scale (mm)",
+            ylabel="Absolute Dose Difference (Gy)",
+            title_font_size=20,
+            axis_label_font_size=14,
+            tick_label_font_size=12,
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+        )
+
+        print('gradient multi boxplot')
+        production_plots.plot_dose_vs_length_with_summary_mutlibox(
+            dose_differences_grad_cohort_df,
+            'length_scale',
+            'dose_diff_abs',
+            save_dir=cohort_output_figures_dir,
+            file_name="multi-patient-gradient-violin",
+            title=None,  # ✅ no title at all
+            figsize=(10, 6),
+            dpi=300,
+            show_points=False,
+            violin_or_box='violin',
+            trend_lines=['mean'],
+            annotate_counts=True,
+            annotation_box=False,
+            y_trim=True,
+            y_min_fixed=0,
+            xlabel="Length Scale (mm)",
+            ylabel="Absolute Dose Difference (Gy)",
+            title_font_size=20,
+            axis_label_font_size=14,
+            tick_label_font_size=12,
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+        )
+        """
+        production_plots.plot_dose_vs_length_with_summary_mutlibox(
+            dose_differences_grad_cohort_df,
+            'length_scale',
+            'dose_diff_abs',
+            save_dir=cohort_output_figures_dir,
+            file_name="multi-patient-gradient-box",
+            title=None,  # ✅ no title at all
+            figsize=(10, 6),
+            dpi=300,
+            show_points=False,
+            violin_or_box='box',
+            trend_lines=['mean'],
+            annotate_counts=True,
+            annotation_box=False,
+            y_trim=True,
+            y_min_fixed=0,
+            xlabel="Length Scale (mm)",
+            ylabel="Absolute Dose Difference (Gy)",
+            title_font_size=20,
+            axis_label_font_size=14,
+            tick_label_font_size=12,
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+        )
+
+        
+
+
+
+
+
+
+
+
+
+
 
 
     # 4. individual patient dose ridgeline plots

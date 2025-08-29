@@ -21,6 +21,11 @@ from matplotlib.lines import Line2D
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
+from matplotlib.patches import Rectangle
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib as mpl
+import matplotlib.colors as mcolors
+import matplotlib.patheffects as pe
 
 def production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
                                                                                       dose_output_nominal_and_all_MC_trials_pandas_data_frame,
@@ -869,6 +874,7 @@ def plot_eff_size_heatmaps(eff_size_df,
                            eff_size_col, 
                            eff_size_type, 
                            save_dir=None,
+                           save_name_base=None,
                             annotation_info=None,
                             vmin=None,
                             vmax=None): 
@@ -980,7 +986,7 @@ def plot_eff_size_heatmaps(eff_size_df,
         
         if save_dir is not None:
             # Save the plot as PNG and SVG
-            base_file_name = (f"EffSize_{eff_size_type}_Heatmap_{patient_id_col}_{patient_id}_"
+            base_file_name = (f"EffSize_{eff_size_type}_Heatmap_{patient_id_col}_{patient_id}_{save_name_base}"
                               f"{bx_index_col}_{bx_index}_{bx_id_col}_{bx_id}")
             png_path = os.path.join(save_dir, f"{base_file_name}.png")
             svg_path = os.path.join(save_dir, f"{base_file_name}.svg")
@@ -1002,6 +1008,7 @@ def plot_diff_stats_heatmaps_with_std(
     mean_col: str = "mean_diff",
     std_col: str = None,
     save_dir: str = None,
+    save_name_base: str = "dose",
     annotation_info: dict = None,
     vmin: float = None,
     vmax: float = None
@@ -1122,13 +1129,350 @@ def plot_diff_stats_heatmaps_with_std(
         plt.tight_layout()
 
         if save_dir:
-            fname = f"MeanDiff_HM_P{pid}_Bx{bxi}_{bxid}" + (f"_pm_{std_col}" if std_col else "")
+            fname = f"MeanDiff_HM_P{pid}_Bx{bxi}_{bxid}" + (f"_pm_{std_col}" if std_col else "") + f"_{save_name_base}"
             for ext in (".png", ".svg"):
                 plt.savefig(os.path.join(save_dir, fname + ext), bbox_inches="tight")
             plt.close()
             print(f"Saved heatmap for PID={pid}, BxID={bxid}: {fname}.png/.svg")
         else:
             plt.show()
+
+
+
+
+
+
+
+
+
+
+def get_contrasting_color(val, vmin, vmax, cmap):
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    rgba = cmap(norm(val))
+    # perceived luminance (simple formula)
+    r, g, b = rgba[:3]
+    luminance = 0.299*r + 0.587*g + 0.114*b
+    return "black" if luminance > 0.5 else "white"
+
+
+
+def plot_diff_stats_heatmap_upper_lower(
+        upper_df,                      # e.g., dose
+        lower_df,                      # e.g., dose gradient
+        patient_id_col,
+        bx_index_col,
+        bx_id_col,
+        upper_mean_col: str = "mean_diff",
+        upper_std_col: str | None = "std_diff",
+        lower_mean_col: str = "mean_diff",
+        lower_std_col: str | None = "std_diff",
+        save_dir: str | None = None,
+        save_name_base: str = "dose_upper__grad_lower",
+        annotation_info: dict | None = None,
+        # global fallback limits (used only if per-triangle limits not provided)
+        vmin: float | None = None,
+        vmax: float | None = None,
+        # OPTIONAL: per-triangle limits (take precedence if provided)
+        vmin_upper: float | None = None,
+        vmax_upper: float | None = None,
+        vmin_lower: float | None = None,
+        vmax_lower: float | None = None,
+        # typography
+        tick_label_fontsize: int = 9,
+        axis_label_fontsize: int = 11,
+        cbar_tick_fontsize: int = 9,
+        cbar_label_fontsize: int = 11,
+        cbar_label_upper: str = "Mean (Upper)",
+        cbar_label_lower: str = "Mean (Lower)",
+        # title & corner annotation
+        show_title: bool = True,
+        show_annotation_box: bool = True,
+        # 🔹 new parameter
+        cell_annot_fontsize: int = 8,
+    ):
+    """
+    One heatmap per biopsy: upper triangle from `upper_df`, lower triangle from `lower_df` (mirrored).
+    Cells display mean (± std if provided). **Independent** colorbars for upper/lower.
+
+    Each DataFrame must contain:
+      [patient_id_col, bx_index_col, bx_id_col, 'voxel1','voxel2', mean_col, optional std_col]
+    """
+
+    plt.ioff()
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    # group by biopsy keys
+    group_keys = [patient_id_col, bx_index_col, bx_id_col]
+    upper_groups = upper_df.groupby(group_keys)
+    lower_groups = lower_df.groupby(group_keys)
+
+    # iterate over union of keys present in either df
+    all_keys = set(upper_groups.groups.keys()) | set(lower_groups.groups.keys())
+
+    for key in sorted(all_keys):
+        pid, bxi, bxid = key
+
+        grp_upper = upper_groups.get_group(key) if key in upper_groups.groups else None
+        grp_lower = lower_groups.get_group(key) if key in lower_groups.groups else None
+        if grp_upper is None and grp_lower is None:
+            continue
+
+        # corner annotation text
+        ann = {} if annotation_info is None else dict(annotation_info)
+        ann["Patient ID"] = pid
+        ann["Biopsy index"] = bxi
+        ann["Biopsy ID"]  = bxid
+        ann["Upper"] = f"{upper_mean_col}" + (f" ± {upper_std_col}" if upper_std_col else "")
+        ann["Lower"] = f"{lower_mean_col}" + (f" ± {lower_std_col}" if lower_std_col else "")
+
+        # unified voxel list across both groups
+        voxels = set()
+        if grp_upper is not None:
+            voxels |= (set(grp_upper["voxel1"]) | set(grp_upper["voxel2"]))
+        if grp_lower is not None:
+            voxels |= (set(grp_lower["voxel1"]) | set(grp_lower["voxel2"]))
+        voxels = sorted(voxels)
+        n = len(voxels)
+
+        # pivot helpers
+        def pivot_val(grp, col):
+            if grp is None or col is None:
+                return None
+            return (grp.pivot(index="voxel1", columns="voxel2", values=col)
+                        .reindex(index=voxels, columns=voxels))
+
+        UM_df = pivot_val(grp_upper, upper_mean_col)
+        if UM_df is None:
+            UM_df = pd.DataFrame(index=voxels, columns=voxels, dtype=float)
+
+        LM_df = pivot_val(grp_lower, lower_mean_col)
+        if LM_df is None:
+            LM_df = pd.DataFrame(index=voxels, columns=voxels, dtype=float)
+
+        US_df = pivot_val(grp_upper, upper_std_col) if upper_std_col else None
+        LS_df = pivot_val(grp_lower, lower_std_col) if lower_std_col else None
+
+        UM = UM_df.values
+        LM = LM_df.values
+
+        # build display matrices for **independent** colorbars
+        upper_display = np.full((n, n), np.nan, dtype=float)
+        lower_display = np.full((n, n), np.nan, dtype=float)
+
+        for i in range(n):
+            for j in range(n):
+                if i < j:
+                    upper_display[i, j] = UM[i, j]
+                elif i > j:
+                    lower_display[i, j] = LM[j, i]  # mirror into lower
+                else:
+                    # diagonal: prefer upper; else lower
+                    if np.isfinite(UM[i, j]):
+                        upper_display[i, j] = UM[i, j]
+                    elif np.isfinite(LM[i, j]):
+                        lower_display[i, j] = LM[i, j]
+
+        # per-triangle vmin/vmax with optional global fallback
+        def finite_vals(arr):
+            v = arr[np.isfinite(arr)]
+            return v if v.size else np.array([])
+
+        if vmin_upper is None or vmax_upper is None:
+            up_vals = finite_vals(upper_display)
+        if vmin_lower is None or vmax_lower is None:
+            lo_vals = finite_vals(lower_display)
+
+        if vmin_upper is None:
+            vmin_upper = float(up_vals.min()) if up_vals.size else (vmin if vmin is not None else 0.0)
+        if vmax_upper is None:
+            vmax_upper = float(up_vals.max()) if up_vals.size else (vmax if vmax is not None else 1.0)
+        if vmin_lower is None:
+            vmin_lower = float(lo_vals.min()) if lo_vals.size else (vmin if vmin is not None else 0.0)
+        if vmax_lower is None:
+            vmax_lower = float(lo_vals.max()) if lo_vals.size else (vmax if vmax is not None else 1.0)
+
+        # annotation strings (mean ± std) placed manually with contrasting colors
+        annot = np.full((n, n), "", dtype=object)
+        US = US_df.values if US_df is not None else None
+        LS = LS_df.values if LS_df is not None else None
+
+        for i in range(n):
+            for j in range(n):
+                if i < j:
+                    m = UM[i, j]
+                    if not np.isfinite(m): 
+                        continue
+                    s = US[i, j] if US is not None else np.nan
+                    annot[i, j] = f"{m:.2f}" if not np.isfinite(s) else f"{m:.2f}\n±\n{s:.2f}"
+                elif i > j:
+                    m = LM[j, i]
+                    if not np.isfinite(m):
+                        continue
+                    s = LS[j, i] if LS is not None else np.nan
+                    annot[i, j] = f"{m:.2f}" if not np.isfinite(s) else f"{m:.2f}\n±\n{s:.2f}"
+                else:
+                    # diagonal: prefer upper else lower
+                    if np.isfinite(UM[i, j]):
+                        s = US[i, j] if US is not None else np.nan
+                        annot[i, j] = f"{UM[i, j]:.2f}" if not np.isfinite(s) else f"{UM[i, j]:.2f}\n±\n{s:.2f}"
+                    elif np.isfinite(LM[i, j]):
+                        s = LS[i, j] if LS is not None else np.nan
+                        annot[i, j] = f"{LM[i, j]:.2f}" if not np.isfinite(s) else f"{LM[i, j]:.2f}\n±\n{s:.2f}"
+
+        # ===== Plot: two overlaid heatmaps + two independent colorbars =====
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        # lower first
+        hm_lower = sns.heatmap(
+            lower_display,
+            cmap="coolwarm",
+            vmin=vmin_lower, vmax=vmax_lower,
+            mask=~np.isfinite(lower_display),
+            cbar=False,
+            linewidths=0.3, linecolor="white",
+            square=True, ax=ax,
+        )
+        # upper second
+        hm_upper = sns.heatmap(
+            upper_display,
+            cmap="coolwarm",
+            vmin=vmin_upper, vmax=vmax_upper,
+            mask=~np.isfinite(upper_display),
+            cbar=False,
+            linewidths=0.3, linecolor="white",
+            square=True, ax=ax,
+        )
+
+        # manual annotations with contrasting color per triangle
+        cmap_up = plt.get_cmap("coolwarm")
+        cmap_lo = plt.get_cmap("coolwarm")
+        for i in range(n):
+            for j in range(n):
+                txt = annot[i, j]
+                if not txt:
+                    continue
+                if i < j or (i == j and np.isfinite(upper_display[i, j])):
+                    color = get_contrasting_color(upper_display[i, j], vmin_upper, vmax_upper, cmap_up)
+                else:
+                    color = get_contrasting_color(lower_display[i, j], vmin_lower, vmax_lower, cmap_lo)
+                ax.text(
+                    j + 0.5, i + 0.5, txt,
+                    ha="center", va="center",
+                    fontsize=cell_annot_fontsize,   # 🔹 now configurable
+                    color=color
+                )
+
+
+        # Optional title
+        if show_title:
+            ax.set_title(
+                f"Upper: {upper_mean_col}" + (f" ± {upper_std_col}" if upper_std_col else "") +
+                "   |   " +
+                f"Lower: {lower_mean_col}" + (f" ± {lower_std_col}" if lower_std_col else "")
+            )
+
+        # Bottom/Left = LOWER triangle semantics
+        ax.set_xticks(np.arange(n) + 0.5)
+        ax.set_yticks(np.arange(n) + 0.5)
+        ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
+        ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
+        ax.set_xlabel("Voxel 1 (Lower triangle)", fontsize=axis_label_fontsize)
+        ax.set_ylabel("Voxel 2 (Lower triangle)", fontsize=axis_label_fontsize)
+        ax.tick_params(axis="x", bottom=True, top=False, direction="out", length=4, width=1, color="black")
+        ax.tick_params(axis="y", left=True, right=False, direction="out", length=4, width=1, color="black")
+
+        # Top/Right = UPPER triangle semantics
+        top_ax = ax.secondary_xaxis('top')
+        top_ax.set_xticks(ax.get_xticks())
+        top_ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
+        top_ax.set_xlabel("Voxel 2 (Upper triangle)", fontsize=axis_label_fontsize)
+        top_ax.tick_params(axis="x", top=True, direction="out", length=4, width=1, color="black")
+
+        right_ax = ax.secondary_yaxis('right')
+        right_ax.set_yticks(ax.get_yticks())
+        right_ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
+        right_ax.set_ylabel("Voxel 1 (Upper triangle)", fontsize=axis_label_fontsize)
+        right_ax.tick_params(axis="y", right=True, direction="out", length=4, width=1, color="black")
+
+        # Two independent colorbars (LEFT=lower, RIGHT=upper)
+        divider = make_axes_locatable(ax)
+        cax_left  = divider.append_axes("left",  size="4%", pad=0.8)
+        cax_right = divider.append_axes("right", size="4%", pad=0.8)
+
+        sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap="coolwarm")
+        sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap="coolwarm")
+        sm_lower.set_array([])
+        sm_upper.set_array([])
+
+        cbar_lower = plt.colorbar(sm_lower, cax=cax_left)
+        cbar_upper = plt.colorbar(sm_upper, cax=cax_right)
+        cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize)
+        cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize)
+        cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize)
+        cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize)
+        cax_left.yaxis.set_ticks_position('left')
+        cax_left.yaxis.set_label_position('left')
+        cax_right.yaxis.set_ticks_position('right')
+        cax_right.yaxis.set_label_position('right')
+
+        # corner annotation
+        if show_annotation_box and ann:
+            ax.text(
+                0.02, 0.02,
+                "\n".join(f"{k}: {v}" for k, v in ann.items()),
+                transform=ax.transAxes,
+                fontsize=10,
+                va="bottom", ha="left",
+                bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", facecolor="white", alpha=0.9)
+            )
+
+        plt.tight_layout()
+
+        # save/show
+        if save_dir:
+            fname = f"DualTri_HM_P{pid}_Bx{bxi}_{bxid}_{save_name_base}"
+            plt.savefig(os.path.join(save_dir, fname + ".png"), bbox_inches="tight", dpi=300)
+            plt.savefig(os.path.join(save_dir, fname + ".svg"), bbox_inches="tight")
+            plt.close(fig)
+            print(f"Saved dual-triangle heatmap for PID={pid}, BxIndex={bxi}, BxID={bxid}: {fname}.png/.svg")
+        else:
+            plt.show()
+            plt.close(fig)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def plot_cohort_eff_size_heatmap(
@@ -1521,6 +1865,7 @@ def plot_cohort_eff_size_heatmap_boxed_counts(
     eff_size_col: str,
     eff_size_type: str,
     save_path_base=None,
+    save_name_base = None,
     annotation_info: dict = None,
     aggregate_abs: bool = False,
     vmin: float = None,
@@ -1654,7 +1999,7 @@ def plot_cohort_eff_size_heatmap_boxed_counts(
 
     # 10) Save or show
     if save_path_base:
-        p = save_path_base.joinpath(f"{eff_size_type}_boxed_counts_abs-{aggregate_abs}")
+        p = save_path_base.joinpath(f"{eff_size_type}_boxed_counts_abs-{aggregate_abs}_{save_name_base}")
         plt.savefig(p.with_suffix(".png"), bbox_inches="tight")
         plt.savefig(p.with_suffix(".svg"), bbox_inches="tight")
         print(f"Saved boxed-counts heatmap to {p}.png/.svg")
@@ -1668,8 +2013,8 @@ def plot_cohort_eff_size_heatmap_boxed_counts_and_std(
     eff_size_col: str,
     eff_size_type: str,
     save_path_base=None,
+    save_name_base= None,
     annotation_info: dict = None,
-    aggregate_abs: bool = False,
     vmin: float = None,
     vmax: float = None
 ):
@@ -1681,7 +2026,7 @@ def plot_cohort_eff_size_heatmap_boxed_counts_and_std(
     Args:
       diff_stats_df : DataFrame with columns ['Patient ID','Bx index','Bx ID',
                       'voxel1','voxel2', eff_size_col, …].
-      eff_size_col  : e.g. "mean_diff"
+      eff_size_col  : e.g. "mean_diff" or "mean_diff_abs"
       eff_size_type : label for title/filenames (e.g. "Mean Difference")
       save_path_base: dir (or Path) to save PNG/SVG; if None, show the plot.
       annotation_info: extra key→value lines to draw on the plot.
@@ -1699,9 +2044,7 @@ def plot_cohort_eff_size_heatmap_boxed_counts_and_std(
     annotation_text = "\n".join(f"{k}: {v}" for k, v in annotation_info.items())
 
     # 2) Optionally take absolute effect sizes
-    df = diff_stats_df.copy() if aggregate_abs else diff_stats_df
-    if aggregate_abs:
-        df[eff_size_col] = df[eff_size_col].abs()
+    df = diff_stats_df
 
     # 3) Compute cohort‐level mean, std, and count per voxel‐pair
     stats = (
@@ -1831,7 +2174,7 @@ def plot_cohort_eff_size_heatmap_boxed_counts_and_std(
     if save_path_base:
         base = os.path.join(
             save_path_base,
-            f"{eff_size_type}_boxed_counts_abs-{aggregate_abs}"
+            f"{eff_size_type}_boxed_counts_abs-{save_name_base}"
         )
         plt.savefig(base + ".png", bbox_inches="tight",dpi=300)
         plt.savefig(base + ".svg", bbox_inches="tight")
@@ -1840,6 +2183,723 @@ def plot_cohort_eff_size_heatmap_boxed_counts_and_std(
     else:
         plt.show()
         plt.close(fig)
+
+
+
+
+
+
+
+
+def plot_cohort_eff_size_dualtri_mean_std(
+    upper_df: pd.DataFrame,             # e.g., dose
+    lower_df: pd.DataFrame,
+    eff_size_col: str,                  # e.g., "mean_diff"
+    eff_size_type_upper: str,           # e.g., "Dose mean±std"
+    eff_size_type_lower: str,           # e.g., "Dose-Gradient mean±std"
+    save_path_base=None,
+    save_name_base=None,
+    annotation_info: dict | None = None,
+    aggregate_abs: bool = False,
+    # global fallback limits (used only if per-triangle limits not provided)
+    vmin: float | None = None,
+    vmax: float | None = None,
+    # OPTIONAL: per-triangle limits (take precedence if provided)
+    vmin_upper: float | None = None,
+    vmax_upper: float | None = None,
+    vmin_lower: float | None = None,
+    vmax_lower: float | None = None,
+    # counts overlay
+    show_counts_boxes: bool = True,
+    counts_source: str = "lower",       # "lower" or "upper"
+    # typography controls
+    tick_label_fontsize: int = 9,
+    axis_label_fontsize: int = 11,
+    cbar_tick_fontsize: int = 9,
+    cbar_label_fontsize: int = 11,
+    cbar_label_upper: str = "Mean Difference (Gy, Upper)",
+    cbar_label_lower: str = "Mean Difference (Gy, Lower)",
+    # title
+    show_title: bool = True,
+    # n= annotation fontsize
+    n_label_fontsize: int = 8,
+    # annotation box
+    show_annotation_box: bool = True,
+
+):
+    """
+    Cohort-level single heatmap:
+      - Upper triangle : cohort mean±std from `upper_df` (not mirrored)
+      - Lower triangle : cohort mean±std from `lower_df` (MIRRORED into lower half)
+      - Two colorbars with independent normalization:
+            LEFT  -> lower triangle values (gradient)
+            RIGHT -> upper triangle values (dose)
+      - Optional count boxes on lower triangle, with 'n=' text centered inside a small white inset
+        in the diagonal cell at the lower-right of each box.
+
+    Axes/ticks (hugging triangles; labels switched per your request):
+      Bottom X : Voxel 1 (lower triangle)
+      Left   Y : Voxel 2 (lower triangle)
+      Top    X : Voxel 1 (upper triangle)
+      Right  Y : Voxel 2 (upper triangle)
+    """
+
+
+    plt.ioff()
+
+    # ---- copies / abs
+    up = upper_df.copy()
+    lo = lower_df.copy()
+    if aggregate_abs:
+        up[eff_size_col] = up[eff_size_col].abs()
+        lo[eff_size_col] = lo[eff_size_col].abs()
+
+    # ---- annotation block
+    annotation_text = ""
+    if show_annotation_box:
+        ann = {} if annotation_info is None else dict(annotation_info)
+        for df, tag in ((up, "Upper"), (lo, "Lower")):
+            if "Patient ID" in df.columns:
+                ann[f"# Patients ({tag})"] = df["Patient ID"].nunique()
+            if set(["Patient ID","Bx ID"]).issubset(df.columns):
+                ann[f"# Biopsies ({tag})"] = df[["Patient ID","Bx ID"]].drop_duplicates().shape[0]
+        annotation_text = "\n".join(f"{k}: {v}" for k, v in ann.items())
+
+
+    # ---- aggregate mean/std per voxel pair
+    def agg_mean_std(df):
+        return (
+            df.groupby(["voxel1","voxel2"])[eff_size_col]
+              .agg(mean="mean", std="std")
+              .reset_index()
+        )
+    up_stats = agg_mean_std(up)
+    lo_stats = agg_mean_std(lo)
+
+    # ---- optional counts
+    def agg_count(df):
+        return (
+            df.groupby(["voxel1","voxel2"])[eff_size_col]
+              .agg(count="count")
+              .reset_index()
+        )
+    count_mat = None
+    if show_counts_boxes:
+        src = up if counts_source == "upper" else lo
+        cnt_stats = agg_count(src)
+    else:
+        cnt_stats = None
+
+    # ---- unified voxel set
+    voxels = sorted(
+        set(up_stats["voxel1"]).union(up_stats["voxel2"])
+        .union(lo_stats["voxel1"]).union(lo_stats["voxel2"])
+    )
+
+    # ---- pivots
+    def pivots(stats_df):
+        mean_mat = (stats_df.pivot(index="voxel1", columns="voxel2", values="mean")
+                    .reindex(index=voxels, columns=voxels))
+        std_mat  = (stats_df.pivot(index="voxel1", columns="voxel2", values="std")
+                    .reindex(index=voxels, columns=voxels))
+        return mean_mat, std_mat
+
+    up_mean, up_std = pivots(up_stats)
+    lo_mean, lo_std = pivots(lo_stats)
+
+    if cnt_stats is not None:
+        count_mat = (cnt_stats.pivot(index="voxel1", columns="voxel2", values="count")
+                     .reindex(index=voxels, columns=voxels))
+        count_mat = count_mat.combine_first(count_mat.T)
+        np.fill_diagonal(count_mat.values, 0)
+
+    n = len(voxels)
+
+    # ---- composite matrix just for annotations (upper direct, lower mirrored)
+    composite = pd.DataFrame(index=voxels, columns=voxels, dtype=float)
+    C  = composite.values
+    UM = up_mean.values
+    LM = lo_mean.values
+    for i in range(n):
+        for j in range(n):
+            if i < j:
+                C[i, j] = UM[i, j]
+            elif i > j:
+                C[i, j] = LM[j, i]  # mirror lower into lower triangle
+            else:
+                C[i, j] = UM[i, j] if not np.isnan(UM[i, j]) else LM[i, j]
+
+    # ---- build display matrices for independent colorbars
+    upper_display = np.full((n, n), np.nan, dtype=float)
+    lower_display = np.full((n, n), np.nan, dtype=float)
+    for i in range(n):
+        for j in range(n):
+            if i < j:
+                upper_display[i, j] = UM[i, j]
+            elif i > j:
+                lower_display[i, j] = LM[j, i]
+            else:
+                if not np.isnan(UM[i, j]):
+                    upper_display[i, j] = UM[i, j]
+                elif not np.isnan(LM[i, j]):
+                    lower_display[i, j] = LM[i, j]
+
+    # ---- per-triangle vmin/vmax
+    def finite_vals(arr):
+        v = arr[np.isfinite(arr)]
+        return v if v.size else np.array([0.0])
+
+    if vmin_upper is None or vmax_upper is None:
+        up_vals = finite_vals(upper_display)
+    if vmin_lower is None or vmax_lower is None:
+        lo_vals = finite_vals(lower_display)
+
+    if vmin_upper is None:
+        vmin_upper = (float(np.min(up_vals)) if up_vals.size else (vmin if vmin is not None else 0.0))
+    if vmax_upper is None:
+        vmax_upper = (float(np.max(up_vals)) if up_vals.size else (vmax if vmax is not None else 1.0))
+
+    if vmin_lower is None:
+        vmin_lower = (float(np.min(lo_vals)) if lo_vals.size else (vmin if vmin is not None else 0.0))
+    if vmax_lower is None:
+        vmax_lower = (float(np.max(lo_vals)) if lo_vals.size else (vmax if vmax is not None else 1.0))
+
+    # ---- annotations (mean ± std) based on composite C
+    annot = np.full((n, n), "", dtype=object)
+    UPS = up_std.values
+    LOS = lo_std.values
+    for i in range(n):
+        for j in range(n):
+            m = C[i, j]
+            if np.isnan(m):
+                continue
+            if i < j:
+                s = UPS[i, j] if up_std is not None else np.nan
+            elif i > j:
+                s = LOS[j, i] if lo_std is not None else np.nan
+            else:
+                if not np.isnan(UM[i, j]):
+                    s = UPS[i, j] if up_std is not None else np.nan
+                else:
+                    s = LOS[i, j] if lo_std is not None else np.nan
+            annot[i, j] = f"{m:.2f}" if np.isnan(s) else f"{m:.2f}\n±\n{s:.2f}"
+
+    # ---- plot: layer two heatmaps with independent colorbars
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # lower first
+    hm_lower = sns.heatmap(
+        lower_display,
+        cmap="coolwarm",
+        vmin=vmin_lower, vmax=vmax_lower,
+        mask=~np.isfinite(lower_display),
+        cbar=False,
+        linewidths=0.3, linecolor="white",
+        square=True, ax=ax,
+    )
+    # upper second
+    hm_upper = sns.heatmap(
+        upper_display,
+        cmap="coolwarm",
+        vmin=vmin_upper, vmax=vmax_upper,
+        mask=~np.isfinite(upper_display),
+        cbar=False,
+        linewidths=0.3, linecolor="white",
+        square=True, ax=ax,
+    )
+    # manual annotation pass (on top)
+    cmap_up = plt.get_cmap("coolwarm")
+    cmap_lo = plt.get_cmap("coolwarm")
+
+    for i in range(n):
+        for j in range(n):
+            if annot[i, j] != "":
+                if i < j:   # upper triangle
+                    color = get_contrasting_color(upper_display[i, j], vmin_upper, vmax_upper, cmap_up)
+                else:       # lower triangle (or diagonal)
+                    color = get_contrasting_color(lower_display[i, j], vmin_lower, vmax_lower, cmap_lo)
+                ax.text(j + 0.5, i + 0.5, annot[i, j],
+                        ha="center", va="center", fontsize=6, color=color)
+
+
+    # Optional title
+    if show_title:
+        ax.set_title(f"Upper: {eff_size_type_upper}   |   Lower: {eff_size_type_lower}")
+
+        # ---- Four-sided ticks & labels (switched as requested)
+    ax.set_xticks(np.arange(n) + 0.5)
+    ax.set_yticks(np.arange(n) + 0.5)
+    ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
+    ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
+
+    # bottom/left now describe LOWER triangle semantics
+    ax.set_xlabel("Voxel 1 (Lower triangle)", fontsize=axis_label_fontsize)
+    ax.set_ylabel("Voxel 2 (Lower triangle)", fontsize=axis_label_fontsize)
+
+    # ensure bottom/left ticks are visible with markers
+    ax.tick_params(axis="x", bottom=True, top=False, direction="out", length=4, width=1, color="black")
+    ax.tick_params(axis="y", left=True, right=False, direction="out", length=4, width=1, color="black")
+
+    # top/right describe UPPER triangle semantics
+    top_ax = ax.secondary_xaxis('top')
+    top_ax.set_xticks(ax.get_xticks())
+    top_ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
+    top_ax.set_xlabel("Voxel 2 (Upper triangle)", fontsize=axis_label_fontsize)
+    top_ax.tick_params(axis="x", top=True, direction="out", length=4, width=1, color="black")
+
+    right_ax = ax.secondary_yaxis('right')
+    right_ax.set_yticks(ax.get_yticks())
+    right_ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
+    right_ax.set_ylabel("Voxel 1 (Upper triangle)", fontsize=axis_label_fontsize)
+    right_ax.tick_params(axis="y", right=True, direction="out", length=4, width=1, color="black")
+
+
+    # ---- colorbars: LEFT for lower (independent), RIGHT for upper (independent)
+    divider = make_axes_locatable(ax)
+    cax_left  = divider.append_axes("left",  size="4%", pad=0.8)
+    cax_right = divider.append_axes("right", size="4%", pad=0.8)
+
+    sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap="coolwarm")
+    sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap="coolwarm")
+    sm_lower.set_array([])
+    sm_upper.set_array([])
+
+    cbar_lower = plt.colorbar(sm_lower, cax=cax_left)
+    cbar_upper = plt.colorbar(sm_upper, cax=cax_right)
+
+    cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize)
+    cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize)
+    cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize)
+    cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize)
+
+    cax_left.yaxis.set_ticks_position('left')
+    cax_left.yaxis.set_label_position('left')
+    cax_right.yaxis.set_ticks_position('right')
+    cax_right.yaxis.set_label_position('right')
+
+    # ---- count boxes with 'n=' shifted one cell down-right and centered
+    if show_counts_boxes and count_mat is not None:
+        mask_lt = np.tril(np.ones((n, n), dtype=bool), k=-1)
+        vals_lt = count_mat.values.copy()
+        vals_lt[~mask_lt] = np.nan
+        unique_counts = np.unique(vals_lt[~np.isnan(vals_lt)])
+
+        for c in unique_counts:
+            region = (count_mat.values == c) & mask_lt
+            coords = np.argwhere(region)
+            if coords.size == 0:
+                continue
+
+            i_min, j_min = coords.min(axis=0)
+            i_max, j_max = coords.max(axis=0)
+
+            # box lines on top
+            ax.hlines(y=i_max + 1, xmin=j_min, xmax=j_max + 2,
+                      colors="black", linewidth=1.5, zorder=6)
+            ax.vlines(x=j_max + 2, ymin=0, ymax=i_max + 1,
+                      colors="black", linewidth=1.5, zorder=6)
+
+            # pick diagonal cell inside box and shift one cell down-right
+            k_in = min(max(min(i_max, n - 1), j_min), min(j_max, n - 1))
+            k = min(k_in + 1, n - 1)
+
+            # white inset above heatmap but below lines
+            inset = 0.06
+            rect = Rectangle(
+                (k + inset, k + inset),
+                1 - 2*inset, 1 - 2*inset,
+                facecolor="white",
+                edgecolor="white",
+                zorder=4,
+            )
+            ax.add_patch(rect)
+
+            # centered 'n=' text
+            cx = k + 0.5
+            cy = k + 0.5
+            ax.text(
+                cx, cy, f"n={int(c)}",
+                ha="center", va="center",
+                fontsize=n_label_fontsize, color="black", zorder=7,
+                clip_on=False, transform=ax.transData
+            )
+
+    # corner annotation
+    if show_annotation_box and annotation_text:
+        ax.text(
+            0.02, 0.02, annotation_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            va="bottom", ha="left",
+            bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", facecolor="white", alpha=0.9)
+        )
+
+    plt.tight_layout()
+
+    # ---- save/show
+    if save_path_base:
+        os.makedirs(save_path_base, exist_ok=True)
+        base = os.path.join(
+            save_path_base,
+            f"cohort_dualtri_abs-{aggregate_abs}_{save_name_base or 'dose_upper__dosegrad_lower'}"
+            + ("" if not show_counts_boxes else "_with_counts")
+            + (f"_{counts_source}_counts" if show_counts_boxes else "")
+        )
+        plt.savefig(base + ".png", bbox_inches="tight", dpi=300)
+        plt.savefig(base + ".svg", bbox_inches="tight")
+        print(f"Saved dual-triangle cohort heatmap to {base}.png/.svg")
+        plt.close(fig)
+    else:
+        plt.show()
+        plt.close(fig)
+
+
+
+
+
+
+
+
+def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs(
+    upper_df: pd.DataFrame,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+    lower_df: pd.DataFrame,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+
+    # tell the function which columns to render in cells:
+    upper_mean_col: str = "mean_diff",
+    upper_std_col:  str = "std_diff",
+    lower_mean_col: str = "mean_diff",
+    lower_std_col:  str = "std_diff",
+
+    # which column to use for the "n=" boxes (per voxel pair)
+    n_col: str = "n_biopsies",
+
+    eff_size_type_upper: str = "Dose mean±std",
+    eff_size_type_lower: str = "Dose-Gradient mean±std",
+
+    save_path_base=None,
+    save_name_base=None,
+    annotation_info: dict | None = None,
+
+    # color range controls
+    vmin: float | None = None,
+    vmax: float | None = None,
+    vmin_upper: float | None = None,
+    vmax_upper: float | None = None,
+    vmin_lower: float | None = None,
+    vmax_lower: float | None = None,
+
+    # counts overlay
+    show_counts_boxes: bool = True,
+    counts_source: str = "lower",       # "lower" or "upper"
+
+    # typography
+    tick_label_fontsize: int = 9,
+    axis_label_fontsize: int = 11,
+    cbar_tick_fontsize: int = 9,
+    cbar_label_fontsize: int = 11,
+    cbar_label_upper: str = "Mean Difference (Gy, Upper)",
+    cbar_label_lower: str = "Mean Difference (Gy, Lower)",
+
+    # title
+    show_title: bool = True,
+
+    # n= caption fontsize inside boxes
+    n_label_fontsize: int = 8,
+
+    # corner annotation box
+    show_annotation_box: bool = True,
+):
+    """
+    Plot a dual-triangle heatmap:
+      - Upper triangle: means/std from `upper_df` (direct)
+      - Lower triangle: means/std from `lower_df` (MIRRORED into lower half)
+      - Independent colorbars for upper/lower
+      - Optional per-pair "n=" overlay, taken from `n_col` (default 'n_biopsies').
+
+    Required columns in both dataframes:
+      - 'voxel1', 'voxel2'
+      - mean/std columns as specified by upper_mean_col/upper_std_col, lower_mean_col/lower_std_col
+      - Optional: `n_col` for counts overlay (per (voxel1, voxel2)).
+    """
+
+
+    plt.ioff()
+
+    # --- helpers ---
+    def get_contrasting_color(val, vmin, vmax, cmap):
+        if val is None or not np.isfinite(val):
+            return "black"
+        norm = (val - vmin) / (vmax - vmin + 1e-12)
+        r, g, b, _ = cmap(norm)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "black" if luminance > 0.6 else "white"
+
+    def _ensure_cols(df, need, tag):
+        missing = [c for c in need if c not in df.columns]
+        if missing:
+            raise ValueError(f"{tag}: missing required columns {missing}")
+
+    # --- validate inputs & extract minimal frames ---
+    _ensure_cols(upper_df, ["voxel1", "voxel2", upper_mean_col, upper_std_col], "Upper")
+    _ensure_cols(lower_df, ["voxel1", "voxel2", lower_mean_col, lower_std_col], "Lower")
+
+    up_stats = upper_df[["voxel1", "voxel2", upper_mean_col, upper_std_col] + ([n_col] if n_col in upper_df.columns else [])] \
+        .rename(columns={upper_mean_col: "mean", upper_std_col: "std"})
+    lo_stats = lower_df[["voxel1", "voxel2", lower_mean_col, lower_std_col] + ([n_col] if n_col in lower_df.columns else [])] \
+        .rename(columns={lower_mean_col: "mean", lower_std_col: "std"})
+
+    # --- unified voxel set ---
+    voxels = sorted(
+        set(up_stats["voxel1"]).union(up_stats["voxel2"])
+        .union(lo_stats["voxel1"]).union(lo_stats["voxel2"])
+    )
+    n = len(voxels)
+
+    # --- pivot to matrices ---
+    def pivots(stats_df):
+        mean_mat = (stats_df.pivot(index="voxel1", columns="voxel2", values="mean")
+                    .reindex(index=voxels, columns=voxels))
+        std_mat  = (stats_df.pivot(index="voxel1", columns="voxel2", values="std")
+                    .reindex(index=voxels, columns=voxels))
+        return mean_mat, std_mat
+
+    up_mean, up_std = pivots(up_stats)
+    lo_mean, lo_std = pivots(lo_stats)
+
+    # counts (optional overlay) from n_col
+    count_mat = None
+    if show_counts_boxes:
+        src = up_stats if counts_source == "upper" else lo_stats
+        if n_col in src.columns:
+            count_mat = (src.pivot(index="voxel1", columns="voxel2", values=n_col)
+                         .reindex(index=voxels, columns=voxels))
+            # mirror-symmetrize & clear diagonal
+            count_mat = count_mat.combine_first(count_mat.T)
+            if count_mat.values.size:  # avoid empty diagonal fill error
+                np.fill_diagonal(count_mat.values, 0)
+
+    # --- composite & display matrices ---
+    composite = pd.DataFrame(index=voxels, columns=voxels, dtype=float)
+    C  = composite.values
+    UM = up_mean.values
+    LM = lo_mean.values
+
+    for i in range(n):
+        for j in range(n):
+            if i < j:
+                C[i, j] = UM[i, j]
+            elif i > j:
+                C[i, j] = LM[j, i]  # mirror lower into lower
+            else:
+                C[i, j] = UM[i, j] if not np.isnan(UM[i, j]) else LM[i, j]
+
+    upper_display = np.full((n, n), np.nan, dtype=float)
+    lower_display = np.full((n, n), np.nan, dtype=float)
+    for i in range(n):
+        for j in range(n):
+            if i < j:
+                upper_display[i, j] = UM[i, j]
+            elif i > j:
+                lower_display[i, j] = LM[j, i]
+            else:
+                if not np.isnan(UM[i, j]):
+                    upper_display[i, j] = UM[i, j]
+                elif not np.isnan(LM[i, j]):
+                    lower_display[i, j] = LM[i, j]
+
+    # --- vmin/vmax resolve per triangle (fall back to global vmin/vmax if provided) ---
+    def finite_vals(arr):
+        v = arr[np.isfinite(arr)]
+        return v if v.size else np.array([0.0])
+
+    if vmin_upper is None or vmax_upper is None:
+        up_vals = finite_vals(upper_display)
+    if vmin_lower is None or vmax_lower is None:
+        lo_vals = finite_vals(lower_display)
+
+    if vmin_upper is None:
+        vmin_upper = (float(np.min(up_vals)) if up_vals.size else (vmin if vmin is not None else 0.0))
+    if vmax_upper is None:
+        vmax_upper = (float(np.max(up_vals)) if up_vals.size else (vmax if vmax is not None else 1.0))
+    if vmin_lower is None:
+        vmin_lower = (float(np.min(lo_vals)) if lo_vals.size else (vmin if vmin is not None else 0.0))
+    if vmax_lower is None:
+        vmax_lower = (float(np.max(lo_vals)) if lo_vals.size else (vmax if vmax is not None else 1.0))
+
+    # --- annotations (mean ± std) ---
+    annot = np.full((n, n), "", dtype=object)
+    UPS = up_std.values
+    LOS = lo_std.values
+    for i in range(n):
+        for j in range(n):
+            m = C[i, j]
+            if np.isnan(m):
+                continue
+            if i < j:
+                s = UPS[i, j]
+            elif i > j:
+                s = LOS[j, i]
+            else:
+                s = UPS[i, j] if np.isfinite(UM[i, j]) else LOS[i, j]
+            annot[i, j] = f"{m:.2f}" if not np.isfinite(s) else f"{m:.2f}\n±\n{s:.2f}"
+
+    # --- plot ---
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    hm_lower = sns.heatmap(
+        lower_display, cmap="coolwarm",
+        vmin=vmin_lower, vmax=vmax_lower,
+        mask=~np.isfinite(lower_display),
+        cbar=False, linewidths=0.3, linecolor="white",
+        square=True, ax=ax,
+    )
+    hm_upper = sns.heatmap(
+        upper_display, cmap="coolwarm",
+        vmin=vmin_upper, vmax=vmax_upper,
+        mask=~np.isfinite(upper_display),
+        cbar=False, linewidths=0.3, linecolor="white",
+        square=True, ax=ax,
+    )
+
+    cmap_up = plt.get_cmap("coolwarm")
+    cmap_lo = plt.get_cmap("coolwarm")
+    for i in range(n):
+        for j in range(n):
+            if annot[i, j] != "":
+                color = (
+                    get_contrasting_color(upper_display[i, j], vmin_upper, vmax_upper, cmap_up)
+                    if i < j else
+                    get_contrasting_color(lower_display[i, j], vmin_lower, vmax_lower, cmap_lo)
+                )
+                ax.text(j + 0.5, i + 0.5, annot[i, j],
+                        ha="center", va="center", fontsize=6, color=color)
+
+    if show_title:
+        ax.set_title(f"Upper: {eff_size_type_upper}   |   Lower: {eff_size_type_lower}")
+
+    # ticks/labels
+    ax.set_xticks(np.arange(n) + 0.5)
+    ax.set_yticks(np.arange(n) + 0.5)
+    ax.set_xticklabels([int(v) for v in voxels], fontsize=tick_label_fontsize)
+    ax.set_yticklabels([int(v) for v in voxels], fontsize=tick_label_fontsize)
+    ax.set_xlabel("Voxel 1 (Lower triangle)", fontsize=axis_label_fontsize)
+    ax.set_ylabel("Voxel 2 (Lower triangle)", fontsize=axis_label_fontsize)
+    ax.tick_params(axis="x", bottom=True, top=False, direction="out", length=4, width=1, color="black")
+    ax.tick_params(axis="y", left=True, right=False, direction="out", length=4, width=1, color="black")
+
+    top_ax = ax.secondary_xaxis('top')
+    top_ax.set_xticks(ax.get_xticks())
+    top_ax.set_xticklabels([int(v) for v in voxels], fontsize=tick_label_fontsize)
+    top_ax.set_xlabel("Voxel 2 (Upper triangle)", fontsize=axis_label_fontsize)
+    top_ax.tick_params(axis="x", top=True, direction="out", length=4, width=1, color="black")
+
+    right_ax = ax.secondary_yaxis('right')
+    right_ax.set_yticks(ax.get_yticks())
+    right_ax.set_yticklabels([int(v) for v in voxels], fontsize=tick_label_fontsize)
+    right_ax.set_ylabel("Voxel 1 (Upper triangle)", fontsize=axis_label_fontsize)
+    right_ax.tick_params(axis="y", right=True, direction="out", length=4, width=1, color="black")
+
+    # colorbars (independent)
+    divider = make_axes_locatable(ax)
+    cax_left  = divider.append_axes("left",  size="4%", pad=0.8)
+    cax_right = divider.append_axes("right", size="4%", pad=0.8)
+
+    sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap="coolwarm")
+    sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap="coolwarm")
+    sm_lower.set_array([])
+    sm_upper.set_array([])
+
+    cbar_lower = plt.colorbar(sm_lower, cax=cax_left)
+    cbar_upper = plt.colorbar(sm_upper, cax=cax_right)
+    cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize)
+    cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize)
+    cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize)
+    cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize)
+    cax_left.yaxis.set_ticks_position('left')
+    cax_left.yaxis.set_label_position('left')
+    cax_right.yaxis.set_ticks_position('right')
+    cax_right.yaxis.set_label_position('right')
+
+    # counts overlay using n_col
+    if show_counts_boxes and count_mat is not None:
+        mask_lt = np.tril(np.ones((n, n), dtype=bool), k=-1)
+        vals_lt = count_mat.values.copy()
+        vals_lt[~mask_lt] = np.nan
+        unique_counts = np.unique(vals_lt[~np.isnan(vals_lt)])
+
+        for c in unique_counts:
+            region = (count_mat.values == c) & mask_lt
+            coords = np.argwhere(region)
+            if coords.size == 0:
+                continue
+
+            i_min, j_min = coords.min(axis=0)
+            i_max, j_max = coords.max(axis=0)
+
+            # box lines
+            ax.hlines(y=i_max + 1, xmin=j_min, xmax=j_max + 2,
+                      colors="black", linewidth=1.5, zorder=6)
+            ax.vlines(x=j_max + 2, ymin=0, ymax=i_max + 1,
+                      colors="black", linewidth=1.5, zorder=6)
+
+            # pick diagonal-ish cell, shift one down-right
+            k_in = min(max(min(i_max, n - 1), j_min), min(j_max, n - 1))
+            k = min(k_in + 1, n - 1)
+
+            inset = 0.06
+            rect = Rectangle(
+                (k + inset, k + inset),
+                1 - 2*inset, 1 - 2*inset,
+                facecolor="white",
+                edgecolor="white",
+                zorder=4,
+            )
+            ax.add_patch(rect)
+
+            cx = k + 0.5
+            cy = k + 0.5
+            ax.text(
+                cx, cy, f"n={int(c)}",
+                ha="center", va="center",
+                fontsize=n_label_fontsize, color="black", zorder=7,
+                clip_on=False, transform=ax.transData
+            )
+
+    # corner annotation (optional, user-supplied dict)
+    if show_annotation_box and annotation_info:
+        text = "\n".join(f"{k}: {v}" for k, v in annotation_info.items())
+        ax.text(
+            0.02, 0.02, text,
+            transform=ax.transAxes, fontsize=10,
+            va="bottom", ha="left",
+            bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", facecolor="white", alpha=0.9)
+        )
+
+    plt.tight_layout()
+
+    # save/show
+    if save_path_base:
+        os.makedirs(save_path_base, exist_ok=True)
+        base = os.path.join(
+            save_path_base,
+            f"cohort_dualtri_{save_name_base or 'dose_upper__dosegrad_lower'}"
+        )
+        plt.savefig(base + ".png", bbox_inches="tight", dpi=300)
+        plt.savefig(base + ".svg", bbox_inches="tight")
+        print(f"Saved dual-triangle cohort heatmap to {base}.png/.svg")
+        plt.close(fig)
+    else:
+        plt.show()
+        plt.close(fig)
+
+
+
+
+
+
+
+
+
 
 
 def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None):
@@ -2003,6 +3063,8 @@ def plot_dose_vs_length_with_summary(
         errorbar_lineplot_mean: str = 'ci',  # 'ci' for confidence interval around the estimator
         errorbar_lineplot_median: str = None  # 'ci' for confidence interval around the estimator
     ):
+
+    plt.ioff()
 
     df = df.copy()
     df[x_col] = df[x_col].astype(str)
@@ -2174,6 +3236,269 @@ def plot_dose_vs_length_with_summary(
     plt.close()
 
     print(f"Plot saved as:\n - {png_path}\n - {svg_path}")
+
+
+
+
+
+
+
+
+
+def plot_dose_vs_length_with_summary_mutlibox(
+        df: pd.DataFrame,
+        x_col: str,
+        y_col: str,
+        save_dir: str,
+        file_name: str,
+        title: str = None,                 # optional title
+        figsize=(12, 7),
+        dpi=300,
+        show_points=False,                 # optional raw points overlay
+        violin_or_box: str = 'violin',     # 'box' or 'violin'
+        trend_lines: list = ['mean'],      # e.g., ['mean'] or ['median'] or both
+        annotate_counts=True,              # enable counts
+        annotation_box=False,              # place counts in external box
+        y_trim=False,
+        y_min_quantile=0.05,
+        y_max_quantile=0.95,
+        y_min_fixed=None,
+        y_max_fixed=None,
+        xlabel: str = None,
+        ylabel: str = None,
+        errorbar_lineplot_mean: str = 'ci',
+        errorbar_lineplot_median: str = None,
+        title_font_size: int = 16,         # independent font sizes
+        axis_label_font_size: int = 14,
+        tick_label_font_size: int = 12,
+        multi_pairs: list = None           # list of (Patient ID, Bx index) tuples
+    ):
+    # ---- prep ----
+    df = df.copy()
+    df[x_col] = df[x_col].astype(str)
+
+    os.makedirs(save_dir, exist_ok=True)
+    plt.figure(figsize=figsize)
+    ax = plt.gca()
+    ax.set_axisbelow(True)  # grid under data
+
+    # Apply tick font size globally for this figure
+    plt.rcParams.update({
+        'xtick.labelsize': tick_label_font_size,
+        'ytick.labelsize': tick_label_font_size
+    })
+
+    # ---- y-limits ----
+    if y_min_fixed is not None:
+        y_min = y_min_fixed
+    elif y_trim:
+        y_min = df[y_col].quantile(y_min_quantile)
+    else:
+        y_min = df[y_col].min()
+
+    if y_max_fixed is not None:
+        y_max = y_max_fixed
+    elif y_trim:
+        max_quantiles_list = [
+            df[df[x_col] == x_val][y_col].quantile(y_max_quantile)
+            for x_val in df[x_col].unique()
+        ]
+        y_max = max(max_quantiles_list) if max_quantiles_list else df[y_col].quantile(y_max_quantile)
+    else:
+        y_max = df[y_col].max()
+
+    # ---- multi-pair filter & id ----
+    if multi_pairs:
+        df = df[df[['Patient ID', 'Bx index']].apply(tuple, axis=1).isin(multi_pairs)]
+        df['pair_id'] = df['Patient ID'].astype(str) + "-" + df['Bx index'].astype(str)
+
+    # ---- base plot (boxes / violins) ----
+    if multi_pairs:
+        n_pairs = df['pair_id'].nunique()
+        box_palette = sns.color_palette("pastel", n_colors=n_pairs)
+
+        if violin_or_box == 'violin':
+            vp = sns.violinplot(
+                data=df, x=x_col, y=y_col, hue='pair_id',
+                inner=None, ax=ax, saturation=0.7, linewidth=0.8,
+                palette=box_palette, legend=False  # optional to avoid dup legends
+            )
+            for c in vp.collections:
+                c.set_alpha(0.5)
+
+        elif violin_or_box == 'box':
+            bp = sns.boxplot(
+                data=df, x=x_col, y=y_col, hue='pair_id',
+                ax=ax, showfliers=False, saturation=0.7, linewidth=0.8,
+                palette=box_palette, legend=False  # optional
+            )
+            for patch in bp.artists:
+                patch.set_alpha(0.5)
+        else:
+            raise ValueError("`violin_or_box` must be either 'violin' or 'box'")
+    else:
+        if violin_or_box == 'violin':
+            vp = sns.violinplot(
+                data=df, x=x_col, y=y_col, inner=None,
+                color="lightgray", ax=ax, linewidth=0.8
+            )
+            for c in vp.collections:
+                c.set_alpha(0.4)
+        elif violin_or_box == 'box':
+            bp = sns.boxplot(
+                data=df, x=x_col, y=y_col, color="lightgray",
+                ax=ax, showfliers=False, linewidth=0.8
+            )
+            for patch in bp.artists:
+                patch.set_alpha(0.4)
+        else:
+            raise ValueError("`violin_or_box` must be either 'violin' or 'box'")
+
+
+
+
+    # ---- trend lines (always on top) ----
+    if multi_pairs:
+        n_pairs = df['pair_id'].nunique()
+        line_colors = sns.color_palette("tab10", n_colors=n_pairs)
+
+        line_kws = dict(
+            zorder=10, linewidth=2.5,
+            path_effects=[pe.Stroke(linewidth=4, foreground="white"), pe.Normal()]
+        )
+
+        for idx, pair in enumerate(df['pair_id'].unique()):
+            df_pair = df[df['pair_id'] == pair]
+            if 'mean' in trend_lines:
+                sns.lineplot(
+                    data=df_pair, x=x_col, y=y_col,
+                    estimator='mean', errorbar=None,
+                    label=pair, ax=ax, color=line_colors[idx], **line_kws
+                )
+            if 'median' in trend_lines:
+                sns.lineplot(
+                    data=df_pair, x=x_col, y=y_col,
+                    estimator='median', errorbar=None,
+                    label=f"{pair} (median)", ax=ax,
+                    color=line_colors[idx], **line_kws
+                )
+    else:
+        # single-color boxes (lightgray) already fine
+        line_kws = dict(
+            zorder=10, linewidth=2.5,
+            path_effects=[pe.Stroke(linewidth=4, foreground="white"), pe.Normal()]
+        )
+        if 'mean' in trend_lines:
+            sns.lineplot(
+                data=df, x=x_col, y=y_col,
+                estimator='mean', errorbar=errorbar_lineplot_mean,
+                color='tab:blue', label='Mean ± CI' if errorbar_lineplot_mean else 'Mean',
+                ax=ax, **line_kws
+            )
+        if 'median' in trend_lines:
+            sns.lineplot(
+                data=df, x=x_col, y=y_col,
+                estimator='median', errorbar=errorbar_lineplot_median,
+                color='tab:orange', label='Median', ax=ax, **line_kws
+            )
+
+
+
+    # ---- optional points (behind trend lines) ----
+    if show_points:
+        if multi_pairs:
+            sns.stripplot(
+                data=df, x=x_col, y=y_col, hue='pair_id',
+                dodge=True, jitter=0.25, size=3, alpha=0.6,
+                linewidth=0.3, edgecolor='black', ax=ax,
+                zorder=2, legend=False  # avoid duplicate legend entries
+            )
+        else:
+            sns.stripplot(
+                data=df, x=x_col, y=y_col,
+                jitter=0.25, size=3, alpha=0.6, color="black",
+                linewidth=0.0, ax=ax, zorder=2
+            )
+
+    # ---- counts / annotation box ----
+    if annotate_counts:
+        # Build grouping keys robustly
+        group_keys = [x_col] + (['pair_id'] if 'pair_id' in df.columns else [])
+        counts = df.groupby(group_keys, dropna=False)[y_col].count()
+
+        if annotation_box:
+            if 'pair_id' in df.columns:
+                lines = [f"{pid} @ {xv}: n={n}" for (xv, pid), n in counts.items()]
+            else:
+                lines = [f"{xv}: n={n}" for xv, n in counts.items()]
+            ann_text = "\n".join(lines)
+
+            ax.annotate(
+                ann_text, xy=(1.02, 0.5), xycoords='axes fraction',
+                va='center', ha='left', fontsize=tick_label_font_size,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7)
+            )
+        # (No inline annotations below the axis)
+
+    # ---- labels, title, limits, grid ----
+    if title:
+        ax.set_title(title, fontsize=title_font_size)
+
+    ax.set_xlabel(xlabel if xlabel else x_col, fontsize=axis_label_font_size)
+    ax.set_ylabel(ylabel if ylabel else y_col, fontsize=axis_label_font_size)
+    ax.set_ylim(y_min - 0.05 * (y_max - y_min), y_max * 1.05)
+    ax.grid(True)
+
+    # Optional: if x are numeric-like (e.g., "5", "10"), show sorted ints as tick labels
+    try:
+        x_vals_sorted = sorted(map(int, df[x_col].unique()))
+        ax.set_xticks(range(len(x_vals_sorted)))
+        ax.set_xticklabels(x_vals_sorted)
+    except Exception:
+        # leave seaborn's categorical ticks as-is
+        pass
+
+    # ---- legend de-duplication ----
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    uniq = [(h, l) for h, l in zip(handles, labels) if not (l in seen or seen.add(l))]
+    if uniq:
+        ax.legend(*zip(*uniq), loc='upper right')
+
+    plt.tight_layout()
+
+    # ---- save ----
+    png_path = os.path.join(save_dir, f"{file_name}.png")
+    svg_path = os.path.join(save_dir, f"{file_name}.svg")
+    plt.savefig(png_path, dpi=dpi)
+    plt.savefig(svg_path)
+    plt.close()
+
+    print(f"Plot saved as:\n - {png_path}\n - {svg_path}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2803,3 +4128,275 @@ def plot_dose_ridge_cohort_by_voxel(
     plt.close(g.fig)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###################### nominal - mean dose comparison plots #########################
+
+
+
+def plot_biopsy_deltas_line(
+    deltas_df: pd.DataFrame,
+    patient_id,
+    bx_index,
+    save_dir,
+    fig_name: str,
+    *,
+    zero_level_index_str: str = 'Dose (Gy)',   # must match what you passed to compute_biopsy_nominal_deltas
+    x_axis: str = 'Voxel index',               # or 'Voxel begin (Z)'
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    title: str | None = None,
+):
+    plt.ioff()
+
+    """Line plot of Nominal−(Mean/Mode/Q50) along core for one (Patient ID, Bx index). Saves SVG."""
+    # filter biopsy
+    m = (deltas_df[('Patient ID','')] == patient_id) & (deltas_df[('Bx index','')] == bx_index)
+    sub = deltas_df.loc[m].copy()
+    if sub.empty:
+        raise ValueError(f"No rows for Patient ID={patient_id!r}, Bx index={bx_index!r}")
+
+    # choose x-axis
+    if x_axis == 'Voxel begin (Z)':
+        x = sub[('Voxel begin (Z)','')]
+        x_label = 'Voxel begin (Z) [mm]'
+    else:
+        x = sub[('Voxel index','')]
+        x_label = 'Voxel index (along core)'
+
+    sub = sub.assign(_x=pd.to_numeric(x, errors='coerce')).sort_values('_x')
+
+    # pick delta block
+    block = f"{zero_level_index_str} deltas"
+    cols = [(block,'nominal_minus_mean'), (block,'nominal_minus_mode'), (block,'nominal_minus_q50')]
+    for c in cols:
+        if c not in sub.columns:
+            raise KeyError(f"Missing {c}. Did you compute deltas with zero_level_index_str='{zero_level_index_str}'?")
+
+    tidy = sub.loc[:, cols].copy()
+    tidy.columns = ['Nominal - Mean', 'Nominal - Mode', 'Nominal - Median (Q50)']
+    tidy = tidy.assign(x=sub['_x'].values).melt(id_vars='x', var_name='Delta', value_name='Value')
+
+    # y-label based on metric
+    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str else 'Delta (Gy)'
+
+    sns.set(style='whitegrid')
+    ax = sns.lineplot(data=tidy, x='x', y='Value', hue='Delta', linewidth=2)
+    ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
+    ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+    ax.legend(title='', fontsize=tick_label_fontsize)
+    ax.set_title(title or f"Patient {patient_id}, Bx {bx_index} — {zero_level_index_str} deltas",
+                 fontsize=axes_label_fontsize)
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    out = Path(save_dir) / f"{fig_name}.svg"
+    plt.tight_layout()
+    plt.savefig(out, format='svg')
+    plt.close()
+    return out
+
+
+
+
+
+
+
+
+def plot_cohort_deltas_boxplot_by_voxel(
+    deltas_df: pd.DataFrame,
+    save_dir,
+    fig_name: str,
+    *,
+    zero_level_index_str: str = 'Dose (Gy)',
+    x_axis: str = 'Voxel index',               
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    title: str | None = None,
+    show_points: bool = True,   # new flag
+    point_size: int = 3,        # adjust visibility
+    alpha: float = 0.5,         # transparency for points
+):
+    """
+    Boxplots of Nominal−(Mean/Mode/Q50) across the entire cohort.
+    For each voxel position on the chosen x-axis, shows the distribution
+    of delta values over all rows (patients/biopsies).
+    Optionally overlays jittered points.
+    """
+    plt.ioff()
+
+    # choose x-axis
+    if x_axis == 'Voxel begin (Z)':
+        x = deltas_df[('Voxel begin (Z)', '')]
+        x_label = 'Voxel begin (Z) [mm]'
+    else:
+        x = deltas_df[('Voxel index', '')]
+        x_label = 'Voxel index (along core)'
+
+    x_num = pd.to_numeric(x, errors='coerce')
+    df = deltas_df.copy()
+    df = df.assign(_x=x_num)
+
+    block = f"{zero_level_index_str} deltas"
+    cols = [
+        (block, 'nominal_minus_mean'),
+        (block, 'nominal_minus_mode'),
+        (block, 'nominal_minus_q50'),
+    ]
+    for c in cols:
+        if c not in df.columns:
+            raise KeyError(
+                f"Missing {c}. Did you compute deltas with zero_level_index_str='{zero_level_index_str}'?"
+            )
+
+    tidy = df.loc[:, cols].copy()
+    tidy.columns = ['Nominal - Mean', 'Nominal - Mode', 'Nominal - Median (Q50)']
+    tidy = tidy.assign(x=df['_x'].values)
+    tidy = tidy.melt(id_vars='x', var_name='Delta', value_name='Value')
+    tidy = tidy.dropna(subset=['x', 'Value'])
+
+    x_order = sorted(tidy['x'].unique())
+    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str else 'Delta (Gy)'
+
+    sns.set(style='whitegrid')
+    ax = sns.boxplot(
+        data=tidy,
+        x='x',
+        y='Value',
+        hue='Delta',
+        order=x_order,
+        showfliers=False,
+    )
+
+    # overlay points
+    if show_points:
+        sns.stripplot(
+            data=tidy,
+            x='x',
+            y='Value',
+            hue='Delta',
+            order=x_order,
+            dodge=True,        # separate by hue
+            size=point_size,
+            alpha=alpha,
+            ax=ax,
+            legend=False,      # avoid duplicate legend
+        )
+
+    ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
+    ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+    ax.legend(title='', fontsize=tick_label_fontsize)
+
+    if title is None:
+        pass
+    else:
+        ax.set_title(title, fontsize=axes_label_fontsize)
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    out = Path(save_dir) / f"{fig_name}.svg"
+    plt.tight_layout()
+    plt.savefig(out, format='svg')
+    plt.close()
+    return out
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def plot_cohort_deltas_boxplot(
+    deltas_df: pd.DataFrame,
+    save_dir,
+    fig_name: str,
+    *,
+    zero_level_index_str: str = 'Dose (Gy)',
+    include_patient_ids: list | None = None,
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    title: str | None = None,
+    show_points: bool = False,
+    show_counts_in_title: bool = True,  # <— new
+):
+    plt.ioff()
+    
+    """Cohort boxplot of Nominal−(Mean/Mode/Q50). Optional patient filter. Saves SVG."""
+    data = deltas_df
+    if include_patient_ids is not None:
+        data = data[data[('Patient ID','')].isin(include_patient_ids)]
+        if data.empty:
+            raise ValueError("Patient filter returned no rows.")
+
+    # count unique biopsies (Patient ID, Bx index) and voxels
+    n_biopsies = (
+        data.loc[:, [('Patient ID',''), ('Bx index','')]]
+            .drop_duplicates()
+            .shape[0]
+    )
+    n_voxels = data.shape[0]
+
+    block = f"{zero_level_index_str} deltas"
+    cols = [(block,'nominal_minus_mean'), (block,'nominal_minus_mode'), (block,'nominal_minus_q50')]
+    for c in cols:
+        if c not in data.columns:
+            raise KeyError(f"Missing {c}. Did you compute deltas with zero_level_index_str='{zero_level_index_str}'?")
+
+    tidy = data.loc[:, cols].copy()
+    tidy.columns = ['Nominal - Mean', 'Nominal - Mode', 'Nominal - Median (Q50)']
+    tidy = tidy.melt(var_name='Delta', value_name='Value').dropna(subset=['Value'])
+
+    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str else 'Delta (Gy)'
+
+    sns.set(style='whitegrid')
+    ax = sns.boxplot(data=tidy, x='Delta', y='Value', showfliers=False)
+    if show_points:
+        sns.stripplot(data=tidy, x='Delta', y='Value', color='k', alpha=0.25, jitter=0.25, size=2)
+
+    # title with counts
+    if title is None:
+        title = f"Cohort — {zero_level_index_str} deltas"
+    if show_counts_in_title:
+        title = f"{title}  (biopsies: {n_biopsies}, voxels: {n_voxels})"
+    ax.set_title(title, fontsize=axes_label_fontsize)
+
+    ax.set_xlabel('', fontsize=axes_label_fontsize)
+    ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    out = Path(save_dir) / f"{fig_name}.svg"
+    plt.tight_layout()
+    plt.savefig(out, format='svg')
+    plt.close()
+    return out

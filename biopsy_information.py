@@ -38,8 +38,8 @@ def get_filtered_statistics(df, columns=None, simulated_type=None, patient_id=No
     stats_df = df[columns].describe(percentiles=[0.05, 0.95]).transpose()
 
     # Calculate additional statistics: skewness and kurtosis
-    stats_df['skewness'] = df[columns].apply(skew, nan_policy='omit')
-    stats_df['kurtosis'] = df[columns].apply(kurtosis, nan_policy='omit')
+    #stats_df['skewness'] = df[columns].apply(skew, nan_policy='omit')
+    #stats_df['kurtosis'] = df[columns].apply(kurtosis, nan_policy='omit')
 
     return stats_df
 

@@ -130,11 +130,11 @@ def compute_dose_differences(df):
 
 
 
-def compute_dose_differences_vectorized(df):
+def compute_dose_differences_vectorized(df, column_name: str = 'Dose (Gy)') -> pd.DataFrame:
     df = df.copy()
 
     # Rename original for clarity
-    df.rename(columns={'Voxel index': 'voxel_idx', 'Dose (Gy)': 'dose'}, inplace=True)
+    df.rename(columns={'Voxel index': 'voxel_idx', column_name: 'dose'}, inplace=True)
 
     # Determine max length scale per biopsy
     biopsy_range = (
@@ -189,6 +189,10 @@ def compute_dose_differences_vectorized(df):
 
 
 
+
+def _concat_lists(series):
+    return [x for sublist in series for x in sublist]
+
 def create_diff_stats_dataframe(
     result_df: pd.DataFrame,
     patient_id_col: str,
@@ -198,7 +202,10 @@ def create_diff_stats_dataframe(
     dose_col: str,
     trial_num_col: str = 'MC trial num',
     output_dir: Optional[str] = None,
-    csv_name: Optional[str] = None
+    csv_name_stats_out: Optional[str] = None,
+    csv_name_diffs_out: Optional[str] = None,
+    csv_name_patient_pooled_out: Optional[str] = None,
+    csv_name_cohort_pooled_out: Optional[str] = None
 ) -> pd.DataFrame:
     """
     For each biopsy (patient_id_col, bx_index_col, bx_id_col) and each unique pair of voxels
@@ -233,7 +240,8 @@ def create_diff_stats_dataframe(
         One row per (patient_id, bx_index, bx_id, voxel1, voxel2) with columns:
         ['count', 'mean', 'std', 'min', '5th', '25th', '50th', '75th', '95th', 'max'].
     """
-    rows = []
+    rows_statistics = []
+    rows_diffs_and_abs_diffs = []
     # group per biopsy
     grp = result_df.groupby([patient_id_col, bx_index_col, bx_id_col])
     for (pid, bxi, bxid), sub in grp:
@@ -255,9 +263,23 @@ def create_diff_stats_dataframe(
                     continue
 
                 diffs = d1[:n] - d2[:n]
+                abs_diffs = np.abs(diffs)
+
+                rows_diffs_and_abs_diffs.append({
+                    patient_id_col: pid,
+                    bx_index_col: bxi,
+                    bx_id_col: bxid,
+                    'voxel1': v1,
+                    'voxel2': v2,
+                    'dose_diffs': diffs,
+                    'abs_dose_diffs': abs_diffs
+                })
+
+
+
                 pct = np.percentile(diffs, [5,25,50,75,95])
 
-                rows.append({
+                rows_statistics.append({
                     patient_id_col: pid,
                     bx_index_col: bxi,
                     bx_id_col: bxid,
@@ -267,20 +289,159 @@ def create_diff_stats_dataframe(
                     'mean_diff':   diffs.mean(),
                     'std_diff':    diffs.std(ddof=1),
                     'min_diff':    diffs.min(),
-                    '5th':         pct[0],
-                    '25th':        pct[1],
-                    '50th':        pct[2],
-                    '75th':        pct[3],
-                    '95th':        pct[4],
-                    'max_diff':    diffs.max()
+                    '5th_diff':         pct[0],
+                    '25th_diff':        pct[1],
+                    '50th_diff':        pct[2],
+                    '75th_diff':        pct[3],
+                    '95th_diff':        pct[4],
+                    'max_diff':    diffs.max(),
+                    'mean_abs_diff':   abs_diffs.mean(),
+                    'std_abs_diff':    abs_diffs.std(ddof=1),
+                    'min_abs_diff':    abs_diffs.min(),
+                    '5th_abs_diff':         np.percentile(abs_diffs, 5),
+                    '25th_abs_diff':        np.percentile(abs_diffs, 25),
+                    '50th_abs_diff':        np.percentile(abs_diffs, 50),
+                    '75th_abs_diff':        np.percentile(abs_diffs, 75),
+                    '95th_abs_diff':        np.percentile(abs_diffs, 95),
+                    'max_abs_diff':    abs_diffs.max()
                 })
 
-    out_df = pd.DataFrame(rows)
+    
 
-    if output_dir and csv_name:
+    statistics_out_df = pd.DataFrame(rows_statistics)
+
+    diffs_df_out = pd.DataFrame(rows_diffs_and_abs_diffs)
+
+
+    # --- build counts that depend on voxel pairings ---
+    _pair = ['voxel1', 'voxel2']
+    _biopsy_keys = [patient_id_col, bx_index_col, bx_id_col]
+
+    # Count unique biopsies/patients contributing to each voxel pair (cohort-wide)
+    _unique_biopsies_per_pair = (
+        diffs_df_out[_biopsy_keys + _pair]
+        .drop_duplicates()
+    )
+    n_biopsies_per_pair = _unique_biopsies_per_pair.groupby(_pair).size()  # MultiIndex Series
+    n_patients_per_pair = _unique_biopsies_per_pair.groupby(_pair)[patient_id_col].nunique()
+
+    # Count unique biopsies contributing to each (patient, voxel1, voxel2)
+    n_biopsies_per_patient_pair = (
+        _unique_biopsies_per_pair
+        .groupby([patient_id_col] + _pair)
+        .size()
+    )
+
+
+    # group by patient and find summary statistics of mean diff and absolute mean diff between voxel pairs
+    # then save to a csv file if output_dir and csv_name_stats_out are provided
+
+    patient_pooled = diffs_df_out.groupby(['Patient ID', 'voxel1', 'voxel2']).agg({
+            'dose_diffs': _concat_lists,
+            'abs_dose_diffs': _concat_lists}).reset_index()
+    
+    cohort_pooled = diffs_df_out.groupby(['voxel1', 'voxel2']).agg({
+            'dose_diffs': _concat_lists,
+            'abs_dose_diffs': _concat_lists}).reset_index()
+    
+
+
+    def _stats_from_lists(diffs_list, abs_list):
+        diffs = np.asarray(diffs_list, dtype=float)
+        abs_diffs = np.asarray(abs_list, dtype=float)
+        n = diffs.size
+
+        if n:
+            pct = np.percentile(diffs, [5, 25, 50, 75, 95])
+            pct_abs = np.percentile(abs_diffs, [5, 25, 50, 75, 95])
+        else:
+            pct = pct_abs = [np.nan]*5
+
+        return {
+            'count':            int(n),
+            'mean_diff':        diffs.mean() if n else np.nan,
+            'std_diff':         diffs.std(ddof=1) if n > 1 else np.nan,
+            'min_diff':         diffs.min() if n else np.nan,
+            '5th_diff':         pct[0],
+            '25th_diff':        pct[1],
+            '50th_diff':        pct[2],
+            '75th_diff':        pct[3],
+            '95th_diff':        pct[4],
+            'max_diff':         diffs.max() if n else np.nan,
+            'mean_abs_diff':    abs_diffs.mean() if n else np.nan,
+            'std_abs_diff':     abs_diffs.std(ddof=1) if n > 1 else np.nan,
+            'min_abs_diff':     abs_diffs.min() if n else np.nan,
+            '5th_abs_diff':     pct_abs[0],
+            '25th_abs_diff':    pct_abs[1],
+            '50th_abs_diff':    pct_abs[2],
+            '75th_abs_diff':    pct_abs[3],
+            '95th_abs_diff':    pct_abs[4],
+            'max_abs_diff':     abs_diffs.max() if n else np.nan,
+        }
+
+    # ----- per-patient pooled (across all biopsies within a patient) -----
+    patient_stats = patient_pooled.apply(
+        lambda r: pd.Series({
+            'pid':        r['Patient ID'],
+            # biopsies this patient contributed for THIS voxel pair
+            'n_biopsies': int(n_biopsies_per_patient_pair.get((r['Patient ID'], r['voxel1'], r['voxel2']), 0)),
+            'voxel1':     r['voxel1'],
+            'voxel2':     r['voxel2'],
+            **_stats_from_lists(r['dose_diffs'], r['abs_dose_diffs'])
+        }),
+        axis=1
+    )
+
+    # ----- cohort pooled (across all patients & biopsies) -----
+    cohort_stats = cohort_pooled.apply(
+        lambda r: pd.Series({
+            # patients/biopsies contributing to THIS voxel pair (cohort-wide)
+            'n_patients': int(n_patients_per_pair.get((r['voxel1'], r['voxel2']), 0)),
+            'n_biopsies': int(n_biopsies_per_pair.get((r['voxel1'], r['voxel2']), 0)),
+            'voxel1':     r['voxel1'],
+            'voxel2':     r['voxel2'],
+            **_stats_from_lists(r['dose_diffs'], r['abs_dose_diffs'])
+        }),
+        axis=1
+    )
+
+
+    # Optional: set column order explicitly
+    cols_patient = [
+        'pid','n_biopsies','voxel1','voxel2','count',
+        'mean_diff','std_diff','min_diff','5th_diff','25th_diff','50th_diff','75th_diff','95th_diff','max_diff',
+        'mean_abs_diff','std_abs_diff','min_abs_diff','5th_abs_diff','25th_abs_diff','50th_abs_diff','75th_abs_diff','95th_abs_diff','max_abs_diff'
+    ]
+    cols_cohort = [
+        'n_patients','n_biopsies','voxel1','voxel2','count',
+        'mean_diff','std_diff','min_diff','5th_diff','25th_diff','50th_diff','75th_diff','95th_diff','max_diff',
+        'mean_abs_diff','std_abs_diff','min_abs_diff','5th_abs_diff','25th_abs_diff','50th_abs_diff','75th_abs_diff','95th_abs_diff','max_abs_diff'
+    ]
+    patient_stats = patient_stats[cols_patient]
+    cohort_stats = cohort_stats[cols_cohort]
+
+    if output_dir and csv_name_patient_pooled_out:
         os.makedirs(output_dir, exist_ok=True)
-        path = os.path.join(output_dir, csv_name)
-        out_df.to_csv(path, index=False)
+        path = os.path.join(output_dir, csv_name_patient_pooled_out)
+        patient_stats.to_csv(path, index=False)
+        print(f"Saved patient-pooled diff‐summary CSV to {path}")
+
+    if output_dir and csv_name_cohort_pooled_out:
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, csv_name_cohort_pooled_out)
+        cohort_stats.to_csv(path, index=False)
+        print(f"Saved cohort-pooled diff‐summary CSV to {path}")
+
+    if output_dir and csv_name_stats_out:
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, csv_name_stats_out)
+        statistics_out_df.to_csv(path, index=False)
         print(f"Saved diff‐summary CSV to {path}")
 
-    return out_df
+    if output_dir and csv_name_diffs_out:
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, csv_name_diffs_out)
+        diffs_df_out.to_csv(path, index=False)
+        print(f"Saved diffs CSV to {path}")
+
+    return statistics_out_df, diffs_df_out, patient_stats, cohort_stats
