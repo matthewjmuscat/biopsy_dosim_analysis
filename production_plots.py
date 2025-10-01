@@ -26,6 +26,9 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib as mpl
 import matplotlib.colors as mcolors
 import matplotlib.patheffects as pe
+from matplotlib.lines import Line2D
+
+plt.ioff()
 
 def production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
                                                                                       dose_output_nominal_and_all_MC_trials_pandas_data_frame,
@@ -677,6 +680,2216 @@ def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NE
 
     # clean up for memory
     plt.close(fig)
+
+
+
+# Faster no kernel regression, not necessary
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v3(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black'
+):
+    """
+    v3: Linear interpolation only (fast), no kernel regression.
+    Works for both grid-resampled or unique-knot DVH inputs.
+    """
+    plt.ioff()
+
+    # ---------- helpers ----------
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        """Linear interpolation; enforce monotone non-increasing for cumulative."""
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            # Ensure non-increasing with dose
+            y = np.minimum.accumulate(y)
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            # Safety clamp
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:  # differential
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _line_and_optional_annotation(x_grid, y_grid, label, color,
+                                      annotation_text=None, target_offset=0,
+                                      linestyle='-', linewidth=2):
+        """Plot the line and optionally annotate one point."""
+        plotted_line, = plt.plot(x_grid, y_grid, label=label,
+                                 color=color, linestyle=linestyle, linewidth=linewidth)
+        if annotation_text is not None and len(x_grid) > 0:
+            total_points = len(x_grid)
+            idx = (total_points // 5 * target_offset) % total_points
+            tx, ty = x_grid[idx], y_grid[idx]
+            plt.annotate(
+                annotation_text,
+                xy=(tx, ty), xytext=(tx + 1, ty + 1),
+                arrowprops=dict(arrowstyle="->", color=color, lw=1.5),
+                fontsize=10, color=color,
+                bbox=dict(boxstyle="round,pad=0.3", edgecolor=color,
+                          facecolor="white", alpha=0.8)
+            )
+        return plotted_line
+
+    # ---------- main plotting logic ----------
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    # Build a common dose grid for this plot (500 points across observed range)
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    if not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min:
+        x_grid = np.array([x_min], dtype=float)
+    else:
+        x_grid = np.linspace(x_min, x_max, 500, dtype=float)
+
+    # Stack each trial on the same x_grid for quantile bands
+    trial_ids = df['MC trial'].unique()
+    trial_ids = np.sort(trial_ids)  # include trial 0 as part of distribution
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+
+    # Pre-index shifts by trial for fast lookup
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ]
+        .set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+
+    # Pre-split dvh by trial for speed
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+
+    for i, t in enumerate(trial_ids):
+        g = trials_dict.get(t)
+        if g is None or g.empty:
+            Y[i] = np.zeros_like(x_grid)
+            continue
+        x = g[x_col].to_numpy()
+        y = g[y_col].to_numpy()
+        Y[i] = _interp_curve_linear(x, y, x_grid, dvh_kind=dvh_kind)
+
+    # Quantile bands across trials
+    q05 = np.percentile(Y, 5,  axis=0)
+    q25 = np.percentile(Y, 25, axis=0)
+    q75 = np.percentile(Y, 75, axis=0)
+    q95 = np.percentile(Y, 95, axis=0)
+
+    # Figure
+    fig = plt.figure(figsize=(12, 8))
+    # Bands
+    fill_1 = plt.fill_between(x_grid, q05, q25, color='springgreen', alpha=1)
+    fill_2 = plt.fill_between(x_grid, q25, q75, color='dodgerblue',  alpha=1)
+    fill_3 = plt.fill_between(x_grid, q75, q95, color='springgreen', alpha=1)
+    # Quantile outlines
+    plt.plot(x_grid, q05, linestyle=':', linewidth=1, color='black')
+    plt.plot(x_grid, q25, linestyle=':', linewidth=1, color='black')
+    plt.plot(x_grid, q75, linestyle=':', linewidth=1, color='black')
+    plt.plot(x_grid, q95, linestyle=':', linewidth=1, color='black')
+
+    # Nominal (MC trial == 0)
+    g0 = trials_dict.get(0)
+    if g0 is not None and not g0.empty:
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nominal_line = _line_and_optional_annotation(
+            x_grid, y0, 'Nominal', 'red', linestyle='-', linewidth=2
+        )
+    else:
+        nominal_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+
+    # Random trials (exclude trial 0)
+    nonzero_trials = trial_ids[trial_ids != 0]
+    if len(nonzero_trials) > 0 and num_rand_trials_to_show > 0:
+        k = min(num_rand_trials_to_show, len(nonzero_trials))
+        # pick the first k or sample; keep deterministic order (fast & reproducible)
+        chosen = nonzero_trials[:k]
+        annotation_lines = []
+        annotation_offset_index = 0
+
+        for trial in chosen:
+            gt = trials_dict.get(trial)
+            if gt is None or gt.empty:
+                continue
+            yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                      x_grid, dvh_kind=dvh_kind)
+
+            # Annotation text from shifts (if present)
+            if trial in shifts_idx.index:
+                sx, sy, sz = shifts_idx.loc[trial, ['Shift (X)','Shift (Y)','Shift (Z)']].astype(float)
+                d_tot = math.sqrt(sx*sx + sy*sy + sz*sz)
+                ann_text = f"({sx:.1f},{sy:.1f},{sz:.1f}), d = {d_tot:.1f} mm"
+            else:
+                ann_text = None
+
+            if trial_annotation_style == 'arrow':
+                _line_and_optional_annotation(
+                    x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                    annotation_text=ann_text, target_offset=annotation_offset_index,
+                    linestyle='--', linewidth=1
+                )
+                annotation_offset_index += 1
+            else:
+                # number style: draw the line, and place the trial number
+                _line_and_optional_annotation(
+                    x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                    linestyle='--', linewidth=1
+                )
+                if dvh_kind == 'cumulative':
+                    # label around a mid band value
+                    y_target = np.clip(0.5*(np.nanmin(yt)+np.nanmax(yt)), 0, 100)
+                else:
+                    y_target = np.nanmax(yt)
+                if np.isfinite(y_target):
+                    idx = int(np.nanargmin(np.abs(yt - y_target)))
+                    plt.text(x_grid[idx], y_target, str(int(trial)), fontsize=14,
+                             color='black', ha='left', va='center')
+
+                # Collect side-box text
+                if ann_text:
+                    annotation_lines.append(f"{int(trial)}: {ann_text}")
+
+        # Legend & optional side text
+        ax = plt.gca()
+        legend_handles = [fill_1, fill_2, fill_3, nominal_line]
+        quantile_labels = ['5th–25th Q','25th–75th Q','75th–95th Q']
+        main_labels     = ['Nominal']
+        leg = ax.legend(legend_handles, quantile_labels + main_labels,
+                        loc='best', facecolor='white',
+                        prop={'size': 14})
+
+        # Side annotation box (number style)
+        if trial_annotation_style != 'arrow' and len(annotation_lines) > 0:
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            bbox_disp = leg.get_frame().get_window_extent(renderer)
+            inv_fig = fig.transFigure.inverted()
+            frame_x1, frame_y0 = inv_fig.transform((bbox_disp.x1, bbox_disp.y0))
+            fig.text(frame_x1, frame_y0 - 0.02, "\n".join(annotation_lines),
+                     transform=fig.transFigure, ha='right', va='top',
+                     multialignment='left', fontsize=14, color='black',
+                     bbox=dict(facecolor='white', edgecolor='gray', alpha=0.5, boxstyle='round'))
+    else:
+        ax = plt.gca()
+        legend_handles = [fill_1, fill_2, fill_3, nominal_line]
+        leg = ax.legend(legend_handles, ['5th–25th Q','25th–75th Q','75th–95th Q','Nominal'],
+                        loc='best', facecolor='white', prop={'size': 14})
+
+    # Axes, labels, grids
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    # Save + close
+    svg_dose_fig_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_dose_fig_file_path = patient_sp_output_figures_dir.joinpath(svg_dose_fig_name)
+    fig.savefig(svg_dose_fig_file_path, format='svg')
+    plt.close(fig)
+
+
+
+
+
+
+# includes mean and median lines as options 
+# note that the mean line is likely useless, way too smooth 
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black',
+    show_median_line=True,   # NEW: draw Q50 curve
+    show_mean_line=False     # NEW: draw mean curve
+):
+    """
+    v3: Linear interpolation only (fast), no kernel regression.
+    - Works for both grid-resampled or unique-knot DVH inputs.
+    - Adds optional median (Q50) and mean curves across trials.
+    - Selects the first `k` nonzero trials (v2 behavior).
+    """
+    plt.ioff()
+
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            # enforce non-increasing vs dose
+            y = np.minimum.accumulate(y)
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _enforce_nonincreasing(y):
+        # tiny safety to remove any upward blips due to interpolation/precision
+        return np.maximum.accumulate(y[::-1])[::-1]
+
+    def _line_with_optional_annotation(x_grid, y_grid, label, color,
+                                       annotation_text=None, target_offset=0,
+                                       linestyle='-', linewidth=2):
+        line, = plt.plot(x_grid, y_grid, label=label, color=color,
+                         linestyle=linestyle, linewidth=linewidth)
+        if annotation_text is not None and len(x_grid) > 0:
+            n = len(x_grid)
+            idx = (n // 5 * target_offset) % n
+            tx, ty = x_grid[idx], y_grid[idx]
+            plt.annotate(
+                annotation_text, xy=(tx, ty), xytext=(tx + 1, ty + 1),
+                arrowprops=dict(arrowstyle="->", color=color, lw=1.5),
+                fontsize=10, color=color,
+                bbox=dict(boxstyle="round,pad=0.3", edgecolor=color,
+                          facecolor="white", alpha=0.8)
+            )
+        return line
+
+    # --- inputs & common grid ---
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    x_grid = np.array([x_min], dtype=float) if (not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min) \
+             else np.linspace(x_min, x_max, 500, dtype=float)
+
+    # Pre-index shifts and trials
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ]
+        .set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+    trial_ids = np.array(sorted(trials_dict.keys()))
+
+    # Interpolate each trial to the grid
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+    for i, t in enumerate(trial_ids):
+        g = trials_dict[t]
+        Y[i] = _interp_curve_linear(g[x_col].to_numpy(), g[y_col].to_numpy(),
+                                    x_grid, dvh_kind=dvh_kind)
+
+    # Quantile bands across trials
+    q05 = np.percentile(Y,  5, axis=0)
+    q25 = np.percentile(Y, 25, axis=0)
+    q50 = np.percentile(Y, 50, axis=0)  # median (for optional line)
+    q75 = np.percentile(Y, 75, axis=0)
+    q95 = np.percentile(Y, 95, axis=0)
+    mean_curve = np.nanmean(Y, axis=0)  # optional mean line
+
+    if dvh_kind == 'cumulative':
+        # keep them strictly non-increasing
+        q05 = _enforce_nonincreasing(q05)
+        q25 = _enforce_nonincreasing(q25)
+        q50 = _enforce_nonincreasing(q50)
+        q75 = _enforce_nonincreasing(q75)
+        q95 = _enforce_nonincreasing(q95)
+        mean_curve = _enforce_nonincreasing(mean_curve)
+
+    # --- figure & bands ---
+    fig = plt.figure(figsize=(12, 8))
+    fill_1 = plt.fill_between(x_grid, q05, q25, color='springgreen', alpha=1)
+    fill_2 = plt.fill_between(x_grid, q25, q75, color='dodgerblue',  alpha=1)
+    fill_3 = plt.fill_between(x_grid, q75, q95, color='springgreen', alpha=1)
+    plt.plot(x_grid, q05, linestyle=':', linewidth=1, color='black')
+    plt.plot(x_grid, q25, linestyle=':', linewidth=1, color='black')
+    plt.plot(x_grid, q75, linestyle=':', linewidth=1, color='black')
+    plt.plot(x_grid, q95, linestyle=':', linewidth=1, color='black')
+
+    # Nominal line (trial 0)
+    if 0 in trials_dict:
+        g0 = trials_dict[0]
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nominal_line = _line_with_optional_annotation(x_grid, y0, 'Nominal', 'red',
+                                                      linestyle='-', linewidth=2)
+    else:
+        nominal_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+
+    # Optional summary lines
+    extra_handles = []
+    extra_labels  = []
+    if show_median_line:
+        median_line, = plt.plot(x_grid, q50, color='black', linewidth=2, linestyle='-',
+                                label='Q50 (median)')
+        extra_handles.append(median_line); extra_labels.append('Q50 (median)')
+    if show_mean_line:
+        mean_line, = plt.plot(x_grid, mean_curve, color='orange', linewidth=2, linestyle='--',
+                              label='Mean')
+        extra_handles.append(mean_line); extra_labels.append('Mean')
+
+    # First-k trials after 0 (v2 behavior)
+    nonzero_trials = [t for t in trial_ids if t != 0]
+    chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
+
+    annotation_lines = []
+    annotation_offset_index = 0
+    for trial in chosen:
+        gt = trials_dict.get(trial)
+        if gt is None or gt.empty:
+            continue
+        yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+
+        # build annotation text from shifts if available
+        if trial in shifts_idx.index:
+            sx, sy, sz = shifts_idx.loc[trial, ['Shift (X)','Shift (Y)','Shift (Z)']].astype(float)
+            d_tot = math.sqrt(sx*sx + sy*sy + sz*sz)
+            ann_text = f"({sx:.1f},{sy:.1f},{sz:.1f}), d = {d_tot:.1f} mm"
+        else:
+            ann_text = None
+
+        if trial_annotation_style == 'arrow':
+            _line_with_optional_annotation(
+                x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                annotation_text=ann_text, target_offset=annotation_offset_index,
+                linestyle='--', linewidth=1
+            )
+            annotation_offset_index += 1
+        else:  # number style
+            _line_with_optional_annotation(
+                x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                linestyle='--', linewidth=1
+            )
+            # label near a mid value (deterministic)
+            if dvh_kind == 'cumulative':
+                y_target = float(np.clip(0.5*(np.nanmin(yt)+np.nanmax(yt)), 0, 100))
+            else:
+                y_target = float(np.nanmax(yt))
+            if np.isfinite(y_target):
+                idx = int(np.nanargmin(np.abs(yt - y_target)))
+                plt.text(x_grid[idx], y_target, str(int(trial)), fontsize=14,
+                         color='black', ha='left', va='center')
+            if ann_text:
+                annotation_lines.append(f"{int(trial)}: {ann_text}")
+
+    # Legend & cosmetics
+    ax = plt.gca()
+    handles = [fill_1, fill_2, fill_3, nominal_line] + extra_handles
+    labels  = ['5th–25th Q','25th–75th Q','75th–95th Q','Nominal'] + extra_labels
+    leg = ax.legend(handles, labels, loc='best', facecolor='white',
+                    prop={'size': 14})
+
+    if trial_annotation_style != 'arrow' and len(annotation_lines) > 0:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        bbox_disp = leg.get_frame().get_window_extent(renderer)
+        inv_fig = fig.transFigure.inverted()
+        frame_x1, frame_y0 = inv_fig.transform((bbox_disp.x1, bbox_disp.y0))
+        fig.text(frame_x1, frame_y0 - 0.02, "\n".join(annotation_lines),
+                 transform=fig.transFigure, ha='right', va='top',
+                 multialignment='left', fontsize=14, color='black',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.5, boxstyle='round'))
+
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    svg_dose_fig_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_dose_fig_file_path = patient_sp_output_figures_dir.joinpath(svg_dose_fig_name)
+    fig.savefig(svg_dose_fig_file_path, format='svg')
+    plt.close(fig)
+
+
+
+
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_1(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black',
+    # NEW options
+    bands_mode="horizontal",           # 'vertical' (as in v3), 'horizontal' (Dx-consistent), or 'both'
+    show_median_line=True,
+    show_mean_line=False,
+    show_dx_vy_markers=True,
+    dx_list=(2, 50, 98),
+    vy_list=(100, 125, 150, 175, 200, 300),
+    ref_dose_gy=13.5
+):
+    """
+    v3.1: Linear interpolation only. Adds:
+      - horizontal-quantile bands (Dx-consistent) via bands_mode
+      - Dx/Vy overlay markers matching your tables
+    """
+    plt.ioff()
+
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        """Linear interp; enforce non-increasing for cumulative."""
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            y = np.minimum.accumulate(y)
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _enforce_nonincreasing(y):
+        return np.maximum.accumulate(y[::-1])[::-1]
+
+    def _line_with_optional_annotation(x_grid, y_grid, label, color,
+                                       annotation_text=None, target_offset=0,
+                                       linestyle='-', linewidth=2):
+        line, = plt.plot(x_grid, y_grid, label=label, color=color,
+                         linestyle=linestyle, linewidth=linewidth)
+        if annotation_text is not None and len(x_grid) > 0:
+            n = len(x_grid)
+            idx = (n // 5 * target_offset) % n
+            tx, ty = x_grid[idx], y_grid[idx]
+            plt.annotate(
+                annotation_text, xy=(tx, ty), xytext=(tx + 1, ty + 1),
+                arrowprops=dict(arrowstyle="->", color=color, lw=1.5),
+                fontsize=10, color=color,
+                bbox=dict(boxstyle="round,pad=0.3", edgecolor=color,
+                          facecolor="white", alpha=0.8)
+            )
+        return line
+
+    # --- inputs & common x-grid ---
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    x_grid = np.array([x_min], dtype=float) if (not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min) \
+             else np.linspace(x_min, x_max, 500, dtype=float)
+
+    # Pre-index shifts and trials
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ]
+        .set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+    trial_ids = np.array(sorted(trials_dict.keys()))
+    trial_to_row = {int(t): i for i, t in enumerate(trial_ids)}
+
+    # Interpolate each trial to the grid
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+    for i, t in enumerate(trial_ids):
+        g = trials_dict[t]
+        Y[i] = _interp_curve_linear(g[x_col].to_numpy(), g[y_col].to_numpy(),
+                                    x_grid, dvh_kind=dvh_kind)
+
+    # Vertical quantiles (as in v3): distribution of %volume at fixed dose
+    q05_v = np.percentile(Y,  5, axis=0)
+    q25_v = np.percentile(Y, 25, axis=0)
+    q50_v = np.percentile(Y, 50, axis=0)
+    q75_v = np.percentile(Y, 75, axis=0)
+    q95_v = np.percentile(Y, 95, axis=0)
+    mean_v = np.nanmean(Y, axis=0)
+
+    if dvh_kind == 'cumulative':
+        q05_v = _enforce_nonincreasing(q05_v)
+        q25_v = _enforce_nonincreasing(q25_v)
+        q50_v = _enforce_nonincreasing(q50_v)
+        q75_v = _enforce_nonincreasing(q75_v)
+        q95_v = _enforce_nonincreasing(q95_v)
+        mean_v = _enforce_nonincreasing(mean_v)
+
+    # Horizontal quantiles (Dx-consistent): distribution of DOSE at fixed %volume
+    # Build a y-grid (0..100). We’ll invert each trial: x_of_y = interp(y -> x).
+    y_grid = np.linspace(100.0, 0.0, 500)  # descending for cumulative
+    X_of_Y = None
+    if dvh_kind == 'cumulative':
+        X_of_Y = np.empty((len(trial_ids), y_grid.size), dtype=float)
+        for i in range(len(trial_ids)):
+            y = Y[i]              # shape: (len(x_grid),)
+            x = x_grid
+            # Ensure y is non-increasing (already enforced), then invert
+            # interp expects increasing x; here we need x(y), so give y reversed and x reversed
+            X_of_Y[i] = np.interp(y_grid, y[::-1], x[::-1],
+                                  left=x.min(), right=x.max())
+        # Percentiles of DOSE at fixed %volume:
+        q05_h = np.percentile(X_of_Y,  5, axis=0)
+        q25_h = np.percentile(X_of_Y, 25, axis=0)
+        q50_h = np.percentile(X_of_Y, 50, axis=0)  # "median DVH" in Dx-sense
+        q75_h = np.percentile(X_of_Y, 75, axis=0)
+        q95_h = np.percentile(X_of_Y, 95, axis=0)
+        mean_h = np.nanmean(X_of_Y, axis=0)
+
+    # --- figure ---
+    fig = plt.figure(figsize=(12, 8))
+    handles, labels = [], []
+
+    # Bands per mode
+    if bands_mode in ("vertical", "both"):
+        fill_1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.7)
+        fill_2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.7)
+        fill_3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.7)
+        plt.plot(x_grid, q05_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q25_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q75_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q95_v, linestyle=':', linewidth=1, color='black')
+        handles += [fill_1, fill_2, fill_3]; labels += ['5th–25th Q','25th–75th Q','75th–95th Q']
+
+    if dvh_kind == 'cumulative' and bands_mode in ("horizontal", "both"):
+        # Plot horizontal-quantile curves as solid black outlines (Dx-consistent)
+        plt.plot(q05_h, y_grid, linestyle='--', linewidth=1, color='gray', alpha=0.9)
+        plt.plot(q25_h, y_grid, linestyle='-',  linewidth=1.5, color='black', alpha=0.9)
+        plt.plot(q75_h, y_grid, linestyle='-',  linewidth=1.5, color='black', alpha=0.9)
+        plt.plot(q95_h, y_grid, linestyle='--', linewidth=1, color='gray', alpha=0.9)
+        # Add legend stubs
+        h_stub, = plt.plot([], [], linestyle='-', color='black', linewidth=1.5)
+        handles += [h_stub]; labels += ['Dx-consistent quantiles']
+
+    # Nominal (trial 0)
+    if 0 in trials_dict:
+        g0 = trials_dict[0]
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nominal_line = _line_with_optional_annotation(x_grid, y0, 'Nominal', 'red',
+                                                      linestyle='-', linewidth=2)
+    else:
+        nominal_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+    handles.append(nominal_line); labels.append('Nominal')
+
+    # Optional summary lines (on vertical bands, for familiarity)
+    if show_median_line:
+        med_line, = plt.plot(x_grid, q50_v, color='black', linewidth=2, linestyle='-',
+                             label='Q50 (median-%vol at fixed dose)')
+        handles.append(med_line); labels.append('Q50 (vertical)')
+    if show_mean_line:
+        mean_line, = plt.plot(x_grid, mean_v, color='orange', linewidth=2, linestyle='--',
+                              label='Mean (vertical)')
+        handles.append(mean_line); labels.append('Mean')
+
+    # First-k trials after 0 (v2 behavior)
+    chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
+    annotation_lines = []
+    annotation_offset_index = 0
+    for trial in chosen:
+        gt = trials_dict.get(trial)
+        if gt is None or gt.empty:
+            continue
+        yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        # shifts text
+        ann_text = None
+        if trial in shifts_idx.index:
+            sx, sy, sz = shifts_idx.loc[trial, ['Shift (X)','Shift (Y)','Shift (Z)']].astype(float)
+            d_tot = math.sqrt(sx*sx + sy*sy + sz*sz)
+            ann_text = f"({sx:.1f},{sy:.1f},{sz:.1f}), d = {d_tot:.1f} mm"
+
+        if trial_annotation_style == 'arrow':
+            _line_with_optional_annotation(
+                x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                annotation_text=ann_text, target_offset=annotation_offset_index,
+                linestyle='--', linewidth=1
+            )
+            annotation_offset_index += 1
+        else:
+            _line_with_optional_annotation(
+                x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                linestyle='--', linewidth=1
+            )
+            # deterministic label
+            if dvh_kind == 'cumulative':
+                y_target = float(np.clip(0.5*(np.nanmin(yt)+np.nanmax(yt)), 0, 100))
+            else:
+                y_target = float(np.nanmax(yt))
+            if np.isfinite(y_target):
+                idx = int(np.nanargmin(np.abs(yt - y_target)))
+                plt.text(x_grid[idx], y_target, str(int(trial)), fontsize=14,
+                         color='black', ha='left', va='center')
+            if ann_text:
+                annotation_lines.append(f"{int(trial)}: {ann_text}")
+
+    ax = plt.gca()
+
+    # Dx/Vy overlay markers (match your tables)
+    if show_dx_vy_markers and dvh_kind == 'cumulative':
+        # Dx markers: horizontal lines at y = x% and vertical ticks at quantiles of dose
+        for X in dx_list:
+            y_target = float(X)
+
+            # Per-trial dose at this %volume (invert: y -> x)  [row-by-row!]
+            x_at_y_trials = np.array([
+                np.interp(y_target, Y[i, ::-1], x_grid[::-1],
+                        left=x_grid[0], right=x_grid[-1])
+                for i in range(Y.shape[0])
+            ])
+
+            # Stats across trials
+            d_q50 = np.percentile(x_at_y_trials, 50)
+            d_q25 = np.percentile(x_at_y_trials, 25)
+            d_q75 = np.percentile(x_at_y_trials, 75)
+            d_q05 = np.percentile(x_at_y_trials,  5)
+            d_q95 = np.percentile(x_at_y_trials, 95)
+
+            # Nominal, if trial 0 exists
+            d_nom = np.nan
+            if 0 in trial_to_row:
+                i0 = trial_to_row[0]
+                d_nom = np.interp(y_target, Y[i0, ::-1], x_grid[::-1],
+                                left=x_grid[0], right=x_grid[-1])
+
+            # Draw guideline + ticks (same as before)
+            ax.axhline(y_target, color='gray', lw=0.7, ls=':')
+            for x_val, c, lw in [(d_q50, 'k', 2.2), (d_q25, 'k', 1.2), (d_q75, 'k', 1.2),
+                                (d_q05, 'k', 0.8), (d_q95, 'k', 0.8)]:
+                ax.plot([x_val, x_val], [y_target-1.0, y_target+1.0], color=c, lw=lw)
+            if np.isfinite(d_nom):
+                ax.plot([d_nom, d_nom], [y_target-2.0, y_target+2.0], color='r', lw=2.2)
+
+
+        # Vy markers: vertical lines at dose thresholds and horizontal ticks at quantiles of %volume
+        for Yp in vy_list:
+            thr = (Yp / 100.0) * float(ref_dose_gy)
+
+            # Per-trial %volume at this dose (read forward: x -> y)  [row-by-row!]
+            y_at_x_trials = np.array([
+                np.interp(thr, x_grid, Y[i, :], left=100.0, right=0.0)
+                for i in range(Y.shape[0])
+            ])
+
+            v_q50 = np.percentile(y_at_x_trials, 50)
+            v_q25 = np.percentile(y_at_x_trials, 25)
+            v_q75 = np.percentile(y_at_x_trials, 75)
+            v_q05 = np.percentile(y_at_x_trials,  5)
+            v_q95 = np.percentile(y_at_x_trials, 95)
+
+            v_nom = np.nan
+            if 0 in trial_to_row:
+                i0 = trial_to_row[0]
+                v_nom = np.interp(thr, x_grid, Y[i0, :], left=100.0, right=0.0)
+
+            ax.axvline(thr, color='gray', lw=0.7, ls=':')
+            for y_val, c, lw in [(v_q50, 'k', 2.2), (v_q25, 'k', 1.2), (v_q75, 'k', 1.2),
+                                (v_q05, 'k', 0.8), (v_q95, 'k', 0.8)]:
+                ax.plot([thr-0.25, thr+0.25], [y_val, y_val], color=c, lw=lw)
+            if np.isfinite(v_nom):
+                ax.plot([thr-0.5, thr+0.5], [v_nom, v_nom], color='r', lw=2.2)
+
+
+    # Legend
+    leg = ax.legend(handles, labels, loc='best', facecolor='white', prop={'size': 14})
+
+    if trial_annotation_style != 'arrow' and len(annotation_lines) > 0:
+        fig = plt.gcf()
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        bbox_disp = leg.get_frame().get_window_extent(renderer)
+        inv_fig = fig.transFigure.inverted()
+        frame_x1, frame_y0 = inv_fig.transform((bbox_disp.x1, bbox_disp.y0))
+        fig.text(frame_x1, frame_y0 - 0.02, "\n".join(annotation_lines),
+                 transform=fig.transFigure, ha='right', va='top',
+                 multialignment='left', fontsize=14, color='black',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.5, boxstyle='round'))
+
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    svg_dose_fig_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_dose_fig_file_path = patient_sp_output_figures_dir.joinpath(svg_dose_fig_name)
+    plt.savefig(svg_dose_fig_file_path, format='svg')
+    plt.close()
+
+
+
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_2(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black',
+    # bands/lines options
+    bands_mode="horizontal",           # 'vertical', 'horizontal', or 'both'
+    show_median_line=True,
+    show_mean_line=False,
+    show_dx_vy_markers=True,
+    dx_list=(2, 50, 98),
+    vy_list=(100, 125, 150, 175, 200, 300),
+    ref_dose_gy=13.5,
+    # NEW: overlay table metrics
+    dvh_metrics_df=None,               # dataframe with columns shown in your message
+    overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),  # which stats to plot
+    overlay_metrics_alpha=0.95,
+):
+    """
+    v4_2: Linear interpolation only (fast). Adds overlay of table-derived DVH metrics.
+    - If dvh_metrics_df is provided, plots its Nominal/Qxx points on top of the DVH plot.
+    - Dx points: (dose_from_table, y = x%)
+    - Vy points: (x = (y% of ref dose), volume_from_table)
+    """
+
+    plt.ioff()
+
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            y = np.minimum.accumulate(y)
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _enforce_nonincreasing(y):
+        return np.maximum.accumulate(y[::-1])[::-1]
+
+    def _line_with_optional_annotation(x_grid, y_grid, label, color,
+                                       annotation_text=None, target_offset=0,
+                                       linestyle='-', linewidth=2):
+        line, = plt.plot(x_grid, y_grid, label=label, color=color,
+                         linestyle=linestyle, linewidth=linewidth)
+        if annotation_text is not None and len(x_grid) > 0:
+            n = len(x_grid)
+            idx = (n // 5 * target_offset) % n
+            tx, ty = x_grid[idx], y_grid[idx]
+            plt.annotate(
+                annotation_text, xy=(tx, ty), xytext=(tx + 1, ty + 1),
+                arrowprops=dict(arrowstyle="->", color=color, lw=1.5),
+                fontsize=10, color=color,
+                bbox=dict(boxstyle="round,pad=0.3", edgecolor=color,
+                          facecolor="white", alpha=0.8)
+            )
+        return line
+
+    # --- inputs & common x-grid ---
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    x_grid = np.array([x_min], dtype=float) if (not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min) \
+             else np.linspace(x_min, x_max, 2000, dtype=float)  # a bit denser for precise read-offs
+
+    # Pre-index shifts and trials
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ]
+        .set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+    trial_ids = np.array(sorted(trials_dict.keys()))
+    trial_to_row = {int(t): i for i, t in enumerate(trial_ids)}
+
+    # Interpolate each trial to the grid
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+    for i, t in enumerate(trial_ids):
+        g = trials_dict[t]
+        Y[i] = _interp_curve_linear(g[x_col].to_numpy(), g[y_col].to_numpy(),
+                                    x_grid, dvh_kind=dvh_kind)
+
+    # Vertical quantiles: %volume at fixed dose
+    q05_v = np.percentile(Y,  5, axis=0)
+    q25_v = np.percentile(Y, 25, axis=0)
+    q50_v = np.percentile(Y, 50, axis=0)
+    q75_v = np.percentile(Y, 75, axis=0)
+    q95_v = np.percentile(Y, 95, axis=0)
+    mean_v = np.nanmean(Y, axis=0)
+
+    if dvh_kind == 'cumulative':
+        q05_v = _enforce_nonincreasing(q05_v)
+        q25_v = _enforce_nonincreasing(q25_v)
+        q50_v = _enforce_nonincreasing(q50_v)
+        q75_v = _enforce_nonincreasing(q75_v)
+        q95_v = _enforce_nonincreasing(q95_v)
+        mean_v = _enforce_nonincreasing(mean_v)
+
+    # Horizontal quantiles: DOSE at fixed %volume
+    y_grid = np.linspace(100.0, 0.0, 1000)  # descending for cumulative
+    X_of_Y = None
+    if dvh_kind == 'cumulative':
+        X_of_Y = np.empty((len(trial_ids), y_grid.size), dtype=float)
+        for i, t in enumerate(trial_ids):
+            g = trials_dict[t]
+            x_t = g[x_col].to_numpy()
+            y_t = g[y_col].to_numpy()
+            o = np.argsort(x_t)
+            x_t = x_t[o]
+            # enforce monotone non-increasing for cumulative:
+            y_t = np.minimum.accumulate(y_t[o])
+            # invert: y -> x using the trial’s own knots
+            X_of_Y[i] = np.interp(y_grid, y_t[::-1], x_t[::-1],
+                                left=x_t.min(), right=x_t.max())
+        q05_h = np.percentile(X_of_Y,  5, axis=0)
+        q25_h = np.percentile(X_of_Y, 25, axis=0)
+        q50_h = np.percentile(X_of_Y, 50, axis=0)
+        q75_h = np.percentile(X_of_Y, 75, axis=0)
+        q95_h = np.percentile(X_of_Y, 95, axis=0)
+        mean_h = np.nanmean(X_of_Y, axis=0)
+
+    # --- figure ---
+    fig = plt.figure(figsize=(12, 8))
+    handles, labels = [], []
+
+    # Bands per mode
+    if bands_mode in ("vertical", "both"):
+        fill_1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.7)
+        fill_2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.7)
+        fill_3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.7)
+        plt.plot(x_grid, q05_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q25_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q75_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q95_v, linestyle=':', linewidth=1, color='black')
+        handles += [fill_1, fill_2, fill_3]; labels += ['5th–25th Q','25th–75th Q','75th–95th Q']
+
+    if dvh_kind == 'cumulative' and bands_mode in ("horizontal", "both"):
+        # Thin outlines for Dx-consistent envelopes
+        plt.plot(q25_h, y_grid, linestyle='-',  linewidth=1.5, color='black', alpha=0.9)
+        plt.plot(q75_h, y_grid, linestyle='-',  linewidth=1.5, color='black', alpha=0.9)
+        plt.plot(q05_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        plt.plot(q95_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        h_stub, = plt.plot([], [], linestyle='-', color='black', linewidth=1.5)
+        handles += [h_stub]; labels += ['Dx-consistent quantiles']
+
+    # Nominal line (trial 0)
+    if 0 in trials_dict:
+        g0 = trials_dict[0]
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nominal_line = _line_with_optional_annotation(x_grid, y0, 'Nominal', 'red',
+                                                      linestyle='-', linewidth=2)
+    else:
+        nominal_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+    handles.append(nominal_line); labels.append('Nominal')
+
+    # Optional summary lines (vertical sense)
+    if show_median_line:
+        med_line, = plt.plot(x_grid, q50_v, color='black', linewidth=2, linestyle='-',
+                             label='Q50 (vertical)')
+        handles.append(med_line); labels.append('Q50 (vertical)')
+    if show_mean_line:
+        mean_line, = plt.plot(x_grid, mean_v, color='orange', linewidth=2, linestyle='--',
+                              label='Mean (vertical)')
+        handles.append(mean_line); labels.append('Mean')
+
+    # First-k trials after 0
+    chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
+    annotation_lines = []
+    annotation_offset_index = 0
+    for trial in chosen:
+        gt = trials_dict.get(trial)
+        if gt is None or gt.empty:
+            continue
+        yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        # shifts
+        ann_text = None
+        if trial in shifts_idx.index:
+            sx, sy, sz = shifts_idx.loc[trial, ['Shift (X)','Shift (Y)','Shift (Z)']].astype(float)
+            d_tot = math.sqrt(sx*sx + sy*sy + sz*sz)
+            ann_text = f"({sx:.1f},{sy:.1f},{sz:.1f}), d = {d_tot:.1f} mm"
+
+        if trial_annotation_style == 'arrow':
+            _line_with_optional_annotation(
+                x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                annotation_text=ann_text, target_offset=annotation_offset_index,
+                linestyle='--', linewidth=1
+            )
+            annotation_offset_index += 1
+        else:
+            _line_with_optional_annotation(
+                x_grid, yt, f"Trial: {trial}", random_trial_line_color,
+                linestyle='--', linewidth=1
+            )
+            if dvh_kind == 'cumulative':
+                y_target = float(np.clip(0.5*(np.nanmin(yt)+np.nanmax(yt)), 0, 100))
+            else:
+                y_target = float(np.nanmax(yt))
+            if np.isfinite(y_target):
+                idx = int(np.nanargmin(np.abs(yt - y_target)))
+                plt.text(x_grid[idx], y_target, str(int(trial)), fontsize=14,
+                         color='black', ha='left', va='center')
+            if ann_text:
+                annotation_lines.append(f"{int(trial)}: {ann_text}")
+
+    ax = plt.gca()
+
+    # Dx/Vy overlay markers computed from trials (optional)
+    if show_dx_vy_markers and dvh_kind == 'cumulative':
+        for X in dx_list:
+            y_target = float(X)
+            x_at_y_trials = np.array([
+                np.interp(y_target, Y[i, ::-1], x_grid[::-1],
+                          left=x_grid[0], right=x_grid[-1])
+                for i in range(Y.shape[0])
+            ])
+            d_q50 = np.percentile(x_at_y_trials, 50)
+            d_q25 = np.percentile(x_at_y_trials, 25)
+            d_q75 = np.percentile(x_at_y_trials, 75)
+            d_q05 = np.percentile(x_at_y_trials,  5)
+            d_q95 = np.percentile(x_at_y_trials, 95)
+
+            d_nom = np.nan
+            if 0 in trial_to_row:
+                i0 = trial_to_row[0]
+                d_nom = np.interp(y_target, Y[i0, ::-1], x_grid[::-1],
+                                  left=x_grid[0], right=x_grid[-1])
+
+            ax.axhline(y_target, color='gray', lw=0.7, ls=':')
+            for x_val, c, lw in [(d_q50, 'k', 2.2), (d_q25, 'k', 1.2), (d_q75, 'k', 1.2),
+                                 (d_q05, 'k', 0.8), (d_q95, 'k', 0.8)]:
+                ax.plot([x_val, x_val], [y_target-1.0, y_target+1.0], color=c, lw=lw)
+            if np.isfinite(d_nom):
+                ax.plot([d_nom, d_nom], [y_target-2.0, y_target+2.0], color='r', lw=2.2)
+
+        for Yp in vy_list:
+            thr = (Yp / 100.0) * float(ref_dose_gy)
+            y_at_x_trials = np.array([
+                np.interp(thr, x_grid, Y[i, :], left=100.0, right=0.0)
+                for i in range(Y.shape[0])
+            ])
+            v_q50 = np.percentile(y_at_x_trials, 50)
+            v_q25 = np.percentile(y_at_x_trials, 25)
+            v_q75 = np.percentile(y_at_x_trials, 75)
+            v_q05 = np.percentile(y_at_x_trials,  5)
+            v_q95 = np.percentile(y_at_x_trials, 95)
+
+            v_nom = np.nan
+            if 0 in trial_to_row:
+                i0 = trial_to_row[0]
+                v_nom = np.interp(thr, x_grid, Y[i0, :], left=100.0, right=0.0)
+
+            ax.axvline(thr, color='gray', lw=0.7, ls=':')
+            for y_val, c, lw in [(v_q50, 'k', 2.2), (v_q25, 'k', 1.2), (v_q75, 'k', 1.2),
+                                 (v_q05, 'k', 0.8), (v_q95, 'k', 0.8)]:
+                ax.plot([thr-0.25, thr+0.25], [y_val, y_val], color=c, lw=lw)
+            if np.isfinite(v_nom):
+                ax.plot([thr-0.5, thr+0.5], [v_nom, v_nom], color='r', lw=2.2)
+
+    # --- NEW: overlay of table metrics (if provided) ---
+    if dvh_metrics_df is not None and dvh_kind == 'cumulative':
+        sub = dvh_metrics_df[
+            (dvh_metrics_df['Patient ID'] == patientUID) &
+            (dvh_metrics_df['Struct index'] == bx_struct_ind)
+        ]
+        # if empty, try also matching on Bx ID
+        if sub.empty and 'Bx ID' in dvh_metrics_df.columns:
+            sub = dvh_metrics_df[
+                (dvh_metrics_df['Patient ID'] == patientUID) &
+                (dvh_metrics_df['Bx ID'] == bx_struct_roi)
+            ]
+
+        # parse rows like 'D_2', 'V_150'
+        def _parse_metric_name(s):
+            s = str(s).strip()
+            s = s.replace('%', '')
+            if s.upper().startswith('D_'):
+                return ('D', int(round(float(s.split('_')[1]))))
+            if s.upper().startswith('V_'):
+                return ('V', int(round(float(s.split('_')[1]))))
+            return (None, None)
+
+        # marker style
+        stat_style = {
+            'Nominal': dict(marker='x',  c='red',   s=80,  lw=2),
+            'Q50':    dict(marker='o',  c='black', s=50),
+            'Q25':    dict(marker='s',  c='blue',  s=40),
+            'Q75':    dict(marker='s',  c='blue',  s=40),
+            'Q05':    dict(marker='^',  c='gray',  s=40),
+            'Q95':    dict(marker='^',  c='gray',  s=40),
+            # you can add 'Mean' etc. if you want
+        }
+
+        # Draw points
+        for _, row in sub.iterrows():
+            mtype, val = _parse_metric_name(row['Metric'])
+            if mtype is None:
+                continue
+
+            # gather available stats for this row
+            for stat_name in overlay_metrics_stats:
+                if stat_name not in row or pd.isna(row[stat_name]):
+                    continue
+                style = stat_style.get(stat_name, dict(marker='o', c='black', s=40))
+                if mtype == 'D':
+                    # point at (dose=stat_value, y = x%)
+                    x_pt = float(row[stat_name])
+                    y_pt = float(val)
+                    plt.scatter([x_pt], [y_pt], alpha=overlay_metrics_alpha, **style)
+                else:
+                    # Vy: x = (y% of ref dose), y = stat_value
+                    x_pt = (float(val) / 100.0) * float(ref_dose_gy)
+                    y_pt = float(row[stat_name])
+                    plt.scatter([x_pt], [y_pt], alpha=overlay_metrics_alpha, **style)
+
+        # Legend stubs for table metrics
+        # (only once, create invisible points with the same style)
+        stub_handles = []
+        stub_labels  = []
+        for name in ('Nominal','Q50','Q25/Q75','Q05/Q95'):
+            if name == 'Nominal':
+                h = plt.scatter([], [], **stat_style['Nominal'])
+            elif name == 'Q50':
+                h = plt.scatter([], [], **stat_style['Q50'])
+            elif name == 'Q25/Q75':
+                # reuse Q25 style
+                h = plt.scatter([], [], **stat_style['Q25'])
+            else:
+                h = plt.scatter([], [], **stat_style['Q05'])
+            stub_handles.append(h); stub_labels.append(f'Table {name}')
+        handles += stub_handles; labels += stub_labels
+
+    # Legend & cosmetics
+    leg = ax.legend(handles, labels, loc='best', facecolor='white', prop={'size': 14})
+
+    if trial_annotation_style != 'arrow' and len(annotation_lines) > 0:
+        fig = plt.gcf()
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        bbox_disp = leg.get_frame().get_window_extent(renderer)
+        inv_fig = fig.transFigure.inverted()
+        frame_x1, frame_y0 = inv_fig.transform((bbox_disp.x1, bbox_disp.y0))
+        fig.text(frame_x1, frame_y0 - 0.02, "\n".join(annotation_lines),
+                 transform=fig.transFigure, ha='right', va='top',
+                 multialignment='left', fontsize=14, color='black',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.5, boxstyle='round'))
+
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    svg_dose_fig_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_dose_fig_file_path = patient_sp_output_figures_dir.joinpath(svg_dose_fig_name)
+    plt.savefig(svg_dose_fig_file_path, format='svg')
+    plt.close()
+
+
+
+
+
+
+
+
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_3(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black',
+    # band options
+    bands_mode="horizontal",           # 'vertical', 'horizontal', or 'both'
+    show_median_line=True,
+    show_mean_line=False,
+    # tick/marker options
+    show_computed_ticks=True,          # draw ticks from trials (what you compare against)
+    show_table_markers=True,           # overlay markers from dvh_metrics_df
+    dx_list=(2, 50, 98),
+    vy_list=(100, 125, 150, 175, 200, 300),
+    ref_dose_gy=13.5,
+    # table DF (optional)
+    dvh_metrics_df=None,
+    overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
+    overlay_metrics_alpha=0.95,
+    # styles
+    dx_tick_color='black',
+    vy_tick_color='tab:blue',
+):
+    """
+    v4_3: Like v4_2 but:
+      - Dx/Vy *ticks* are computed from original per-trial curves (less drift).
+      - Overlays *markers* pulled from dvh_metrics_df so you can check alignment.
+      - Dx visuals = black; Vy visuals = blue; Nominal = red 'x'.
+
+    Assumes cumulative DVH if dvh_option['dvh'] == 'cumulative'.
+    """
+
+    plt.ioff()
+
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            y = np.minimum.accumulate(y)
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _enforce_nonincreasing(y):
+        return np.maximum.accumulate(y[::-1])[::-1]
+
+    # --- inputs & common x-grid for display/bands ---
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    x_grid = np.array([x_min], dtype=float) if (not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min) \
+             else np.linspace(x_min, x_max, 1500, dtype=float)  # dense grid for smooth lines
+
+    # Index shifts and gather trials
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ]
+        .set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+    trial_ids = np.array(sorted(trials_dict.keys()))
+    trial_to_row = {int(t): i for i, t in enumerate(trial_ids)}
+
+    # Interpolate each trial onto x_grid ONLY for plotting bands/nominal lines
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+    for i, t in enumerate(trial_ids):
+        g = trials_dict[t]
+        Y[i] = _interp_curve_linear(g[x_col].to_numpy(), g[y_col].to_numpy(),
+                                    x_grid, dvh_kind=dvh_kind)
+
+    # Vertical quantiles (Vy-consistent)
+    q05_v = np.percentile(Y,  5, axis=0)
+    q25_v = np.percentile(Y, 25, axis=0)
+    q50_v = np.percentile(Y, 50, axis=0)
+    q75_v = np.percentile(Y, 75, axis=0)
+    q95_v = np.percentile(Y, 95, axis=0)
+    mean_v = np.nanmean(Y, axis=0)
+
+    if dvh_kind == 'cumulative':
+        q05_v = _enforce_nonincreasing(q05_v)
+        q25_v = _enforce_nonincreasing(q25_v)
+        q50_v = _enforce_nonincreasing(q50_v)
+        q75_v = _enforce_nonincreasing(q75_v)
+        q95_v = _enforce_nonincreasing(q95_v)
+        mean_v = _enforce_nonincreasing(mean_v)
+
+    # Horizontal quantiles (Dx-consistent) — invert each ORIGINAL trial (reduces drift)
+    y_grid = np.linspace(100.0, 0.0, 1500)
+    if dvh_kind == 'cumulative':
+        X_of_Y = np.empty((len(trial_ids), y_grid.size), dtype=float)
+        for i, t in enumerate(trial_ids):
+            g = trials_dict[t]
+            x_t = g[x_col].to_numpy()
+            y_t = g[y_col].to_numpy()
+            o = np.argsort(x_t)
+            x_t = x_t[o]
+            y_t = np.minimum.accumulate(y_t[o])
+            X_of_Y[i] = np.interp(y_grid, y_t[::-1], x_t[::-1],
+                                  left=x_t.min(), right=x_t.max())
+        q05_h = np.percentile(X_of_Y,  5, axis=0)
+        q25_h = np.percentile(X_of_Y, 25, axis=0)
+        q50_h = np.percentile(X_of_Y, 50, axis=0)
+        q75_h = np.percentile(X_of_Y, 75, axis=0)
+        q95_h = np.percentile(X_of_Y, 95, axis=0)
+        mean_h = np.nanmean(X_of_Y, axis=0)
+
+    # --- figure ---
+    fig = plt.figure(figsize=(12, 8))
+    handles, labels = [], []
+
+    # Bands per mode
+    if bands_mode in ("vertical", "both"):
+        f1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.7)
+        f2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.7)
+        f3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.7)
+        plt.plot(x_grid, q05_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q25_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q75_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q95_v, linestyle=':', linewidth=1, color='black')
+        handles += [f1, f2, f3]; labels += ['5th–25th Q (Vy)', '25th–75th Q (Vy)', '75th–95th Q (Vy)']
+
+    if dvh_kind == 'cumulative' and bands_mode in ("horizontal", "both"):
+        plt.plot(q25_h, y_grid, linestyle='-',  linewidth=1.5, color='black', alpha=0.9)
+        plt.plot(q75_h, y_grid, linestyle='-',  linewidth=1.5, color='black', alpha=0.9)
+        plt.plot(q05_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        plt.plot(q95_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        h_stub, = plt.plot([], [], linestyle='-', color='black', linewidth=1.5)
+        handles += [h_stub]; labels += ['Dx-consistent quantiles']
+
+    # Nominal line (trial 0)
+    if 0 in trials_dict:
+        g0 = trials_dict[0]
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nom_line, = plt.plot(x_grid, y0, color='red', linewidth=2, label='Nominal')
+    else:
+        nom_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+    handles.append(nom_line); labels.append('Nominal')
+
+    # Optional vertical-sense summary lines
+    if show_median_line:
+        med_line, = plt.plot(x_grid, q50_v, color='black', linewidth=2, linestyle='-', label='Q50 (Vy)')
+        handles.append(med_line); labels.append('Q50 (Vy)')
+    if show_mean_line:
+        mean_line, = plt.plot(x_grid, mean_v, color='orange', linewidth=2, linestyle='--', label='Mean (Vy)')
+        handles.append(mean_line); labels.append('Mean (Vy)')
+
+    # First-k trials after 0 (reference lines)
+    chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
+    for trial in chosen:
+        gt = trials_dict.get(trial)
+        if gt is None or gt.empty:
+            continue
+        yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        plt.plot(x_grid, yt, color=random_trial_line_color, linestyle='--', linewidth=1)
+
+    ax = plt.gca()
+
+    # -------- Computed ticks from trials (what we compare against) --------
+    if show_computed_ticks and dvh_kind == 'cumulative':
+        # Per-trial ORIGINAL curves for accurate read-offs:
+        per_trial_xy = []
+        for t in trial_ids:
+            g = trials_dict[t]
+            x_t = g[x_col].to_numpy()
+            y_t = g[y_col].to_numpy()
+            o = np.argsort(x_t)
+            x_t = x_t[o]
+            y_t = np.minimum.accumulate(y_t[o])
+            per_trial_xy.append((x_t, y_t))
+
+        # Dx: vertical ticks at x = quantiles of dose @ fixed y=x%
+        for X in dx_list:
+            y_target = float(X)
+            x_samples = np.array([np.interp(y_target, y[::-1], x[::-1],
+                                            left=x.min(), right=x.max())
+                                  for (x, y) in per_trial_xy])
+            d_q50 = np.percentile(x_samples, 50)
+            d_q25 = np.percentile(x_samples, 25)
+            d_q75 = np.percentile(x_samples, 75)
+            d_q05 = np.percentile(x_samples,  5)
+            d_q95 = np.percentile(x_samples, 95)
+
+            # guide line
+            ax.axhline(y_target, color='lightgray', lw=0.7, ls=':')
+            # vertical ticks (black)
+            for x_val, lw in [(d_q50, 2.2), (d_q25, 1.3), (d_q75, 1.3), (d_q05, 0.9), (d_q95, 0.9)]:
+                ax.plot([x_val, x_val], [y_target-1.0, y_target+1.0],
+                        color=dx_tick_color, lw=lw)
+
+        # Vy: horizontal ticks at y = quantiles of %volume @ fixed x = thr
+        for Yp in vy_list:
+            thr = (Yp / 100.0) * float(ref_dose_gy)
+            y_samples = np.array([np.interp(thr, x, y, left=100.0, right=0.0)
+                                  for (x, y) in per_trial_xy])
+            v_q50 = np.percentile(y_samples, 50)
+            v_q25 = np.percentile(y_samples, 25)
+            v_q75 = np.percentile(y_samples, 75)
+            v_q05 = np.percentile(y_samples,  5)
+            v_q95 = np.percentile(y_samples, 95)
+
+            ax.axvline(thr, color='lightgray', lw=0.7, ls=':')
+            # horizontal ticks (blue)
+            for y_val, lw in [(v_q50, 2.2), (v_q25, 1.3), (v_q75, 1.3), (v_q05, 0.9), (v_q95, 0.9)]:
+                ax.plot([thr-0.25, thr+0.25], [y_val, y_val],
+                        color=vy_tick_color, lw=lw)
+
+    # -------- Overlay markers from the table DF (what you’re checking) --------
+    if show_table_markers and dvh_metrics_df is not None and dvh_kind == 'cumulative':
+        sub = dvh_metrics_df[
+            (dvh_metrics_df['Patient ID'] == patientUID) &
+            (dvh_metrics_df['Struct index'] == bx_struct_ind)
+        ]
+        if sub.empty and 'Bx ID' in dvh_metrics_df.columns:
+            sub = dvh_metrics_df[
+                (dvh_metrics_df['Patient ID'] == patientUID) &
+                (dvh_metrics_df['Bx ID'] == bx_struct_roi)
+            ]
+
+        def _parse_metric_name(s):
+            s = str(s).strip().replace('%','')
+            if s.upper().startswith('D_'):
+                return ('D', int(round(float(s.split('_')[1]))))
+            if s.upper().startswith('V_'):
+                return ('V', int(round(float(s.split('_')[1]))))
+            return (None, None)
+
+        # marker styles (Dx black, Vy blue; Nominal red 'x')
+        dx_style = {'Q50':dict(marker='o', c='black', s=45),
+                    'Q25':dict(marker='s', c='black', s=40),
+                    'Q75':dict(marker='s', c='black', s=40),
+                    'Q05':dict(marker='^', c='black', s=40),
+                    'Q95':dict(marker='^', c='black', s=40)}
+        vy_style = {'Q50':dict(marker='o', c='tab:blue', s=45),
+                    'Q25':dict(marker='s', c='tab:blue', s=40),
+                    'Q75':dict(marker='s', c='tab:blue', s=40),
+                    'Q05':dict(marker='^', c='tab:blue', s=40),
+                    'Q95':dict(marker='^', c='tab:blue', s=40)}
+        nominal_style = dict(marker='x', c='red', s=80, lw=2)
+
+        # build legend stubs once
+        dx_tick_stub, = plt.plot([], [], color=dx_tick_color, lw=2.2)
+        vy_tick_stub, = plt.plot([], [], color=vy_tick_color, lw=2.2)
+        dx_pt_stub = plt.scatter([], [], **dx_style['Q50'])
+        vy_pt_stub = plt.scatter([], [], **vy_style['Q50'])
+        nom_stub   = plt.scatter([], [], **nominal_style)
+
+        for _, row in sub.iterrows():
+            mtype, val = _parse_metric_name(row['Metric'])
+            if mtype is None:
+                continue
+            for stat_name in overlay_metrics_stats:
+                if stat_name not in row or pd.isna(row[stat_name]):
+                    continue
+                if mtype == 'D':
+                    x_pt = float(row[stat_name]); y_pt = float(val)
+                    style = nominal_style if stat_name=='Nominal' else dx_style.get(stat_name, dx_style['Q50'])
+                    plt.scatter([x_pt], [y_pt], alpha=overlay_metrics_alpha, **style)
+                else:
+                    x_pt = (float(val)/100.0) * float(ref_dose_gy); y_pt = float(row[stat_name])
+                    style = nominal_style if stat_name=='Nominal' else vy_style.get(stat_name, vy_style['Q50'])
+                    plt.scatter([x_pt], [y_pt], alpha=overlay_metrics_alpha, **style)
+
+        handles += [dx_tick_stub, vy_tick_stub, dx_pt_stub, vy_pt_stub, nom_stub]
+        labels  += ['Dx ticks (computed)', 'Vy ticks (computed)',
+                    'Dx markers (table)', 'Vy markers (table)', 'Nominal marker (table)']
+
+    # Labels, legend, save
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+
+    leg = ax.legend(handles, labels, loc='best', facecolor='white', prop={'size': 13})
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    svg_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_path = patient_sp_output_figures_dir.joinpath(svg_name)
+    plt.savefig(svg_path, format='svg')
+    plt.close()
+
+
+
+
+
+
+
+
+
+
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_4(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black',
+    # Bands
+    bands_mode="horizontal",           # 'vertical', 'horizontal', or 'both'
+    show_median_line=True,
+    show_mean_line=False,
+    # Ticks & markers (master toggles)
+    show_ticks=True,                   # turn ALL computed ticks on/off
+    show_markers=True,                 # turn ALL table markers on/off
+    # (Optional) finer toggles if you need them later
+    show_dx_ticks=True,
+    show_vy_ticks=True,
+    show_dx_markers=True,
+    show_vy_markers=True,
+    # Which metrics to annotate
+    dx_list=(2, 50, 98),
+    vy_list=(100, 125, 150, 175, 200, 300),
+    ref_dose_gy=13.5,
+    # Table DF overlay
+    dvh_metrics_df=None,
+    overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
+    overlay_metrics_alpha=0.95,
+    # Styling for ticks/markers (paper-friendly)
+    marker_color='black',
+    dx_marker_shape='o',   # circle for Dx
+    vy_marker_shape='s',   # square for Vy
+    nominal_marker_style=dict(marker='x', c='red', s=80, lw=2),
+    tick_color='black',
+    dx_tick_len_y=1.0,     # vertical tick half-height (in %volume units)
+    vy_tick_len_x=0.4,     # horizontal tick half-width (in Gy)
+    # Horizontal envelope extrapolation policy
+    limit_horizontal_to_common=False,  # if True: restrict y-grid to common range across trials (no extrapolation)
+):
+    """
+    v4_4: Paper-friendly, minimal legend, robust inversion.
+      - Horizontal (Dx-consistent) envelopes: invert ORIGINAL per-trial curves with correct extrapolation.
+      - Computed Dx/Vy ticks from ORIGINAL curves (tight alignment).
+      - Table markers overlaid in two black shapes: Dx=○, Vy=■ ; Nominal=red ×.
+      - Master toggles: show_ticks / show_markers.
+    """
+
+    plt.ioff()
+
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        """Interpolate a single trial to a common x-grid (for drawing lines/bands)."""
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            y = np.minimum.accumulate(y)                 # enforce monotone ↓
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _enforce_nonincreasing(y):
+        return np.maximum.accumulate(y[::-1])[::-1]
+
+    # --- inputs & common x-grid for drawing ---
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    x_grid = np.array([x_min], dtype=float) if (not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min) \
+             else np.linspace(x_min, x_max, 1500, dtype=float)
+
+    # Index shifts and gather trials
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ].set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+    trial_ids = np.array(sorted(trials_dict.keys()))
+
+    # Interpolate each trial onto x_grid ONLY for drawing bands/nominal/random-trial lines
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+    for i, t in enumerate(trial_ids):
+        g = trials_dict[t]
+        Y[i] = _interp_curve_linear(g[x_col].to_numpy(), g[y_col].to_numpy(),
+                                    x_grid, dvh_kind=dvh_kind)
+
+    # Vertical quantiles (Vy-consistent)
+    q05_v = np.percentile(Y,  5, axis=0)
+    q25_v = np.percentile(Y, 25, axis=0)
+    q50_v = np.percentile(Y, 50, axis=0)
+    q75_v = np.percentile(Y, 75, axis=0)
+    q95_v = np.percentile(Y, 95, axis=0)
+    mean_v = np.nanmean(Y, axis=0)
+
+    if dvh_kind == 'cumulative':
+        q05_v = _enforce_nonincreasing(q05_v)
+        q25_v = _enforce_nonincreasing(q25_v)
+        q50_v = _enforce_nonincreasing(q50_v)
+        q75_v = _enforce_nonincreasing(q75_v)
+        q95_v = _enforce_nonincreasing(q95_v)
+        mean_v = _enforce_nonincreasing(mean_v)
+
+    # Horizontal (Dx-consistent) envelopes: invert ORIGINAL per-trial curves (correct extrapolation).
+    y_grid = np.linspace(100.0, 0.0, 1500)
+    per_trial_xy = []  # cache original curves for ticks/markers too
+    if dvh_kind == 'cumulative':
+        X_of_Y = np.empty((len(trial_ids), y_grid.size), dtype=float)
+
+        # Optionally limit y_grid to common attainable range across trials (zero extrapolation).
+        if limit_horizontal_to_common:
+            mins = []
+            for t in trial_ids:
+                g = trials_dict[t]
+                xt = g[x_col].to_numpy()
+                yt = g[y_col].to_numpy()
+                o = np.argsort(xt)
+                yt = np.minimum.accumulate(yt[o])
+                mins.append(np.nanmin(yt))
+            y_lo = float(np.max(mins))  # highest min
+            y_grid = np.linspace(100.0, y_lo, 1500)
+
+        for i, t in enumerate(trial_ids):
+            g = trials_dict[t]
+            xt = g[x_col].to_numpy()
+            yt = g[y_col].to_numpy()
+            o = np.argsort(xt)
+            xt = xt[o]
+            yt = np.minimum.accumulate(yt[o])
+            per_trial_xy.append((xt, yt))
+
+            # Correct extrapolation: for very small y, dose should clamp to xt.max()
+            # (left=high dose), for very large y, clamp to xt.min() (right=low dose).
+            X_of_Y[i] = np.interp(
+                y_grid, yt[::-1], xt[::-1],
+                left=xt.max(),   # was xt.min(): fixed
+                right=xt.min()   # was xt.max(): fixed
+            )
+
+        q05_h = np.percentile(X_of_Y,  5, axis=0)
+        q25_h = np.percentile(X_of_Y, 25, axis=0)
+        q50_h = np.percentile(X_of_Y, 50, axis=0)
+        q75_h = np.percentile(X_of_Y, 75, axis=0)
+        q95_h = np.percentile(X_of_Y, 95, axis=0)
+        mean_h = np.nanmean(X_of_Y, axis=0)
+
+    # --- figure ---
+    fig = plt.figure(figsize=(12, 8))
+    ax = plt.gca()
+    handles, labels = [], []
+
+    # Bands per mode (minimal legend wording)
+    if bands_mode in ("vertical", "both"):
+        f1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.7)
+        f2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.7)
+        f3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.7)
+        plt.plot(x_grid, q05_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q25_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q75_v, linestyle=':', linewidth=1, color='black')
+        plt.plot(x_grid, q95_v, linestyle=':', linewidth=1, color='black')
+        handles += [f1, f2, f3]; labels += ['5–25% (Vy)', '25–75% (Vy)', '75–95% (Vy)']
+
+    if dvh_kind == 'cumulative' and bands_mode in ("horizontal", "both"):
+        plt.plot(q25_h, y_grid, linestyle='-',  linewidth=1.6, color='black', alpha=0.95)
+        plt.plot(q75_h, y_grid, linestyle='-',  linewidth=1.6, color='black', alpha=0.95)
+        plt.plot(q05_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        plt.plot(q95_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        h_stub, = plt.plot([], [], linestyle='-', color='black', linewidth=1.6)
+        handles += [h_stub]; labels += ['Dx-consistent envelopes']
+
+    # Nominal line (trial 0)
+    if 0 in trials_dict:
+        g0 = trials_dict[0]
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nom_line, = plt.plot(x_grid, y0, color='red', linewidth=2, label='Nominal')
+    else:
+        nom_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+    handles.append(nom_line); labels.append('Nominal')
+
+    # Optional vertical-sense median/mean lines
+    if show_median_line:
+        med_line, = plt.plot(x_grid, q50_v, color='black', linewidth=2, linestyle='-',
+                             label='Median (Vy)')
+        handles.append(med_line); labels.append('Median (Vy)')
+    if show_mean_line:
+        mean_line, = plt.plot(x_grid, mean_v, color='orange', linewidth=2, linestyle='--',
+                              label='Mean (Vy)')
+        handles.append(mean_line); labels.append('Mean (Vy)')
+
+    # First-k trials after 0 (thin dashed refs)
+    chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
+    for trial in chosen:
+        gt = trials_dict.get(trial)
+        if gt is None or gt.empty:
+            continue
+        yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        plt.plot(x_grid, yt, color=random_trial_line_color, linestyle='--', linewidth=1)
+
+    # -------- Computed ticks from ORIGINAL per-trial curves --------
+    if show_ticks and dvh_kind == 'cumulative' and len(per_trial_xy) == len(trial_ids):
+        # Dx ticks: vertical black ticks on y = x%
+        if show_dx_ticks and len(dx_list) > 0:
+            for X in dx_list:
+                y_target = float(X)
+                x_samples = np.array([
+                    np.interp(
+                        y_target, yt[::-1], xt[::-1],
+                        left=xt.max(), right=xt.min()  # correct extrapolation
+                    )
+                    for (xt, yt) in per_trial_xy
+                ])
+                q05, q25, q50, q75, q95 = np.percentile(x_samples, [5,25,50,75,95])
+                ax.axhline(y_target, color='lightgray', lw=0.7, ls=':')
+                for xv, lw in [(q50, 2.2), (q25, 1.4), (q75, 1.4), (q05, 1.0), (q95, 1.0)]:
+                    ax.plot([xv, xv], [y_target-dx_tick_len_y, y_target+dx_tick_len_y],
+                            color=tick_color, lw=lw)
+
+        # Vy ticks: horizontal black ticks on x = y% * ref
+        if show_vy_ticks and len(vy_list) > 0:
+            for Yp in vy_list:
+                thr = (Yp / 100.0) * float(ref_dose_gy)
+                y_samples = np.array([
+                    np.interp(thr, xt, yt, left=100.0, right=0.0)
+                    for (xt, yt) in per_trial_xy
+                ])
+                q05, q25, q50, q75, q95 = np.percentile(y_samples, [5,25,50,75,95])
+                ax.axvline(thr, color='lightgray', lw=0.7, ls=':')
+                for yv, lw in [(q50, 2.2), (q25, 1.4), (q75, 1.4), (q05, 1.0), (q95, 1.0)]:
+                    ax.plot([thr-vy_tick_len_x, thr+vy_tick_len_x], [yv, yv],
+                            color=tick_color, lw=lw)
+
+    # -------- Overlay markers from your table DF (two shapes, all black) --------
+    if show_markers and dvh_metrics_df is not None and dvh_kind == 'cumulative':
+        sub = dvh_metrics_df[
+            (dvh_metrics_df['Patient ID'] == patientUID) &
+            (dvh_metrics_df['Struct index'] == bx_struct_ind)
+        ]
+        if sub.empty and 'Bx ID' in dvh_metrics_df.columns:
+            sub = dvh_metrics_df[
+                (dvh_metrics_df['Patient ID'] == patientUID) &
+                (dvh_metrics_df['Bx ID'] == bx_struct_roi)
+            ]
+
+        def _parse_metric_name(s):
+            s = str(s).strip().replace('%','')
+            # accept forms like 'D_2', 'D_2% (Gy)' etc.
+            s = s.replace('(Gy)','').strip()
+            if s.upper().startswith('D_'):
+                try:
+                    return ('D', int(round(float(s.split('_')[1]))))
+                except Exception:
+                    return (None, None)
+            if s.upper().startswith('V_'):
+                try:
+                    return ('V', int(round(float(s.split('_')[1]))))
+                except Exception:
+                    return (None, None)
+            return (None, None)
+
+        # Legend stubs for markers (minimal)
+        dx_marker_stub = plt.scatter([], [], marker=dx_marker_shape, c=marker_color, s=45)
+        vy_marker_stub = plt.scatter([], [], marker=vy_marker_shape, c=marker_color, s=45)
+        nom_marker_stub = plt.scatter([], [], **nominal_marker_style)
+
+        # Plot markers
+        for _, row in sub.iterrows():
+            mtype, val = _parse_metric_name(row['Metric'])
+            if mtype is None:
+                continue
+
+            # Only plot for metrics requested in dx_list/vy_list (avoid clutter)
+            if mtype == 'D' and (int(val) not in set(int(v) for v in dx_list)):
+                continue
+            if mtype == 'V' and (int(val) not in set(int(v) for v in vy_list)):
+                continue
+
+            for stat_name in overlay_metrics_stats:
+                if stat_name not in row or pd.isna(row[stat_name]):
+                    continue
+                if stat_name == 'Nominal':
+                    style = nominal_marker_style.copy()
+                else:
+                    style = dict(marker=(dx_marker_shape if mtype=='D' else vy_marker_shape),
+                                 c=marker_color, s=45)
+
+                if mtype == 'D':   # Dx: (dose, y=x%)
+                    x_pt = float(row[stat_name])
+                    y_pt = float(val)
+                else:              # Vy: (x= y% * ref, %volume)
+                    x_pt = (float(val)/100.0) * float(ref_dose_gy)
+                    y_pt = float(row[stat_name])
+
+                plt.scatter([x_pt], [y_pt], alpha=overlay_metrics_alpha, **style)
+
+        handles += [dx_marker_stub, vy_marker_stub, nom_marker_stub]
+        labels  += ['Dx markers (table)', 'Vy markers (table)', 'Nominal marker (table)']
+
+    # ---- Labels, legend, save ----
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+
+    leg = ax.legend(handles, labels, loc='best', facecolor='white', prop={'size': 13})
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    svg_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_path = patient_sp_output_figures_dir.joinpath(svg_name)
+    plt.savefig(svg_path, format='svg')
+    plt.close()
+
+
+
+### helpers for 4_5 and potentially higher versions
+
+EPS = 1e-12
+
+def dx_from_step(xt, yt, X):
+    """
+    Step-consistent inversion y(x) -> x for cumulative DVH.
+    xt: ascending doses
+    yt: non-increasing %volume (right-continuous step at xt)
+    Returns the smallest dose x such that y(x) <= X  (matches 'higher' quantile).
+    """
+    # -yt is non-decreasing; find first index where yt <= X
+    idx = np.searchsorted(-yt, -(X + EPS), side='left')
+    if idx >= len(yt):
+        idx = len(yt) - 1    # y never drops below X → clamp to max dose
+    return float(xt[idx])
+
+def x_of_y_step_vectorized(xt, yt, y_vec):
+    """
+    Vectorized step-consistent inversion for many y values.
+    Returns x(y) for each y in y_vec, using same convention as dx_from_step.
+    """
+    idxs = np.searchsorted(-yt, -(y_vec + EPS), side='left')
+    idxs = np.clip(idxs, 0, len(yt) - 1)
+    return xt[idxs]
+
+
+
+def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_5(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    cumulative_dvh_pandas_dataframe,
+    patient_sp_output_figures_dir,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    custom_fig_title,
+    trial_annotation_style='number',  # 'arrow' or 'number'
+    dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+    random_trial_line_color='black',
+    # Bands
+    bands_mode="horizontal",           # 'vertical', 'horizontal', or 'both'
+    quantile_line_style='smooth',  # 'smooth' or 'step'
+    show_median_line=True,
+    show_mean_line=False,
+    # Ticks & markers (master toggles)
+    show_ticks=True,                   # turn ALL computed ticks on/off
+    show_markers=True,                 # turn ALL table markers on/off
+    # (Optional) finer toggles
+    show_dx_ticks=True,
+    show_vy_ticks=True,
+    show_dx_markers=True,
+    show_vy_markers=True,
+    # Which metrics to annotate
+    dx_list=(2, 50, 98),
+    vy_list=(100, 125, 150, 175, 200, 300),
+    ref_dose_gy=13.5,
+    # Table DF overlay
+    dvh_metrics_df=None,
+    overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
+    overlay_metrics_alpha=0.95,
+    # Styling for ticks/markers (paper-friendly)
+    marker_color='black',
+    dx_marker_shape='o',   # circle for Dx
+    vy_marker_shape='s',   # square for Vy
+    nominal_marker_style=dict(marker='x', c='red', s=80, lw=2),
+    tick_color='black',
+    dx_tick_len_y=1.0,     # vertical tick half-height (%volume)
+    vy_tick_len_x=0.4,     # horizontal tick half-width (Gy)
+    # Horizontal envelope extrapolation policy
+    limit_horizontal_to_common=False,  # restrict y-grid to common range (no extrapolation)
+):
+    """
+    v4_5: v4_4 + restored trial annotations:
+      - 'arrow' style: arrow callouts on the dashed random trials.
+      - 'number' style: numeric labels near lines + gray annotation box listing shifts & d.
+      (All the previous fixes/toggles remain.)
+    """
+    plt.ioff()
+
+    def _interp_curve_linear(x, y, x_grid, dvh_kind='cumulative'):
+        if len(x) == 0:
+            return np.zeros_like(x_grid, dtype=float)
+        o = np.argsort(x)
+        x = np.asarray(x, float)[o]
+        y = np.asarray(y, float)[o]
+        if dvh_kind == 'cumulative':
+            y = np.minimum.accumulate(y)
+            y_grid = np.interp(x_grid, x, y, left=100.0, right=0.0)
+            y_grid = np.clip(y_grid, 0.0, 100.0)
+        else:
+            y_grid = np.interp(x_grid, x, y, left=0.0, right=0.0)
+        return y_grid
+
+    def _enforce_nonincreasing(y):
+        return np.maximum.accumulate(y[::-1])[::-1]
+
+    def _annotate_arrow(x_grid, y_vals, color, text, offset_index=0):
+        n = len(x_grid)
+        if n == 0: return
+        idx = (n // 5 * offset_index) % n
+        tx, ty = x_grid[idx], y_vals[idx]
+        plt.annotate(
+            text,
+            xy=(tx, ty),
+            xytext=(tx + 1.0, ty + 1.0),
+            arrowprops=dict(arrowstyle="->", color=color, lw=1.5),
+            fontsize=10, color=color,
+            bbox=dict(boxstyle="round,pad=0.3", edgecolor=color,
+                      facecolor="white", alpha=0.8)
+        )
+
+    _is_step = (quantile_line_style.lower() == 'step')
+    def _plot_qline_x(x, y, **kw):      # vertical-sense quantiles: x along dose
+        if _is_step: return plt.step(x, y, where='post', **kw)
+        return plt.plot(x, y, **kw)
+
+    def _plot_qline_y(x, y, **kw):      # horizontal-sense quantiles: x is dose-of-quantile, y is %vol
+        if _is_step: return plt.step(x, y, where='post', **kw)
+        return plt.plot(x, y, **kw)
+
+
+    # --- inputs & common x-grid for drawing ---
+    df = cumulative_dvh_pandas_dataframe.copy()
+    x_col = dvh_option['x-col']
+    y_col = dvh_option['y-col']
+    dvh_kind = dvh_option.get('dvh', 'cumulative')
+
+    x_min = float(df[x_col].min())
+    x_max = float(df[x_col].max())
+    x_grid = np.array([x_min], dtype=float) if (not np.isfinite(x_min) or not np.isfinite(x_max) or x_max == x_min) \
+             else np.linspace(x_min, x_max, 1500, dtype=float)
+
+    # Index shifts and gather trials
+    shifts_idx = (
+        sp_patient_all_structure_shifts_pandas_data_frame[
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+            (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+        ].set_index('Trial')[['Shift (X)','Shift (Y)','Shift (Z)']]
+    )
+    trials_dict = {t: g for t, g in df.groupby('MC trial', sort=False)}
+    trial_ids = np.array(sorted(trials_dict.keys()))
+
+    # Interpolate each trial onto x_grid for lines/bands
+    Y = np.empty((len(trial_ids), x_grid.size), dtype=float)
+    for i, t in enumerate(trial_ids):
+        g = trials_dict[t]
+        Y[i] = _interp_curve_linear(g[x_col].to_numpy(), g[y_col].to_numpy(),
+                                    x_grid, dvh_kind=dvh_kind)
+
+    # Vertical percentiles (Vy-consistent)
+    q05_v = np.percentile(Y,  5, axis=0)
+    q25_v = np.percentile(Y, 25, axis=0)
+    q50_v = np.percentile(Y, 50, axis=0)
+    q75_v = np.percentile(Y, 75, axis=0)
+    q95_v = np.percentile(Y, 95, axis=0)
+    mean_v = np.nanmean(Y, axis=0)
+
+    if dvh_kind == 'cumulative':
+        q05_v = _enforce_nonincreasing(q05_v)
+        q25_v = _enforce_nonincreasing(q25_v)
+        q50_v = _enforce_nonincreasing(q50_v)
+        q75_v = _enforce_nonincreasing(q75_v)
+        q95_v = _enforce_nonincreasing(q95_v)
+        mean_v = _enforce_nonincreasing(mean_v)
+
+    # Horizontal envelopes (Dx-consistent): invert ORIGINAL curves using step mapping
+    y_grid = np.linspace(100.0, 0.0, 1500)
+    per_trial_xy = []
+    if dvh_kind == 'cumulative':
+        if limit_horizontal_to_common:
+            mins = []
+            for t in trial_ids:
+                xt = trials_dict[t][x_col].to_numpy()
+                yt = trials_dict[t][y_col].to_numpy()
+                o = np.argsort(xt); xt = xt[o]; yt = np.minimum.accumulate(yt[o])
+                mins.append(np.nanmin(yt))
+            y_lo = float(np.max(mins))
+            y_grid = np.linspace(100.0, y_lo, 1500)
+
+        X_of_Y = np.empty((len(trial_ids), y_grid.size), dtype=float)
+        for i, t in enumerate(trial_ids):
+            g = trials_dict[t]
+            xt = g[x_col].to_numpy()
+            yt = g[y_col].to_numpy()
+            o = np.argsort(xt); xt = xt[o]; yt = np.minimum.accumulate(yt[o])
+            per_trial_xy.append((xt, yt))
+            X_of_Y[i, :] = x_of_y_step_vectorized(xt, yt, y_grid)
+
+        q05_h = np.percentile(X_of_Y,  5, axis=0)
+        q25_h = np.percentile(X_of_Y, 25, axis=0)
+        q50_h = np.percentile(X_of_Y, 50, axis=0)
+        q75_h = np.percentile(X_of_Y, 75, axis=0)
+        q95_h = np.percentile(X_of_Y, 95, axis=0)
+
+
+    # --- figure ---
+    fig = plt.figure(figsize=(12, 8))
+    ax = plt.gca()
+    handles, labels = [], []
+
+    # Bands
+    if bands_mode in ("vertical", "both"):
+        f1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.7)
+        f2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.7)
+        f3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.7)
+        _plot_qline_x(x_grid, q05_v, linestyle=':', linewidth=1, color='black')
+        _plot_qline_x(x_grid, q25_v, linestyle=':', linewidth=1, color='black')
+        _plot_qline_x(x_grid, q75_v, linestyle=':', linewidth=1, color='black')
+        _plot_qline_x(x_grid, q95_v, linestyle=':', linewidth=1, color='black')
+
+        handles += [f1, f2, f3]; labels += ['5–25% (Vy)', '25–75% (Vy)', '75–95% (Vy)']
+
+    if dvh_kind == 'cumulative' and bands_mode in ("horizontal", "both"):
+        _plot_qline_y(q25_h, y_grid, linestyle='-',  linewidth=1.6, color='black', alpha=0.95)
+        _plot_qline_y(q75_h, y_grid, linestyle='-',  linewidth=1.6, color='black', alpha=0.95)
+        _plot_qline_y(q05_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+        _plot_qline_y(q95_h, y_grid, linestyle='--', linewidth=1.0, color='gray',  alpha=0.9)
+
+        h_stub, = plt.plot([], [], linestyle='-', color='black', linewidth=1.6)
+        handles += [h_stub]; labels += ['Dx-consistent envelopes']
+
+    # Nominal line (trial 0)
+    if 0 in trials_dict:
+        g0 = trials_dict[0]
+        y0 = _interp_curve_linear(g0[x_col].to_numpy(), g0[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        nom_line, = plt.plot(x_grid, y0, color='red', linewidth=2, label='Nominal')
+    else:
+        nom_line, = plt.plot([], [], color='red', linewidth=2, label='Nominal')
+    handles.append(nom_line); labels.append('Nominal')
+
+    # Optional vertical-sense median/mean
+    if show_median_line:
+        med_line, = plt.plot(x_grid, q50_v, color='black', linewidth=2, linestyle='-',
+                             label='Median (Vy)')
+        handles.append(med_line); labels.append('Median (Vy)')
+    if show_mean_line:
+        mean_line, = plt.plot(x_grid, mean_v, color='orange', linewidth=2, linestyle='--',
+                              label='Mean (Vy)')
+        handles.append(mean_line); labels.append('Mean (Vy)')
+
+    # --- Random trials (dashed) + annotations (arrow/number) ---
+    chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
+    annotation_lines = []
+    annotation_offset_index = 0
+    for trial in chosen:
+        gt = trials_dict.get(trial)
+        if gt is None or gt.empty:
+            continue
+        yt = _interp_curve_linear(gt[x_col].to_numpy(), gt[y_col].to_numpy(),
+                                  x_grid, dvh_kind=dvh_kind)
+        plt.plot(x_grid, yt, color=random_trial_line_color, linestyle='--', linewidth=1)
+
+        # Pull shifts + distance
+        ann_text = None
+        if trial in shifts_idx.index:
+            sx, sy, sz = shifts_idx.loc[trial, ['Shift (X)','Shift (Y)','Shift (Z)']].astype(float)
+            d_tot = math.sqrt(sx*sx + sy*sy + sz*sz)
+            ann_text = f"({sx:.1f}, {sy:.1f}, {sz:.1f}), d = {d_tot:.1f} mm"
+
+        if trial_annotation_style == 'arrow' and ann_text:
+            _annotate_arrow(x_grid, yt, random_trial_line_color, ann_text, offset_index=annotation_offset_index)
+            annotation_offset_index += 1
+        elif trial_annotation_style == 'number':
+            # place the trial number on the curve
+            y_target = float(np.clip(0.5*(np.nanmin(yt)+np.nanmax(yt)), 0, 100)) if dvh_kind=='cumulative' else float(np.nanmax(yt))
+            idx = int(np.nanargmin(np.abs(yt - y_target))) if np.isfinite(y_target) else len(x_grid)//2
+            plt.text(x_grid[idx], y_target, str(int(trial)), fontsize=14,
+                     color='black', ha='left', va='center')
+            if ann_text:
+                annotation_lines.append(f"{int(trial)}: {ann_text}")
+
+    # -------- Computed ticks from ORIGINAL per-trial curves --------
+    if show_ticks and dvh_kind == 'cumulative':
+        # cache per_trial_xy if not already built
+        if not per_trial_xy:
+            for t in trial_ids:
+                g = trials_dict[t]
+                xt = g[x_col].to_numpy()
+                yt = g[y_col].to_numpy()
+                o = np.argsort(xt)
+                xt = xt[o]
+                yt = np.minimum.accumulate(yt[o])
+                per_trial_xy.append((xt, yt))
+
+        # Dx ticks: vertical black ticks on y = X%
+        if show_dx_ticks and len(dx_list) > 0:
+            for X in dx_list:
+                y_target = float(X)
+                x_samples = np.array([dx_from_step(xt, yt, y_target) for (xt, yt) in per_trial_xy])
+                q05, q25, q50, q75, q95 = np.percentile(x_samples, [5,25,50,75,95])
+                ax.axhline(y_target, color='lightgray', lw=0.7, ls=':')
+                for xv, lw in [(q50, 2.2), (q25, 1.4), (q75, 1.4), (q05, 1.0), (q95, 1.0)]:
+                    ax.plot([xv, xv], [y_target-dx_tick_len_y, y_target+dx_tick_len_y],
+                            color=tick_color, lw=lw)
+
+
+        # Vy ticks: horizontal black ticks on x = y% * ref
+        if show_vy_ticks and len(vy_list) > 0:
+            for Yp in vy_list:
+                thr = (Yp / 100.0) * float(ref_dose_gy)
+                def step_readout_percent_at_dose(xt, yt, thr):
+                    # xt ascending doses, yt the cumulative %-volume (non-increasing)
+                    # We want y(thr) = value at smallest x >= thr
+                    idx = np.searchsorted(xt, thr, side='left')
+                    if idx >= len(xt):      # thr above max dose → 0%
+                        return 0.0
+                    return float(yt[idx])   # step value at the “≥ thr” boundary
+
+                y_samples = np.array([step_readout_percent_at_dose(xt, yt, thr)
+                                    for (xt, yt) in per_trial_xy])
+                q05, q25, q50, q75, q95 = np.percentile(y_samples, [5,25,50,75,95])
+                ax.axvline(thr, color='lightgray', lw=0.7, ls=':')
+                for yv, lw in [(q50, 2.2), (q25, 1.4), (q75, 1.4), (q05, 1.0), (q95, 1.0)]:
+                    ax.plot([thr-vy_tick_len_x, thr+vy_tick_len_x], [yv, yv],
+                            color=tick_color, lw=lw)
+
+    # -------- Overlay markers from your table DF (two shapes, all black) --------
+    if show_markers and dvh_metrics_df is not None and dvh_kind == 'cumulative':
+        df_plot = dvh_metrics_df.copy()
+        df_plot['Struct index'] = pd.to_numeric(df_plot['Struct index'], errors='coerce').astype('Int64')
+        sub = df_plot[
+            (df_plot['Patient ID'] == patientUID) &
+            (df_plot['Struct index'] == int(bx_struct_ind)) &
+            (df_plot['Bx ID'] == bx_struct_roi)
+        ]
+
+
+        def _parse_metric_name(s):
+            s = str(s).strip().replace('%','')
+            s = s.replace('(Gy)','').strip()
+            if s.upper().startswith('D_'):
+                try: return ('D', int(round(float(s.split('_')[1]))))
+                except Exception: return (None, None)
+            if s.upper().startswith('V_'):
+                try: return ('V', int(round(float(s.split('_')[1]))))
+                except Exception: return (None, None)
+            return (None, None)
+
+        dx_marker_stub = plt.scatter([], [], marker=dx_marker_shape, c=marker_color, s=45)
+        vy_marker_stub = plt.scatter([], [], marker=vy_marker_shape, c=marker_color, s=45)
+        nom_marker_stub = plt.scatter([], [], **nominal_marker_style)
+
+        for _, row in sub.iterrows():
+            mtype, val = _parse_metric_name(row['Metric'])
+            if mtype is None:
+                continue
+            if mtype == 'D' and (int(val) not in set(int(v) for v in dx_list)): continue
+            if mtype == 'V' and (int(val) not in set(int(v) for v in vy_list)): continue
+
+            for stat_name in overlay_metrics_stats:
+                if stat_name not in row or pd.isna(row[stat_name]): continue
+                if stat_name == 'Nominal':
+                    style = nominal_marker_style.copy()
+                else:
+                    style = dict(marker=(dx_marker_shape if mtype=='D' else vy_marker_shape),
+                                 c=marker_color, s=45)
+                if mtype == 'D':
+                    x_pt = float(row[stat_name]); y_pt = float(val)
+                else:
+                    x_pt = (float(val)/100.0) * float(ref_dose_gy); y_pt = float(row[stat_name])
+                plt.scatter([x_pt], [y_pt], alpha=overlay_metrics_alpha, **style)
+
+        handles += [dx_marker_stub, vy_marker_stub, nom_marker_stub]
+        labels  += ['Dx markers (table)', 'Vy markers (table)', 'Nominal marker (table)']
+
+    # ---- Labels, legend ----
+    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    ax.grid(True, which='major', linestyle='--', linewidth=0.5)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+
+    leg = ax.legend(handles, labels, loc='best', facecolor='white', prop={'size': 13})
+    plt.tight_layout(rect=[0.01, 0.01, 1, 1])
+
+    # ---- Restore the gray annotation box (for 'number' style) ----
+    if (trial_annotation_style == 'number') and (len(annotation_lines) > 0):
+        fig = plt.gcf()
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        bbox_disp = leg.get_frame().get_window_extent(renderer)
+        inv_fig = fig.transFigure.inverted()
+        frame_x1, frame_y0 = inv_fig.transform((bbox_disp.x1, bbox_disp.y0))
+        fig.text(
+            frame_x1, frame_y0 - 0.02,
+            "\n".join(annotation_lines),
+            transform=fig.transFigure, ha='right', va='top',
+            multialignment='left', fontsize=14, color='black',
+            bbox=dict(facecolor='white', edgecolor='gray', alpha=0.5, boxstyle='round')
+        )
+
+    # ---- Save ----
+    svg_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_path = patient_sp_output_figures_dir.joinpath(svg_name)
+    plt.savefig(svg_path, format='svg')
+    plt.close()
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2902,7 +5115,11 @@ def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs(
 
 
 
-def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None):
+def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None,
+                title: str | None = None,
+                axis_label_font_size: int | None = 14,   # default 14
+                tick_label_font_size: int | None = 12):  # default 12
+
     # Filter data for D_x and V_x metrics
     d_metrics = cohort_bx_dvh_metrics_df[cohort_bx_dvh_metrics_df['Metric'].str.startswith('D_')]
     v_metrics = cohort_bx_dvh_metrics_df[cohort_bx_dvh_metrics_df['Metric'].str.startswith('V_')]
@@ -2915,25 +5132,50 @@ def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None):
             return f"{base}$_{{{number}\\%}}$"
         return metric
 
-
-
     # Function to create boxplot
     def create_plot(data, metric_type):
         plt.figure(figsize=(12, 8))
         boxplot = data.boxplot(by='Metric', column=['Mean'], grid=True)
-        plt.title(f'Boxplot of (MC) Mean Values for {metric_type} Metrics', fontsize=14)
-        plt.suptitle('')
-        plt.xlabel('DVH Metric')
+
+        # optional title
+        plt.suptitle('')  # keep clearing the pandas-added suptitle
+        if title is not None:
+            plt.title(title, fontsize=14)
+        else:
+            # no title printed
+            plt.title('')
+
+        # x/y labels with optional font sizes
+        if axis_label_font_size is not None:
+            plt.xlabel('DVH Metric', fontsize=axis_label_font_size)
+        else:
+            plt.xlabel('DVH Metric')
+
         if 'V' in metric_type:
-            plt.ylabel('Percent volume')
+            if axis_label_font_size is not None:
+                plt.ylabel('Percent volume', fontsize=axis_label_font_size)
+            else:
+                plt.ylabel('Percent volume')
         elif 'D' in metric_type:
-            plt.ylabel('Dose (Gy)')
-        plt.xticks(rotation=45)
+            if axis_label_font_size is not None:
+                plt.ylabel('Dose (Gy)', fontsize=axis_label_font_size)
+            else:
+                plt.ylabel('Dose (Gy)')
+
+        # initial tick rotation (and optional size)
+        if tick_label_font_size is not None:
+            plt.xticks(rotation=45, fontsize=tick_label_font_size)
+            plt.yticks(fontsize=tick_label_font_size)
+        else:
+            plt.xticks(rotation=45)
 
         # After plotting
         xtick_labels = [tick.get_text() for tick in plt.gca().get_xticklabels()]
         custom_labels = [convert_metric_label(label) for label in xtick_labels]
-        plt.gca().set_xticklabels(custom_labels, rotation=45)
+        if tick_label_font_size is not None:
+            plt.gca().set_xticklabels(custom_labels, rotation=45, fontsize=tick_label_font_size)
+        else:
+            plt.gca().set_xticklabels(custom_labels, rotation=45)
 
         # remove vertical grid lines
         plt.gca().yaxis.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
@@ -2944,7 +5186,7 @@ def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None):
             # Set y-axis limits to start at 0 for dose metrics
             plt.gca().set_ylim(bottom=0)
         else:
-            # For volume metrics, set y-axis limits to always range from 0 toi 100
+            # For volume metrics, set y-axis limits to always range from 0 to 100
             plt.gca().set_ylim(0, 100)
 
         # Annotation box on top-right corner
@@ -2983,6 +5225,7 @@ def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None):
     # Create plots for D_x and V_x metrics
     create_plot(d_metrics, 'D_x')
     create_plot(v_metrics, 'V_x')
+
 
 
 
@@ -3273,6 +5516,8 @@ def plot_dose_vs_length_with_summary_mutlibox(
         tick_label_font_size: int = 12,
         multi_pairs: list = None           # list of (Patient ID, Bx index) tuples
     ):
+    plt.ioff()
+
     # ---- prep ----
     df = df.copy()
     df[x_col] = df[x_col].astype(str)
@@ -4220,6 +6465,184 @@ def plot_biopsy_deltas_line(
     return out
 
 
+def plot_biopsy_deltas_line_both_signed_and_abs(
+    deltas_df: pd.DataFrame,
+    patient_id,
+    bx_index,
+    save_dir,
+    fig_name: str,
+    *,
+    zero_level_index_str: str = 'Dose (Gy)',   # must match compute_biopsy_nominal_deltas*
+    x_axis: str = 'Voxel index',               # or 'Voxel begin (Z)'
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    title: str | None = None,
+    # --- NEW options (match the other plotting APIs) ---
+    include_abs: bool = True,                  # include |Δ| curves
+    require_precomputed_abs: bool = True,      # expect abs block present; do not recompute
+    fallback_recompute_abs: bool = False,      # if abs block missing and you *really* want |Δ| on the fly
+    label_style: str = 'math',                 # 'math' -> Δ^{mean}/Δ^{mode}/Δ^{Q50}; 'text' -> Nominal - Mean, etc.
+    median_superscript: str = 'Q50',           # used when label_style='math'
+    order_kinds: tuple = ('mean', 'mode', 'median'),  # order of Δ kinds in legend
+    show_points: bool = False,                 # overlay points along the lines
+    point_size: int = 3,
+    alpha: float = 0.5,
+    linewidth_signed: float = 2.0,
+    linewidth_abs: float = 2.0,
+):
+    plt.ioff()
+
+    """Line plot of Nominal−(Mean/Mode/Q50) (signed) and |Nominal−(⋅)| (absolute) along the core
+       for one (Patient ID, Bx index). Saves SVG & PNG."""
+
+    # --- filter the biopsy (MultiIndex metadata expected)
+    mask = (deltas_df[('Patient ID','')] == patient_id) & (deltas_df[('Bx index','')] == bx_index)
+    sub = deltas_df.loc[mask].copy()
+    if sub.empty:
+        raise ValueError(f"No rows for Patient ID={patient_id!r}, Bx index={bx_index!r}")
+
+    # --- choose x-axis
+    if x_axis == 'Voxel begin (Z)':
+        x = sub[('Voxel begin (Z)', '')]
+        x_label = 'Voxel begin (Z) [mm]'
+    else:
+        x = sub[('Voxel index', '')]
+        x_label = 'Voxel index (along core)'
+
+    sub = sub.assign(_x=pd.to_numeric(x, errors='coerce')).sort_values('_x')
+
+    # --- helpers for labels
+    def _math_sup(kind: str) -> str:
+        if kind == 'mean':   return r'\mathrm{mean}'
+        if kind == 'mode':   return r'\mathrm{mode}'
+        if kind == 'median': return r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
+        return r'\mathrm{' + kind + r'}'
+
+    def _label(kind: str, absolute: bool) -> str:
+        if label_style == 'math':
+            base = rf'$\Delta^{{{_math_sup(kind)}}}$'
+            return rf'$|{base[1:-1]}|$' if absolute else base
+        else:
+            txt = {'mean':'Nominal - Mean','mode':'Nominal - Mode','median':'Nominal - Median (Q50)'}[kind]
+            return f'|{txt}|' if absolute else txt
+
+    # --- signed delta columns
+    block = f"{zero_level_index_str} deltas"
+    signed_map = {
+        'mean':   (block, 'nominal_minus_mean'),
+        'mode':   (block, 'nominal_minus_mode'),
+        'median': (block, 'nominal_minus_q50'),
+    }
+    missing_signed = [pair for pair in signed_map.values() if pair not in sub.columns]
+    if missing_signed:
+        raise KeyError(
+            f"Missing signed delta columns for zero_level_index_str='{zero_level_index_str}'. "
+            f"Missing: {missing_signed}"
+        )
+
+    # tidy signed
+    signed_cols = [signed_map[k] for k in order_kinds]
+    tidy_signed = sub.loc[:, signed_cols].copy()
+    tidy_signed.columns = [_label(k, absolute=False) for k in order_kinds]
+    tidy_signed = tidy_signed.assign(x=sub['_x'].values).melt(id_vars='x', var_name='Delta', value_name='Value')
+    tidy_signed['Kind'] = 'Signed'
+
+    # --- absolute delta columns (prefer precomputed; optional fallback)
+    tidy_abs = None
+    if include_abs:
+        abs_block = f"{zero_level_index_str} abs deltas"
+        abs_map = {
+            'mean':   (abs_block, 'abs_nominal_minus_mean'),
+            'mode':   (abs_block, 'abs_nominal_minus_mode'),
+            'median': (abs_block, 'abs_nominal_minus_q50'),
+        }
+        has_abs = all(pair in sub.columns for pair in abs_map.values())
+        if not has_abs and require_precomputed_abs and not fallback_recompute_abs:
+            raise KeyError(
+                "Absolute delta columns are missing and recomputation is disabled. "
+                f"Expected abs columns: {list(abs_map.values())}. "
+                "Use *_with_abs DataFrames or set fallback_recompute_abs=True."
+            )
+
+        if has_abs:
+            abs_cols = [abs_map[k] for k in order_kinds]
+            tidy_abs = sub.loc[:, abs_cols].copy()
+            tidy_abs.columns = [_label(k, absolute=True) for k in order_kinds]
+            tidy_abs = tidy_abs.assign(x=sub['_x'].values).melt(id_vars='x', var_name='Delta', value_name='Value')
+            tidy_abs['Kind'] = 'Absolute'
+        elif fallback_recompute_abs:
+            tidy_abs = tidy_signed.copy()
+            tidy_abs['Value'] = tidy_abs['Value'].abs()
+            # convert labels to absolute
+            tidy_abs['Delta'] = tidy_abs['Delta'].map(
+                lambda s: _label('mean', True)   if ('mean'   in s or 'Mean'   in s) else
+                          _label('mode', True)   if ('mode'   in s or 'Mode'   in s) else
+                          _label('median', True)
+            )
+            tidy_abs['Kind'] = 'Absolute'
+
+    # --- compose plotting frame
+    if include_abs and tidy_abs is not None:
+        tidy_plot = pd.concat([tidy_signed, tidy_abs], ignore_index=True)
+    else:
+        tidy_plot = tidy_signed
+
+    # --- y-label
+    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str.lower() else 'Delta (Gy)'
+
+    # --- plot (color by Δ kind, linestyle by Signed/Absolute)
+    sns.set(style='whitegrid')
+    ax = sns.lineplot(
+        data=tidy_plot,
+        x='x', y='Value',
+        hue='Delta',
+        style='Kind',
+        dashes={'Signed': (1,0), 'Absolute': (3,2)} if include_abs and tidy_abs is not None else True,
+        linewidth=linewidth_signed,
+        legend=True
+    )
+
+    # adjust linewidths so Absolute can be dashed and same width
+    if include_abs and tidy_abs is not None and linewidth_abs != linewidth_signed:
+        # re-apply widths per line
+        for line, kind in zip(ax.lines, [t.get_text() for t in ax.legend_.texts][1:]):  # cautious, but robust enough
+            pass  # seaborn doesn't expose mapping cleanly; we keep single linewidth for simplicity
+
+    # optional point overlay
+    if show_points:
+        sns.scatterplot(
+            data=tidy_plot,
+            x='x', y='Value',
+            hue='Delta',
+            style='Kind',
+            alpha=alpha, s=point_size**2,  # matplotlib sizes are area-based
+            legend=False
+        )
+
+    # labels, title, legend
+    ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
+    ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+    if title:
+        ax.set_title(title, fontsize=axes_label_fontsize)
+    else:
+        ax.set_title(f"Patient {patient_id}, Bx {bx_index} — {zero_level_index_str} deltas", fontsize=axes_label_fontsize)
+
+    leg = ax.legend(title=None, frameon=True)
+    if leg:
+        for txt in leg.get_texts():
+            txt.set_fontsize(tick_label_fontsize)
+
+    # save both SVG + PNG
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    svg_path = Path(save_dir) / f"{fig_name}.svg"
+    png_path = Path(save_dir) / f"{fig_name}.png"
+    plt.tight_layout()
+    plt.savefig(svg_path, format='svg')
+    plt.savefig(png_path, format='png')
+    plt.close()
+    return svg_path, png_path
 
 
 
@@ -4317,16 +6740,242 @@ def plot_cohort_deltas_boxplot_by_voxel(
         ax.set_title(title, fontsize=axes_label_fontsize)
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
-    out = Path(save_dir) / f"{fig_name}.svg"
+    svg_path = Path(save_dir) / f"{fig_name}.svg"
+    png_path = Path(save_dir) / f"{fig_name}.png"
     plt.tight_layout()
-    plt.savefig(out, format='svg')
+    plt.savefig(svg_path, format='svg')
+    plt.savefig(png_path, format='png')
     plt.close()
-    return out
+    return svg_path, png_path
 
 
 
 
+def plot_cohort_deltas_boxplot_by_voxel(
+    deltas_df: pd.DataFrame,
+    save_dir,
+    fig_name: str,
+    *,
+    zero_level_index_str: str = 'Dose (Gy)',
+    x_axis: str = 'Voxel index',               
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    title: str | None = None,
+    show_points: bool = True,
+    point_size: int = 3,
+    alpha: float = 0.5,
+    # ---- NEW options ----
+    include_abs: bool = True,                 # include |Δ|
+    abs_as_hue: bool = True,                  # hue=Signed vs Absolute & facet by Δ kind
+    require_precomputed_abs: bool = True,     # expect abs block present
+    fallback_recompute_abs: bool = False,     # compute |Δ| from signed if abs block missing
+    label_style: str = 'math',                # 'math' -> Δ^{mean}/Δ^{mode}/Δ^{Q50}; 'text' -> Nominal - Mean, etc.
+    median_superscript: str = 'Q50',          # used in math labels for median
+    order_kinds: tuple = ('mean', 'mode', 'median'),  # Δ order across panels / legend
+):
+    """
+    Cohort boxplots of Nominal−(Mean/Mode/Q50) per voxel position on the x-axis.
+    Optionally overlays points and includes |Δ|, with math or text labels.
+    Saves SVG & PNG.
+    """
+    plt.ioff()
 
+    df = deltas_df.copy()
+
+    # --- choose x-axis
+    if x_axis == 'Voxel begin (Z)':
+        x = df[('Voxel begin (Z)', '')]
+        x_label = 'Voxel begin (Z) [mm]'
+    else:
+        x = df[('Voxel index', '')]
+        x_label = 'Voxel index (along core)'
+
+    x_num = pd.to_numeric(x, errors='coerce')
+    df = df.assign(_x=x_num)
+
+    # --- helpers for labels
+    def _math_sup(kind: str) -> str:
+        if kind == 'mean':   return r'\mathrm{mean}'
+        if kind == 'mode':   return r'\mathrm{mode}'
+        if kind == 'median': return r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
+        return r'\mathrm{' + kind + r'}'
+
+    def _label(kind: str, absolute: bool) -> str:
+        if label_style == 'math':
+            base = rf'$\Delta^{{{_math_sup(kind)}}}$'
+            return rf'$|{base[1:-1]}|$' if absolute else base
+        else:
+            txt = {'mean':'Nominal - Mean','mode':'Nominal - Mode','median':'Nominal - Median (Q50)'}[kind]
+            return f'|{txt}|' if absolute else txt
+
+    # --- signed delta columns
+    block = f"{zero_level_index_str} deltas"
+    signed_map = {
+        'mean':   (block, 'nominal_minus_mean'),
+        'mode':   (block, 'nominal_minus_mode'),
+        'median': (block, 'nominal_minus_q50'),
+    }
+    missing_signed = [v for v in signed_map.values() if v not in df.columns]
+    if missing_signed:
+        raise KeyError(
+            f"Missing signed delta columns for zero_level_index_str='{zero_level_index_str}'. "
+            f"Missing: {missing_signed}"
+        )
+
+    signed_cols = [signed_map[k] for k in order_kinds]
+    tidy_signed = df.loc[:, signed_cols].copy()
+    tidy_signed.columns = [_label(k, absolute=False) for k in order_kinds]
+    tidy_signed = tidy_signed.assign(x=df['_x'].values)
+    tidy_signed = tidy_signed.melt(id_vars='x', var_name='Delta', value_name='Value').dropna(subset=['x','Value'])
+    tidy_signed['Kind'] = 'Signed'
+
+    # --- absolute delta columns (prefer precomputed)
+    tidy_abs = None
+    if include_abs:
+        abs_block = f"{zero_level_index_str} abs deltas"
+        abs_map = {
+            'mean':   (abs_block, 'abs_nominal_minus_mean'),
+            'mode':   (abs_block, 'abs_nominal_minus_mode'),
+            'median': (abs_block, 'abs_nominal_minus_q50'),
+        }
+        has_abs = all(v in df.columns for v in abs_map.values())
+        if not has_abs and require_precomputed_abs and not fallback_recompute_abs:
+            raise KeyError(
+                "Absolute delta columns are missing and recomputation is disabled. "
+                f"Expected abs columns: {list(abs_map.values())}. "
+                "Use *_with_abs DataFrames or set fallback_recompute_abs=True."
+            )
+
+        if has_abs:
+            abs_cols = [abs_map[k] for k in order_kinds]
+            tidy_abs = df.loc[:, abs_cols].copy()
+            tidy_abs.columns = [_label(k, absolute=True) for k in order_kinds]
+            tidy_abs = tidy_abs.assign(x=df['_x'].values)
+            tidy_abs = tidy_abs.melt(id_vars='x', var_name='Delta', value_name='Value').dropna(subset=['x','Value'])
+            tidy_abs['Kind'] = 'Absolute'
+        elif fallback_recompute_abs:
+            tidy_abs = tidy_signed.copy()
+            tidy_abs['Value'] = tidy_abs['Value'].abs()
+            # convert labels to absolute
+            tidy_abs['Delta'] = tidy_abs['Delta'].map(
+                lambda s: _label('mean', True)   if ('mean'   in s or 'Mean'   in s) else
+                          _label('mode', True)   if ('mode'   in s or 'Mode'   in s) else
+                          _label('median', True)
+            )
+            tidy_abs['Kind'] = 'Absolute'
+
+    # --- build plotting frame
+    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str.lower() else 'Delta (Gy)'
+    x_order = sorted(tidy_signed['x'].unique())
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    svg_path = Path(save_dir) / f"{fig_name}.svg"
+    png_path = Path(save_dir) / f"{fig_name}.png"
+
+    sns.set(style='whitegrid')
+
+    if include_abs and abs_as_hue and tidy_abs is not None:
+        # Facet by Δ kind, hue = Signed vs Absolute
+        # Normalize Δ labels to signed form for facet titles
+        if label_style == 'math':
+            def _to_signed(lbl: str) -> str:
+                return lbl.replace('|$', '$').replace('$|', '$')
+        else:
+            def _to_signed(lbl: str) -> str:
+                return lbl.strip('|')
+
+        signed_h = tidy_signed.copy()
+        abs_h = tidy_abs.copy()
+        signed_h['DeltaShort'] = signed_h['Delta']
+        abs_h['DeltaShort'] = abs_h['Delta'].map(_to_signed)
+
+        tidy_plot = pd.concat([signed_h, abs_h], ignore_index=True)
+
+        # order of facets
+        facet_order = [_label(k, absolute=False) for k in order_kinds]
+
+        g = sns.catplot(
+            data=tidy_plot,
+            x='x', y='Value',
+            hue='Kind', hue_order=['Signed','Absolute'],
+            col='DeltaShort', col_order=facet_order,
+            order=x_order,
+            kind='box',
+            showfliers=False,
+            height=3.2, aspect=1.4, sharey=True, sharex=True
+        )
+        if show_points:
+            # overlay per facet
+            def _strip(data, color, **kwargs):
+                sns.stripplot(
+                    data=data, x='x', y='Value', hue='Kind',
+                    dodge=True, order=x_order, size=point_size, alpha=alpha, linewidth=0
+                )
+            g.map_dataframe(_strip)
+            # dedupe legends (created twice by strip + box)
+            for ax in g.axes.flatten():
+                handles, labels = ax.get_legend_handles_labels()
+                if handles:
+                    ax.legend(handles[:2], labels[:2], title=None, fontsize=tick_label_fontsize)
+        else:
+            # keep one legend
+            g.add_legend(title=None)
+            g._legend.set_frame_on(True)
+            for txt in g._legend.texts:
+                txt.set_fontsize(tick_label_fontsize)
+
+        # titles/labels
+        for ax in g.axes.flatten():
+            ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
+            ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+            ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+        if title:
+            g.fig.suptitle(title, fontsize=axes_label_fontsize)
+            g.fig.subplots_adjust(top=0.85)
+
+        g.fig.tight_layout()
+        g.fig.savefig(svg_path, format='svg')
+        g.fig.savefig(png_path, format='png')
+        plt.close(g.fig)
+
+    else:
+        # Single axes: hue distinguishes Δ kinds; include_abs=False → 3; include_abs=True → 6 categories
+        tidy_plot = tidy_signed if (not include_abs or tidy_abs is None) else pd.concat([tidy_signed, tidy_abs], ignore_index=True)
+
+        ax = sns.boxplot(
+            data=tidy_plot,
+            x='x', y='Value',
+            hue='Delta', order=x_order,
+            showfliers=False
+        )
+        if show_points:
+            sns.stripplot(
+                data=tidy_plot,
+                x='x', y='Value',
+                hue='Delta', order=x_order,
+                dodge=True, size=point_size, alpha=alpha, ax=ax, legend=False
+            )
+
+        ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
+        ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+        ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+        if title:
+            ax.set_title(title, fontsize=axes_label_fontsize)
+
+        # style legend
+        leg = ax.legend(title='', frameon=True)
+        if leg:
+            for txt in leg.get_texts():
+                txt.set_fontsize(tick_label_fontsize)
+
+        plt.tight_layout()
+        plt.savefig(svg_path, format='svg')
+        plt.savefig(png_path, format='png')
+        plt.close()
+
+    return svg_path, png_path
 
 
 
@@ -4347,56 +6996,185 @@ def plot_cohort_deltas_boxplot(
     tick_label_fontsize: int = 11,
     title: str | None = None,
     show_points: bool = False,
-    show_counts_in_title: bool = True,  # <— new
+    show_counts_in_title: bool = True,
+    # ---- absolute controls ----
+    include_abs: bool = True,
+    abs_as_hue: bool = True,
+    require_precomputed_abs: bool = True,
+    fallback_recompute_abs: bool = False,
+    # ---- labeling controls ----
+    label_style: str = 'math',          # 'math' -> Δ^{mean} / |Δ^{mean}| ; 'text' -> Nominal - Mean / |Nominal - Mean|
+    median_superscript: str = 'Q50',    # used when label_style='math': 'Q50' or 'median'
+    order_kinds: tuple = ('mean', 'mode', 'median'),  # order along the x-axis
 ):
+    """
+    Cohort boxplot of Nominal−(Mean/Mode/Q50) with optional absolutes.
+    - Math labels: Δ^{mean}, Δ^{mode}, Δ^{Q50}; abs as |Δ^{⋅}| when abs_as_hue=False.
+    - With abs_as_hue=True, x shows Δ^{⋅} and legend shows Signed vs Absolute.
+    Saves both SVG and PNG.
+    """
     plt.ioff()
-    
-    """Cohort boxplot of Nominal−(Mean/Mode/Q50). Optional patient filter. Saves SVG."""
+
     data = deltas_df
     if include_patient_ids is not None:
-        data = data[data[('Patient ID','')].isin(include_patient_ids)]
+        pid_key = ('Patient ID','')
+        if pid_key not in data.columns:
+            raise KeyError("Patient filter requested but ('Patient ID','') column not found.")
+        data = data[data[pid_key].isin(include_patient_ids)]
         if data.empty:
             raise ValueError("Patient filter returned no rows.")
 
-    # count unique biopsies (Patient ID, Bx index) and voxels
+    # counts
     n_biopsies = (
         data.loc[:, [('Patient ID',''), ('Bx index','')]]
-            .drop_duplicates()
-            .shape[0]
+        .drop_duplicates()
+        .shape[0]
     )
     n_voxels = data.shape[0]
 
+    # ----- helpers for labels -----
+    def _math_sup(kind: str) -> str:
+        if kind == 'mean':
+            return r'\mathrm{mean}'
+        if kind == 'mode':
+            return r'\mathrm{mode}'
+        if kind == 'median':
+            return r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
+        return r'\mathrm{' + kind + r'}'
+
+    def _label(kind: str, absolute: bool) -> str:
+        # kind ∈ {'mean','mode','median'}
+        if label_style == 'math':
+            base = rf'$\Delta^{{{_math_sup(kind)}}}$'
+            return rf'$|{base[1:-1]}|$' if absolute else base
+        else:  # 'text'
+            txt = {'mean': 'Nominal - Mean', 'mode': 'Nominal - Mode', 'median': 'Nominal - Median (Q50)'}[kind]
+            return f'|{txt}|' if absolute else txt
+
+    # ----- columns -----
     block = f"{zero_level_index_str} deltas"
-    cols = [(block,'nominal_minus_mean'), (block,'nominal_minus_mode'), (block,'nominal_minus_q50')]
-    for c in cols:
-        if c not in data.columns:
-            raise KeyError(f"Missing {c}. Did you compute deltas with zero_level_index_str='{zero_level_index_str}'?")
+    signed_map = {
+        'mean':   (block, 'nominal_minus_mean'),
+        'mode':   (block, 'nominal_minus_mode'),
+        'median': (block, 'nominal_minus_q50'),
+    }
+    missing_signed = [v for k,v in signed_map.items() if v not in data.columns]
+    if missing_signed:
+        raise KeyError(
+            f"Missing signed delta columns for zero_level_index_str='{zero_level_index_str}'. "
+            f"Missing: {missing_signed}"
+        )
 
-    tidy = data.loc[:, cols].copy()
-    tidy.columns = ['Nominal - Mean', 'Nominal - Mode', 'Nominal - Median (Q50)']
-    tidy = tidy.melt(var_name='Delta', value_name='Value').dropna(subset=['Value'])
+    # build tidy signed
+    signed_cols = [signed_map[k] for k in order_kinds]
+    tidy_signed = data.loc[:, signed_cols].copy()
+    tidy_signed.columns = [_label(k, absolute=False) for k in order_kinds]
+    tidy_signed = tidy_signed.melt(var_name='Delta', value_name='Value').dropna(subset=['Value'])
+    tidy_signed['Kind'] = 'Signed'
 
-    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str else 'Delta (Gy)'
+    # abs block (prefer precomputed)
+    tidy_abs = None
+    if include_abs:
+        abs_block = f"{zero_level_index_str} abs deltas"
+        abs_map = {
+            'mean':   (abs_block, 'abs_nominal_minus_mean'),
+            'mode':   (abs_block, 'abs_nominal_minus_mode'),
+            'median': (abs_block, 'abs_nominal_minus_q50'),
+        }
+        has_abs = all(v in data.columns for v in abs_map.values())
+        if not has_abs and require_precomputed_abs and not fallback_recompute_abs:
+            raise KeyError(
+                "Absolute delta columns are missing and recomputation is disabled. "
+                f"Expected abs columns: {list(abs_map.values())}. "
+                "Use *_with_abs DataFrames or set fallback_recompute_abs=True."
+            )
 
+        if has_abs:
+            abs_cols = [abs_map[k] for k in order_kinds]
+            tidy_abs = data.loc[:, abs_cols].copy()
+            tidy_abs.columns = [_label(k, absolute=True) for k in order_kinds]
+            tidy_abs = tidy_abs.melt(var_name='Delta', value_name='Value').dropna(subset=['Value'])
+            tidy_abs['Kind'] = 'Absolute'
+        elif fallback_recompute_abs:
+            tidy_abs = tidy_signed.copy()
+            tidy_abs['Value'] = tidy_abs['Value'].abs()
+            tidy_abs['Delta'] = tidy_abs['Delta'].map(lambda s: _label(
+                {'mean': 'mean', 'mode': 'mode', 'median': 'median'}[
+                    'mean' if 'Mean' in s else ('mode' if 'Mode' in s else 'median')
+                ], absolute=True
+            ))
+            tidy_abs['Kind'] = 'Absolute'
+
+    # compose plotting frame
+    if include_abs and abs_as_hue and tidy_abs is not None:
+        # Use same x tick labels (Δ^{⋅}); hue distinguishes Signed vs Absolute
+        # Convert abs labels back to signed form for x so categories match
+        def _to_signed_xtick(lbl: str) -> str:
+            if label_style == 'math':
+                return lbl.replace('|$', '$').replace('$|', '$')  # strip surrounding |…|
+            else:
+                return lbl.strip('|')
+        signed_for_hue = tidy_signed.copy()
+        abs_for_hue = tidy_abs.copy()
+        abs_for_hue['Delta'] = abs_for_hue['Delta'].map(_to_signed_xtick)
+        tidy_plot = pd.concat([signed_for_hue, abs_for_hue], ignore_index=True)
+
+        x_order = [_label(k, absolute=False) for k in order_kinds]
+        hue_order = ['Signed', 'Absolute']
+    elif include_abs and tidy_abs is not None:
+        # six boxes: Δ^{⋅} and |Δ^{⋅}| appear as separate x categories (tick shows bars)
+        tidy_plot = pd.concat([tidy_signed, tidy_abs], ignore_index=True)
+        x_order = [_label(k, False) for k in order_kinds] + [_label(k, True) for k in order_kinds]
+        hue_order = None
+    else:
+        tidy_plot = tidy_signed.copy()
+        x_order = [_label(k, absolute=False) for k in order_kinds]
+        hue_order = None
+
+    # y-axis label
+    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str.lower() else 'Delta (Gy)'
+
+    # plot
     sns.set(style='whitegrid')
-    ax = sns.boxplot(data=tidy, x='Delta', y='Value', showfliers=False)
-    if show_points:
-        sns.stripplot(data=tidy, x='Delta', y='Value', color='k', alpha=0.25, jitter=0.25, size=2)
+    if include_abs and abs_as_hue and tidy_abs is not None:
+        ax = sns.boxplot(data=tidy_plot, x='Delta', y='Value', hue='Kind', order=x_order, hue_order=hue_order, showfliers=False)
+        if show_points:
+            sns.stripplot(data=tidy_plot, x='Delta', y='Value', hue='Kind', dodge=True, order=x_order, hue_order=hue_order,
+                          color='k', alpha=0.20, jitter=0.25, size=2)
+            # dedupe legend
+            handles, labels = ax.get_legend_handles_labels()
+            if len(handles) > 2:
+                ax.legend(handles[:2], labels[:2], title=None)
+    else:
+        ax = sns.boxplot(data=tidy_plot, x='Delta', y='Value', order=x_order, showfliers=False)
+        if show_points:
+            sns.stripplot(data=tidy_plot, x='Delta', y='Value', order=x_order, color='k', alpha=0.20, jitter=0.25, size=2)
 
-    # title with counts
+    # title
     if title is None:
         title = f"Cohort — {zero_level_index_str} deltas"
     if show_counts_in_title:
         title = f"{title}  (biopsies: {n_biopsies}, voxels: {n_voxels})"
     ax.set_title(title, fontsize=axes_label_fontsize)
 
+    # axes
     ax.set_xlabel('', fontsize=axes_label_fontsize)
     ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
     ax.tick_params(axis='both', labelsize=tick_label_fontsize)
 
+    # legend styling
+    if include_abs and abs_as_hue and tidy_abs is not None:
+        leg = ax.legend(title=None, frameon=True)
+        if leg:
+            for txt in leg.get_texts():
+                txt.set_fontsize(tick_label_fontsize)
+
+    # save
     Path(save_dir).mkdir(parents=True, exist_ok=True)
-    out = Path(save_dir) / f"{fig_name}.svg"
+    svg_path = Path(save_dir) / f"{fig_name}.svg"
+    png_path = Path(save_dir) / f"{fig_name}.png"
     plt.tight_layout()
-    plt.savefig(out, format='svg')
+    plt.savefig(svg_path, format='svg')
+    plt.savefig(png_path, format='png')
     plt.close()
-    return out
+    return svg_path, png_path

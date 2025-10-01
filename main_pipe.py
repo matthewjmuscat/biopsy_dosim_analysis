@@ -124,6 +124,61 @@ def main():
            )
 	"""
 
+    # Add IQR (Q75 - Q25) and IPR90 (Q95 - Q05) to the biopsy-level dataframe
+    for col in ["Dose (Gy)", "Dose grad (Gy/mm)"]:
+        cohort_global_dosimetry_df[(col, "IQR")] = (
+            cohort_global_dosimetry_df[(col, "quantile_75")] 
+            - cohort_global_dosimetry_df[(col, "quantile_25")]
+        )
+        cohort_global_dosimetry_df[(col, "IPR90")] = (
+            cohort_global_dosimetry_df[(col, "quantile_95")] 
+            - cohort_global_dosimetry_df[(col, "quantile_05")]
+        )
+    """ Now the columns of the dataframe are:
+        print(cohort_global_dosimetry_df.columns)
+        MultiIndex([(            'Bx ID',                          ''),
+                    (       'Patient ID',                          ''),
+                    (         'Bx index',                          ''),
+                    (        'Bx refnum',                          ''),
+                    (   'Simulated bool',                          ''),
+                    (   'Simulated type',                          ''),
+                    (        'Dose (Gy)',            'argmax_density'),
+                    (        'Dose (Gy)',                  'kurtosis'),
+                    (        'Dose (Gy)',                       'max'),
+                    (        'Dose (Gy)',                      'mean'),
+                    (        'Dose (Gy)',                       'min'),
+                    (        'Dose (Gy)', 'nominal (spatial average)'),
+                    (        'Dose (Gy)',               'quantile_05'),
+                    (        'Dose (Gy)',               'quantile_25'),
+                    (        'Dose (Gy)',               'quantile_50'),
+                    (        'Dose (Gy)',               'quantile_75'),
+                    (        'Dose (Gy)',               'quantile_95'),
+                    (        'Dose (Gy)',                       'sem'),
+                    (        'Dose (Gy)',                  'skewness'),
+                    (        'Dose (Gy)',                       'std'),
+                    ('Dose grad (Gy/mm)',            'argmax_density'),
+                    ('Dose grad (Gy/mm)',                  'kurtosis'),
+                    ('Dose grad (Gy/mm)',                       'max'),
+                    ('Dose grad (Gy/mm)',                      'mean'),
+                    ('Dose grad (Gy/mm)',                       'min'),
+                    ('Dose grad (Gy/mm)', 'nominal (spatial average)'),
+                    ('Dose grad (Gy/mm)',               'quantile_05'),
+                    ('Dose grad (Gy/mm)',               'quantile_25'),
+                    ('Dose grad (Gy/mm)',               'quantile_50'),
+                    ('Dose grad (Gy/mm)',               'quantile_75'),
+                    ('Dose grad (Gy/mm)',               'quantile_95'),
+                    ('Dose grad (Gy/mm)',                       'sem'),
+                    ('Dose grad (Gy/mm)',                  'skewness'),
+                    ('Dose grad (Gy/mm)',                       'std'),
+                    (        'Dose (Gy)',                       'IQR'),
+                    (        'Dose (Gy)',                     'IPR90'),
+                    ('Dose grad (Gy/mm)',                       'IQR'),
+                    ('Dose grad (Gy/mm)',                     'IPR90')],
+                )
+    """
+
+
+
     # Cohort global dosimetry by voxel
     cohort_global_dosimetry_by_voxel_path = cohort_csvs_directory.joinpath("Cohort: Global dosimetry by voxel.csv")  # Ensure the directory is a Path object
     # this is a multiindex dataframe
@@ -171,10 +226,70 @@ def main():
            )
     """
 
+    # Add IQR (Q75 - Q25) and 90% IPR (Q95 - Q05) for both Dose and Dose Gradient
+    for col in ["Dose (Gy)", "Dose grad (Gy/mm)"]:
+        cohort_global_dosimetry_by_voxel_df[(col, "IQR")] = (
+            cohort_global_dosimetry_by_voxel_df[(col, "quantile_75")] 
+            - cohort_global_dosimetry_by_voxel_df[(col, "quantile_25")]
+        )
+        cohort_global_dosimetry_by_voxel_df[(col, "IPR90")] = (
+            cohort_global_dosimetry_by_voxel_df[(col, "quantile_95")] 
+            - cohort_global_dosimetry_by_voxel_df[(col, "quantile_05")]
+        )
+    """ Now the columns of the dataframe are:
+        print(cohort_global_dosimetry_by_voxel_df.columns)
+        MultiIndex([(  'Voxel begin (Z)',               ''),
+                    (    'Voxel end (Z)',               ''),
+                    (      'Voxel index',               ''),
+                    (       'Patient ID',               ''),
+                    (            'Bx ID',               ''),
+                    (         'Bx index',               ''),
+                    (        'Bx refnum',               ''),
+                    (   'Simulated bool',               ''),
+                    (   'Simulated type',               ''),
+                    (        'Dose (Gy)', 'argmax_density'),
+                    (        'Dose (Gy)',       'kurtosis'),
+                    (        'Dose (Gy)',            'max'),
+                    (        'Dose (Gy)',           'mean'),
+                    (        'Dose (Gy)',            'min'),
+                    (        'Dose (Gy)',        'nominal'),
+                    (        'Dose (Gy)',    'quantile_05'),
+                    (        'Dose (Gy)',    'quantile_25'),
+                    (        'Dose (Gy)',    'quantile_50'),
+                    (        'Dose (Gy)',    'quantile_75'),
+                    (        'Dose (Gy)',    'quantile_95'),
+                    (        'Dose (Gy)',            'sem'),
+                    (        'Dose (Gy)',       'skewness'),
+                    (        'Dose (Gy)',            'std'),
+                    ('Dose grad (Gy/mm)', 'argmax_density'),
+                    ('Dose grad (Gy/mm)',       'kurtosis'),
+                    ('Dose grad (Gy/mm)',            'max'),
+                    ('Dose grad (Gy/mm)',           'mean'),
+                    ('Dose grad (Gy/mm)',            'min'),
+                    ('Dose grad (Gy/mm)',        'nominal'),
+                    ('Dose grad (Gy/mm)',    'quantile_05'),
+                    ('Dose grad (Gy/mm)',    'quantile_25'),
+                    ('Dose grad (Gy/mm)',    'quantile_50'),
+                    ('Dose grad (Gy/mm)',    'quantile_75'),
+                    ('Dose grad (Gy/mm)',    'quantile_95'),
+                    ('Dose grad (Gy/mm)',            'sem'),
+                    ('Dose grad (Gy/mm)',       'skewness'),
+                    ('Dose grad (Gy/mm)',            'std'),
+                    (        'Dose (Gy)',            'IQR'),
+                    (        'Dose (Gy)',          'IPR90'),
+                    ('Dose grad (Gy/mm)',            'IQR'),
+                    ('Dose grad (Gy/mm)',          'IPR90')],
+                )
+    """
+
+    #### WARNING THESE DVH METRICS ARE LIKELY INCORRECTLY CALCULATED IN THE MAIN ALGO!
     # Cohort bx dvh metrics
+    """
     cohort_global_dosimetry_dvh_metrics_path = cohort_csvs_directory.joinpath("Cohort: Bx DVH metrics (generalized).csv")  # Ensure the directory is a Path object
     cohort_global_dosimetry_dvh_metrics_df = load_files.load_csv_as_dataframe(cohort_global_dosimetry_dvh_metrics_path)
-    """NOTE: The columns of the dataframe are:
+    """
+    """
+    NOTE: The columns of the dataframe are:
     print(cohort_global_dosimetry_dvh_metrics_df.columns)
 	Index(['Patient ID', 'Metric', 'Bx ID', 'Struct type', 'Dicom ref num',
 		'Simulated bool', 'Simulated type', 'Struct index', 'Mean', 'STD',
@@ -182,7 +297,38 @@ def main():
 		'Q95'],
 		dtype='object')
     """
+    """
     
+    # ensure numeric (your df is dtype object by default)
+    for col in ["Q05", "Q25", "Q50", "Q75", "Q95"]:
+        cohort_global_dosimetry_dvh_metrics_df[col] = pd.to_numeric(
+            cohort_global_dosimetry_dvh_metrics_df[col], errors="coerce"
+        )
+
+    # add IQR and IPR90
+    cohort_global_dosimetry_dvh_metrics_df["IQR"] = (
+        cohort_global_dosimetry_dvh_metrics_df["Q75"] - cohort_global_dosimetry_dvh_metrics_df["Q25"]
+    )
+    cohort_global_dosimetry_dvh_metrics_df["IPR90"] = (
+        cohort_global_dosimetry_dvh_metrics_df["Q95"] - cohort_global_dosimetry_dvh_metrics_df["Q05"]
+    )
+    """
+    """ Now the columns of the dataframe are:
+    print(cohort_global_dosimetry_dvh_metrics_df.columns)
+    Index(['Patient ID', 'Metric', 'Bx ID', 'Struct type', 'Dicom ref num',
+        'Simulated bool', 'Simulated type', 'Struct index', 'Mean', 'STD',
+        'SEM', 'Max', 'Min', 'Skewness', 'Kurtosis', 'Q05', 'Q25', 'Q50', 'Q75',
+        'Q95', 'IQR', 'IPR90'],
+        dtype='object')
+    """
+
+
+
+
+
+
+
+
 
 
 
@@ -271,8 +417,6 @@ def main():
 
 
 
-
-
     ### 3. all MC structure transformation values
     all_paths_mc_structure_transformation = load_files.find_csv_files(mc_sim_results_path, ['All MC structure transformation values.csv'])
     # Load and concatenate
@@ -308,39 +452,39 @@ def main():
     # all MC structure transformation values (END)
 
     
+    # wrote a function to calculate these from the voxel wise dose dataframe
+    if False:
+        ### 4. cumulative dvh by mc trial number
+        all_paths_cumulative_dvh_by_mc_trial_number = load_files.find_csv_files(mc_sim_results_path, ['Cumulative DVH by MC trial.parquet'])
+        # Load and concatenate
+        # Loop through all the paths and load the csv files
+        all_cumulative_dvh_by_mc_trial_number_dfs_list = []
+        for path in all_paths_cumulative_dvh_by_mc_trial_number:
+            # Load the csv file into a dataframe
+            #df = load_files.load_csv_as_dataframe(path)
+            df = load_files.load_parquet_as_dataframe(path)
+            # Append the dataframe to the list
+            all_cumulative_dvh_by_mc_trial_number_dfs_list.append(df)
 
-
-    ### 4. cumulative dvh by mc trial number
-    all_paths_cumulative_dvh_by_mc_trial_number = load_files.find_csv_files(mc_sim_results_path, ['Cumulative DVH by MC trial.parquet'])
-    # Load and concatenate
-    # Loop through all the paths and load the csv files
-    all_cumulative_dvh_by_mc_trial_number_dfs_list = []
-    for path in all_paths_cumulative_dvh_by_mc_trial_number:
-        # Load the csv file into a dataframe
-        #df = load_files.load_csv_as_dataframe(path)
-        df = load_files.load_parquet_as_dataframe(path)
-        # Append the dataframe to the list
-        all_cumulative_dvh_by_mc_trial_number_dfs_list.append(df)
-
-        del df
-    # Concatenate all the dataframes into one dataframe
-    all_cumulative_dvh_by_mc_trial_number_df = pd.concat(all_cumulative_dvh_by_mc_trial_number_dfs_list, ignore_index=True)
-    """ NOTE: The columns of the dataframe are:
-    print(all_cumulative_dvh_by_mc_trial_number_df.columns)
-        Index(['Patient ID', 'Bx ID', 'Bx index', 'Simulated bool', 'Simulated type',
-            'Percent volume', 'Dose (Gy)', 'MC trial'],
-            dtype='object')
-    """
-    del all_cumulative_dvh_by_mc_trial_number_dfs_list
-    # Print the shape of the dataframe
-    print(f"Shape of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.shape}")
-    # Print the columns of the dataframe
-    print(f"Columns of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.columns}")
-    # Print the first 5 rows of the dataframe
-    print(f"First 5 rows of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.head()}")
-    # Print the last 5 rows of the dataframe
-    print(f"Last 5 rows of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.tail()}")
-    # cumulative dvh by mc trial number (END)
+            del df
+        # Concatenate all the dataframes into one dataframe
+        all_cumulative_dvh_by_mc_trial_number_df = pd.concat(all_cumulative_dvh_by_mc_trial_number_dfs_list, ignore_index=True)
+        """ NOTE: The columns of the dataframe are:
+        print(all_cumulative_dvh_by_mc_trial_number_df.columns)
+            Index(['Patient ID', 'Bx ID', 'Bx index', 'Simulated bool', 'Simulated type',
+                'Percent volume', 'Dose (Gy)', 'MC trial'],
+                dtype='object')
+        """
+        del all_cumulative_dvh_by_mc_trial_number_dfs_list
+        # Print the shape of the dataframe
+        print(f"Shape of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.shape}")
+        # Print the columns of the dataframe
+        print(f"Columns of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.columns}")
+        # Print the first 5 rows of the dataframe
+        print(f"First 5 rows of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.head()}")
+        # Print the last 5 rows of the dataframe
+        print(f"Last 5 rows of all cumulative dvh by mc trial number dataframe: {all_cumulative_dvh_by_mc_trial_number_df.tail()}")
+        # cumulative dvh by mc trial number (END)
 
     
     ### 5. Differential DVH by MC trial number
@@ -569,28 +713,112 @@ def main():
 
 
 
+    ### COMPUTE DVH METRICS PER TRIAL (START)
+    # define the output directory for the dvh metrics
+    dvh_metrics_dir = output_dir.joinpath("dvh_metrics")
+    os.makedirs(dvh_metrics_dir, exist_ok=True)  # create the directory if it doesn't exist
+    output_filename = "Cohort: DVH metrics per trial.csv"
+
+    # IMPORTANT: This function is only valid if the fed dataframe only has 1 sample point per voxel index per trial, otherwise overweighting can occur.
+    calculated_dvh_metrics_per_trial_df = helper_funcs.compute_dvh_metrics_per_trial_vectorized(
+        all_voxel_wise_dose_df,
+        d_perc_list = [2,50,98],
+        v_perc_list = [100,125,150,175,200,300],
+        # How to define the reference dose for V_Y% thresholds:
+        # - EITHER pass a single float (same ref for all groups),
+        # - OR pass the name of a column in df with the per-voxel ref dose (it must be constant within each group),
+        # - OR pass a dict {(patient_id, bx_index): ref_dose_gy}.
+        ref_dose_gy = 13.5,  # single float ref dose for all groups
+        ref_dose_col = None,
+        ref_dose_map = None,
+        # I/O
+        output_dir= dvh_metrics_dir,
+        csv_name = output_filename
+    )
+    """print(calculated_dvh_metrics_per_trial_df.columns)=
+    Index(['Patient ID', 'Bx index', 'MC trial num', 'Simulated bool',
+       'Simulated type', 'Bx refnum', 'Bx ID', 'D_2% (Gy)', 'D_50% (Gy)',
+       'D_98% (Gy)', 'V_100% (%)', 'V_125% (%)', 'V_150% (%)', 'V_175% (%)',
+       'V_200% (%)', 'V_300% (%)'],
+      dtype='object')
+    """
+    print(f"DVH metrics per trial csv saved to file: {dvh_metrics_dir.joinpath(output_filename)}")
+    ### COMPUTE DVH METRICS PER TRIAL (END)
+
+
+
+    ### COMPUTE DVH METRICS STATISTICS PER BIOPSY (START)
+
+
+    dvh_metrics_dir = output_dir.joinpath("dvh_metrics")
+    os.makedirs(dvh_metrics_dir, exist_ok=True)  # create the directory if it doesn't exist
+    output_filename = "Cohort_DVH_metrics_stats_per_biopsy.csv"
+
+    cohort_global_dosimetry_dvh_metrics_df = helper_funcs.build_dvh_summary_one_row_per_biopsy(calculated_dvh_metrics_per_trial_df)
+    """
+    print(cohort_global_dosimetry_dvh_metrics_df.columns) = 
+        Index(['Patient ID', 'Metric', 'Bx ID', 'Struct type', 'Dicom ref num',
+            'Simulated bool', 'Simulated type', 'Struct index', 'Mean', 'STD',
+            'SEM', 'Max', 'Min', 'Skewness', 'Kurtosis', 'Q05', 'Q25', 'Q50', 'Q75',
+            'Q95', 'IQR', 'IPR90', 'Nominal'],
+            dtype='object')
+    """
+    # Save cohort summary (DVH metrics) to file using simple to csv
+    
+    output_path = dvh_metrics_dir / output_filename
+    cohort_global_dosimetry_dvh_metrics_df.to_csv(output_path, index=False)
+    print(f'dvh summary csv saved to file: {output_path}')
+    
+    print('dvh summary csv saved to file')
+
+    ### COMPUTE DVH METRICS STATISTICS PER BIOPSY (END)
+
+
+
+
+
+    ### COMPUTE CUMULATIVE DVH CURVES PER TRIAL (START)
+
+
+
+    # Cumulative DVH (one row per unique dose per trial)
+    all_cumulative_dvh_by_mc_trial_number_df = helper_funcs.build_cumulative_dvh_by_mc_trial_number_df(
+        all_voxel_wise_dose_df
+    )
+
+
+
+    ### COMPUTE CUMULATIVE DVH CURVES PER TRIAL (END)
+
+
+
+
+
+
 
     ### voxel wise nominal-MC trial delta  (START)
 
     # Build per-trial deltas relative to nominal (trial 0)
-    mc_deltas = summary_statistics.compute_mc_trial_deltas(all_voxel_wise_dose_df)
+    mc_deltas = summary_statistics.compute_mc_trial_deltas_with_abs(all_voxel_wise_dose_df)
     """print(mc_deltas.columns)
-    Index([                                       'Patient ID',
-                                                'Bx index',
-                                             'Voxel index',
-                                               'Bx refnum',
-                                                   'Bx ID',
-                                         'Voxel begin (Z)',
-                                           'Voxel end (Z)',
-                                          'Simulated bool',
-                                          'Simulated type',
-                                            'X (Bx frame)',
-                                            'Y (Bx frame)',
-                                            'Z (Bx frame)',
-                                            'R (Bx frame)',
-                                            'MC trial num',
-               ('Dose (Gy) deltas', 'nominal_minus_trial'),
-       ('Dose grad (Gy/mm) deltas', 'nominal_minus_trial')],
+Index([                                               'Patient ID',
+                                                        'Bx index',
+                                                     'Voxel index',
+                                                       'Bx refnum',
+                                                           'Bx ID',
+                                                 'Voxel begin (Z)',
+                                                   'Voxel end (Z)',
+                                                  'Simulated bool',
+                                                  'Simulated type',
+                                                    'X (Bx frame)',
+                                                    'Y (Bx frame)',
+                                                    'Z (Bx frame)',
+                                                    'R (Bx frame)',
+                                                    'MC trial num',
+                       ('Dose (Gy) deltas', 'nominal_minus_trial'),
+               ('Dose (Gy) abs deltas', 'abs_nominal_minus_trial'),
+               ('Dose grad (Gy/mm) deltas', 'nominal_minus_trial'),
+       ('Dose grad (Gy/mm) abs deltas', 'abs_nominal_minus_trial')],
       dtype='object')"""
 
     print(f"Shape of mc_deltas dataframe: {mc_deltas.shape}")
@@ -600,7 +828,8 @@ def main():
     os.makedirs(voxel_wise_nominal_analysis_dir, exist_ok=True)
 
 
-    # Save cohort summary (Dose and Dose grad)
+    # Summarizes the signed nominal–trial deltas across all voxels/trials for each metric
+    # (n, mean, std, quantiles, etc.) and writes a single CSV per cohort.
     summary_statistics.save_mc_delta_summary_csv(
         mc_deltas,
         output_dir=voxel_wise_nominal_analysis_dir,
@@ -623,7 +852,9 @@ def main():
     print(csv_path)
     """
 
-    vox_path, voxel_stats, bio_path, biopsy_stats = summary_statistics.save_nominal_vs_trial_proportions_csv(
+    # For each voxel, estimates P(nominal > trial), P(=), P(<) across trials (CLES components),
+    # writing both a per-voxel CSV and a per-biopsy (median across voxels) CSV.
+    vox_path, cles_voxel_stats, bio_path, cles_biopsy_stats = summary_statistics.save_nominal_vs_trial_proportions_csv(
         mc_deltas,
         output_dir=voxel_wise_nominal_analysis_dir,
         base_name="paired_effect_sizes_by_trial",
@@ -635,10 +866,11 @@ def main():
     print(vox_path)
     print(bio_path)
 
-
+    # Builds cohort-wide CLES summaries: pooled proportions (weighted by voxel trial counts)
+    # and the distribution of biopsy-level CLES medians; writes one CSV per cohort.
     summary_statistics.save_cohort_cles_summary_csv(
-        voxel_stats,           # DataFrame OR path to "*_per_voxel.csv"
-        biopsy_stats,          # DataFrame OR path to "*_per_biopsy.csv"
+        cles_voxel_stats,           # DataFrame OR path to "*_per_voxel.csv"
+        cles_biopsy_stats,          # DataFrame OR path to "*_per_biopsy.csv"
         output_dir=voxel_wise_nominal_analysis_dir,
         csv_name = "cohort_cles_summary.csv",
         metrics_col = "metric",
@@ -646,29 +878,41 @@ def main():
     )
 
 
-    # mc_deltas = compute_mc_trial_deltas(all_voxel_wise_dose_df)
-    cohort_csv, pooled = summary_statistics.save_cohort_pooled_cles_from_mc_deltas(
+    # Direct cohort-pooled CLES computed from all nominal–trial pairs (no voxel/biopsy grouping),
+    # writing a compact CSV with n_pairs and pooled prop_gt/eq/lt, CLES_strict, CLES_ties per metric.
+    cohort_csv_pooled_cles_from_mc_deltas, pooled = summary_statistics.save_cohort_pooled_cles_from_mc_deltas(
         mc_deltas,
         output_dir=voxel_wise_nominal_analysis_dir,
         csv_name="cohort_pooled_cles.csv",
         value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
     )
-    print(cohort_csv)
+    print(cohort_csv_pooled_cles_from_mc_deltas)
 
     ### voxel-wise nominal-mode nominal-mean nominal-q50 analysis (START)
     
-    
+    """
     nominal_deltas_df = summary_statistics.compute_biopsy_nominal_deltas(cohort_global_dosimetry_by_voxel_df)
 
 
     nominal_gradient_deltas_df = summary_statistics.compute_biopsy_nominal_deltas(cohort_global_dosimetry_by_voxel_df,
                                                                                            zero_level_index_str='Dose grad (Gy/mm)')
+    """
+
+    nominal_deltas_df_with_abs = summary_statistics.compute_biopsy_nominal_deltas_with_abs(cohort_global_dosimetry_by_voxel_df)
+
+    nominal_gradient_deltas_df_with_abs = summary_statistics.compute_biopsy_nominal_deltas_with_abs(cohort_global_dosimetry_by_voxel_df,
+                                                                                           zero_level_index_str='Dose grad (Gy/mm)')
+    
+
+
+
 
 
 
 
     print('print to file')
-    csv_path = summary_statistics.save_delta_boxplot_summary_csv(
+    """
+    csv_path = summary_statistics.save_delta_boxplot_summary_csv_with_absolute(
         nominal_deltas_df,
         output_dir=voxel_wise_nominal_analysis_dir,
         csv_name='dose_deltas_boxplot_summary.csv',
@@ -677,7 +921,7 @@ def main():
         decimals=3
     )
 
-    csv_path = summary_statistics.save_delta_boxplot_summary_csv(
+    csv_path = summary_statistics.save_delta_boxplot_summary_csv_with_absolute(
         nominal_gradient_deltas_df,
         output_dir=voxel_wise_nominal_analysis_dir,
         csv_name='dose_gradient_deltas_boxplot_summary.csv',
@@ -685,7 +929,76 @@ def main():
         include_patient_ids=None,   # or ['184','201']
         decimals=3
     )
+    """
+
+
+
+    # Uses precomputed abs columns; will raise if they’re missing
+    csv_path = summary_statistics.save_delta_boxplot_summary_csv_with_absolute_no_recalc(
+        nominal_deltas_df_with_abs,                      # <-- use the _with_abs version
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name='dose_deltas_boxplot_summary.csv',
+        zero_level_index_str='Dose (Gy)',
+        include_patient_ids=None,   # or ['184','201']
+        decimals=3,
+        require_precomputed_abs=True,     # default
+    )
+
+    csv_path = summary_statistics.save_delta_boxplot_summary_csv_with_absolute_no_recalc(
+        nominal_gradient_deltas_df_with_abs,                      # <-- use the _with_abs version
+        output_dir=voxel_wise_nominal_analysis_dir,
+        csv_name='dose_gradient_deltas_boxplot_summary.csv',
+        zero_level_index_str='Dose grad (Gy/mm)',
+        include_patient_ids=None,   # or ['184','201']
+        decimals=3,
+        require_precomputed_abs=True,     # default
+    )
     print(csv_path)
+
+
+
+
+
+    # build deltas versus gradient dataframe
+    """
+    combined_deltas_plus_gradient_vals_wide, combined_deltas_plus_gradient_vals_long = helper_funcs.build_deltas_vs_gradient_df(
+        nominal_deltas_df=nominal_deltas_df,
+        cohort_by_voxel_df=cohort_global_dosimetry_by_voxel_df,
+        gradient_top='Dose grad (Gy/mm)',   # default
+        gradient_stat='nominal',            # or 'mean', 'quantile_50', etc., if you prefer
+        return_long=True
+    )
+    """
+    
+    combined_wide, combined_long = helper_funcs.build_deltas_vs_gradient_df_with_abs(
+        nominal_deltas_df=nominal_deltas_df_with_abs,
+        cohort_by_voxel_df=cohort_global_dosimetry_by_voxel_df,
+        zero_level_index_str='Dose (Gy)',
+        gradient_top='Dose grad (Gy/mm)',
+        gradient_stats=('nominal', 'median', 'mean', 'mode'),  # multiple stats
+        gradient_stat=None,            # alias (ignored since gradient_stats provided)
+        meta_keep=(
+            'Voxel begin (Z)', 'Voxel end (Z)', 'Voxel index',
+            'Patient ID', 'Bx ID', 'Bx index', 'Bx refnum',
+            'Simulated bool', 'Simulated type'
+        ),
+        add_abs=True,                  # include precomputed |Δ|
+        add_log1p=True,                # add log1p(|Δ|) columns
+        return_long=True,              # also return tidy long df
+        require_precomputed_abs=True,  # expect abs block; do not recompute
+        fallback_recompute_abs=False   # set True only if you want on-the-fly |Δ|
+    )
+
+
+    
+    
+
+    # example: Spearman correlation per delta kind
+    for dcol in ['Δ_mode (Gy)','Δ_median (Gy)','Δ_mean (Gy)']:
+        rho = wide[[dcol,'Grad (Gy/mm)']].corr(method='spearman').iloc[0,1]
+        print(f"Spearman(Grad, {dcol}) = {rho:.3f}")
+
+    print('test')
 
 
 
@@ -728,7 +1041,7 @@ def main():
     ('Simulated type','')]
 
     # Get global dosimetry statistics
-    summary_statistics.generate_summary_csv(global_dosimetry_dir, output_filename, cohort_global_dosimetry_df, col_pairs = None, exclude_columns = exclude_for_all)
+    biopsy_level_summary_statistics_df = summary_statistics.generate_summary_csv_with_argmax(global_dosimetry_dir, output_filename, cohort_global_dosimetry_df, col_pairs = None, exclude_columns = exclude_for_all)
     ## Global dosimetry analysis (END)
 
     ### Global dosimetry by voxel analysis (START)
@@ -758,7 +1071,7 @@ def main():
     ('Simulated type','')]
 
     # Get global dosimetry by voxel statistics
-    summary_statistics.generate_summary_csv(global_dosimetry_by_voxel_dir, output_filename, cohort_global_dosimetry_by_voxel_df, col_pairs = None, exclude_columns = exclude_for_all)
+    voxel_wise_summary_statistics_df = summary_statistics.generate_summary_csv_with_argmax(global_dosimetry_by_voxel_dir, output_filename, cohort_global_dosimetry_by_voxel_df, col_pairs = None, exclude_columns = exclude_for_all)
     ## Global dosimetry by voxel analysis (END)
 
 
@@ -805,7 +1118,7 @@ def main():
     )
 
     # Get DVH metrics statistics
-    summary_statistics.generate_summary_csv(dvh_metrics_dir, output_filename, wide, 
+    dvh_summary_statistics_df = summary_statistics.generate_summary_csv_with_argmax(dvh_metrics_dir, output_filename, wide, 
                                             col_pairs=None, 
                                             exclude_columns=exclude)
 
@@ -926,7 +1239,7 @@ def main():
 
     # Dose differences voxel pairings analysis (START)
 
-    # Create output directory for DVH metrics
+    # Create output directory for length scales dosimetry
     length_scales_dir = output_dir.joinpath("length_scales_dosimetry")
     os.makedirs(length_scales_dir, exist_ok=True)
     # Output filename
@@ -1014,17 +1327,47 @@ def main():
 
     print("Generating deltas cohort figures...")
 
-    if False:
+    if True:
         print("Skipping!")
     else:
 
+        """        
         _, _ = production_plots.plot_cohort_deltas_boxplot(nominal_deltas_df, save_dir=cohort_output_figures_dir, fig_name="dose_deltas_cohort",
                             zero_level_index_str='Dose (Gy)', include_patient_ids=None,
                             show_points=True)
         _, _ = production_plots.plot_cohort_deltas_boxplot(nominal_gradient_deltas_df, save_dir=cohort_output_figures_dir, fig_name="dose_gradient_deltas_cohort",
                             zero_level_index_str='Dose grad (Gy/mm)', include_patient_ids=None,
                             show_points=True)
+        """
+        _ = plot_cohort_deltas_boxplot(
+            nominal_deltas_df_with_abs,
+            save_dir=cohort_output_figures_dir,
+            fig_name="dose_deltas_cohort_math_hue",
+            zero_level_index_str='Dose (Gy)',
+            show_points=True,
+            include_abs=True,
+            abs_as_hue=True,
+            label_style='math',         # -> Δ^{mean}/Δ^{mode}/Δ^{Q50}
+            median_superscript='Q50',   # or 'median'
+            require_precomputed_abs=True
+        )
+        _ = plot_cohort_deltas_boxplot(
+            nominal_gradient_deltas_df_with_abs,
+            save_dir=cohort_output_figures_dir,
+            fig_name="dose_gradient_deltas_cohort_math_hue",
+            zero_level_index_str='Dose grad (Gy/mm)',
+            show_points=True,
+            include_abs=True,
+            abs_as_hue=True,
+            label_style='math',         # -> Δ^{mean}/Δ^{mode}/Δ^{Q50}
+            median_superscript='Q50',   # or 'median'
+            require_precomputed_abs=True
+        )
+
+
         
+
+        """
         _, _ = production_plots.plot_cohort_deltas_boxplot_by_voxel(
             nominal_deltas_df,
             cohort_output_figures_dir,
@@ -1052,6 +1395,36 @@ def main():
             point_size = 3,        # adjust visibility
             alpha = 0.5, 
         )
+        """
+
+        _ = plot_cohort_deltas_boxplot_by_voxel(
+            nominal_deltas_df_with_abs,
+            cohort_output_figures_dir,
+            fig_name="dose_deltas_box_by_voxel_cohort",
+            zero_level_index_str='Dose (Gy)',
+            x_axis='Voxel index',
+            show_points=False,
+            include_abs=True,
+            abs_as_hue=True,           # ← Signed vs Absolute as hue, facets = mean/mode/median
+            label_style='math',
+            median_superscript='Q50'
+        )
+
+        _ = plot_cohort_deltas_boxplot_by_voxel(
+            nominal_gradient_deltas_df_with_abs,
+            cohort_output_figures_dir,
+            fig_name="dose_gradient_deltas_box_by_voxel_cohort",
+            zero_level_index_str='Dose grad (Gy/mm)',
+            x_axis='Voxel index',
+            show_points=False,
+            include_abs=True,
+            abs_as_hue=False,          # ← Δ and |Δ| as separate legend entries
+            label_style='math',
+            median_superscript='Q50'
+        )
+
+
+
         
     print('stop')
 
@@ -1273,7 +1646,13 @@ def main():
         # 3. Cohort DVH metrics boxplot
         print("Generating cohort DVH metrics boxplot...")
 
-        production_plots.dvh_boxplot(cohort_global_dosimetry_dvh_metrics_df, save_path = cohort_output_figures_dir, custom_name = "dvh_boxplot")
+        production_plots.dvh_boxplot(cohort_global_dosimetry_dvh_metrics_df, 
+                                     save_path = cohort_output_figures_dir, 
+                                     custom_name = "dvh_boxplot", 
+                                     title = None, 
+                                     axis_label_font_size = 14,
+                                     tick_label_font_size = 12
+                                    )
 
 
 
@@ -1560,6 +1939,7 @@ def main():
     if False:
         print("Skipping!")
     else:
+        """
         for patient_id, bx_index in patient_id_and_bx_index_pairs:
 
             # Create a directory for the patient
@@ -1603,6 +1983,79 @@ def main():
                 tick_label_fontsize = 12,
                 title = zero_level_index_str+ ' Deltas line plot - Patient '+patient_id+', Bx index '+str(bx_index)+', Bx ID '+str(bx_id),
             )
+        """
+
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            # directories
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+
+            # ----- Dose (Gy) -----
+            bx_id = nominal_deltas_df_with_abs[
+                (nominal_deltas_df_with_abs[('Patient ID','')] == patient_id) &
+                (nominal_deltas_df_with_abs[('Bx index','')] == bx_index)
+            ][('Bx ID','')].values[0]
+
+            general_plot_name_string = f"{patient_id} - {bx_id} - dosimetry-deltas-plot"
+            zero_level_index_str = 'Dose (Gy)'
+
+            production_plots.plot_biopsy_deltas_line_both_signed_and_abs(
+                nominal_deltas_df_with_abs,              # <-- use the _with_abs df
+                patient_id,
+                bx_index,
+                patient_dir,
+                general_plot_name_string,
+                zero_level_index_str = zero_level_index_str,
+                x_axis = 'Voxel index',                  # or 'Voxel begin (Z)'
+                axes_label_fontsize = 14,
+                tick_label_fontsize = 12,
+                title = f"{zero_level_index_str} Deltas — Patient {patient_id}, Bx {bx_index}, Bx ID {bx_id}",
+                include_abs = True,
+                require_precomputed_abs = True,          # strict: read abs block only
+                fallback_recompute_abs = False,          # set True only if you want |Δ| on-the-fly
+                label_style = 'math',                    # Δ^{mean}, Δ^{mode}, Δ^{Q50}
+                median_superscript = 'Q50',
+                order_kinds = ('mean','mode','median'),
+                show_points = False,
+                point_size = 3,
+                alpha = 0.5,
+                linewidth_signed = 2.0,
+                linewidth_abs = 2.0,
+            )
+
+            # ----- Dose gradient (Gy/mm) -----
+            bx_id = nominal_gradient_deltas_df_with_abs[
+                (nominal_gradient_deltas_df_with_abs[('Patient ID','')] == patient_id) &
+                (nominal_gradient_deltas_df_with_abs[('Bx index','')] == bx_index)
+            ][('Bx ID','')].values[0]
+
+            general_plot_name_string = f"{patient_id} - {bx_id} - dosimetry-gradient-deltas-plot"
+            zero_level_index_str = 'Dose grad (Gy/mm)'
+
+            production_plots.plot_biopsy_deltas_line_both_signed_and_abs(
+                nominal_gradient_deltas_df_with_abs,     # <-- use the _with_abs df
+                patient_id,
+                bx_index,
+                patient_dir,
+                general_plot_name_string,
+                zero_level_index_str = zero_level_index_str,
+                x_axis = 'Voxel index',
+                axes_label_fontsize = 14,
+                tick_label_fontsize = 12,
+                title = f"{zero_level_index_str} Deltas — Patient {patient_id}, Bx {bx_index}, Bx ID {bx_id}",
+                include_abs = True,
+                require_precomputed_abs = True,
+                fallback_recompute_abs = False,
+                label_style = 'math',
+                median_superscript = 'Q50',
+                order_kinds = ('mean','mode','median'),
+                show_points = False,
+                point_size = 3,
+                alpha = 0.5,
+                linewidth_signed = 2.0,
+                linewidth_abs = 2.0,
+            )
+
 
     print("--------------------------------------------------")
     print("Figures: Individual patient dosimetry and dose gradient kernel regressions...")
@@ -1677,7 +2130,7 @@ def main():
 
 
     # 2. individual patient cumulative and differential DVH
-    if True:
+    if False:
         print("Skipping!")
     else:
         for patient_id, bx_index in patient_id_and_bx_index_pairs:
@@ -1704,7 +2157,9 @@ def main():
 
             dvh_option = {'dvh':'cumulative', 'x-col': 'Dose (Gy)', 'x-axis-label': 'Dose (Gy)', 'y-col': 'Percent volume', 'y-axis-label': 'Percent Volume (%)'}
             
-            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v2(sp_patient_all_structure_shifts_pandas_data_frame,
+            print(f"Creating cDVH for {patient_id}, bx index {bx_index}, bx ID {bx_struct_roi}...")
+            """
+            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_1(sp_patient_all_structure_shifts_pandas_data_frame,
                                                                                             sp_bx_cumulative_dvh_pandas_dataframe,
                                                                                                 patient_dir,
                                                                                                 patient_id,
@@ -1715,21 +2170,20 @@ def main():
                                                                                                 num_rand_trials_to_show,
                                                                                                 custom_fig_title,
                                                                                                 trial_annotation_style= random_trial_annotation_style,
-                                                                                                dvh_option = dvh_option
+                                                                                                dvh_option = dvh_option,
+                                                                                                # NEW options
+                                                                                                bands_mode="horizontal",           # 'vertical' (as in v3), 'horizontal' (Dx-consistent), or 'both'
+                                                                                                show_median_line=True,
+                                                                                                show_mean_line=False,
+                                                                                                show_dx_vy_markers=True,
+                                                                                                dx_list=(2, 50, 98),
+                                                                                                vy_list=(100, 125, 150, 175, 200, 300),
+                                                                                                ref_dose_gy=13.5
                                                                                                 )
-
-
-            ### differential DVH
-            random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
-            general_plot_name_string = " - differential-DVH" # file name
-            custom_fig_title = 'Differential DVH' # title of the plot
-
-            sp_bx_differential_dvh_pandas_dataframe = all_differential_dvh_by_mc_trial_number_df[(all_differential_dvh_by_mc_trial_number_df['Patient ID'] == patient_id) & (all_differential_dvh_by_mc_trial_number_df['Bx index'] == bx_index)]
-
-            dvh_option = {'dvh':'differential', 'x-col': 'Dose bin center (Gy)', 'x-axis-label': 'Dose (Gy)', 'y-col': 'Percent volume', 'y-axis-label': 'Percent Volume (%)'}
-            
-            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v2(sp_patient_all_structure_shifts_pandas_data_frame,
-                                                                                            sp_bx_differential_dvh_pandas_dataframe,
+            """
+            """
+            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_3(sp_patient_all_structure_shifts_pandas_data_frame,
+                                                                                            sp_bx_cumulative_dvh_pandas_dataframe,
                                                                                                 patient_dir,
                                                                                                 patient_id,
                                                                                                 bx_struct_roi,
@@ -1738,11 +2192,121 @@ def main():
                                                                                                 general_plot_name_string,
                                                                                                 num_rand_trials_to_show,
                                                                                                 custom_fig_title,
-                                                                                                trial_annotation_style=random_trial_annotation_style,
-                                                                                                dvh_option = dvh_option
+                                                                                                trial_annotation_style= random_trial_annotation_style,
+                                                                                                dvh_option = dvh_option,
+                                                                                                # NEW options
+                                                                                                bands_mode="both",           # 'vertical' (as in v3), 'horizontal' (Dx-consistent), or 'both'
+                                                                                                show_median_line=True,
+                                                                                                show_mean_line=False,
+                                                                                                # tick/marker options
+                                                                                                show_computed_ticks=True,          # draw ticks from trials (what you compare against)
+                                                                                                show_table_markers=True,           # overlay markers from dvh_metrics_df
+                                                                                                dx_list=(2, 50, 98),
+                                                                                                vy_list=(100, 125, 150, 175, 200, 300),
+                                                                                                ref_dose_gy=13.5,
+                                                                                                # NEW: overlay table metrics
+                                                                                                dvh_metrics_df=cohort_global_dosimetry_dvh_metrics_df,               # dataframe with columns shown in your message
+                                                                                                overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),  # which stats to plot
+                                                                                                overlay_metrics_alpha=0.95,
+                                                                                                # styles
+                                                                                                dx_tick_color='black',
+                                                                                                vy_tick_color='tab:blue',
                                                                                                 )
-            
+            """
+            # QA version
+            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_5(
+                sp_patient_all_structure_shifts_pandas_data_frame=sp_patient_all_structure_shifts_pandas_data_frame,
+                cumulative_dvh_pandas_dataframe=sp_bx_cumulative_dvh_pandas_dataframe,
+                patient_sp_output_figures_dir=patient_dir,
+                patientUID=patient_id,
+                bx_struct_roi=bx_struct_roi,
+                bx_struct_ind=bx_index,
+                bx_ref=bx_ref,
+                general_plot_name_string="cumulative-DVH-QA",
+                num_rand_trials_to_show=3,            # dashed sample trials (1..10)
+                custom_fig_title="Cumulative DVH (QA)",
+                trial_annotation_style='number',  # 'arrow' or 'number'
+                dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                            'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+                bands_mode="both",                     # vertical + horizontal
+                show_median_line=True,
+                show_mean_line=False,
+                show_ticks=True,                       # show computed Dx/Vy ticks
+                show_markers=True,                     # overlay table markers
+                show_dx_ticks=True,
+                show_vy_ticks=True,
+                show_dx_markers=True,
+                show_vy_markers=True,
+                dx_list=(2,50,98),
+                vy_list=(100,125,150,175,200,300),
+                ref_dose_gy=13.5,
+                dvh_metrics_df=cohort_global_dosimetry_dvh_metrics_df,   # your table df
+                overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
+                # optional: constrain horizontal envelopes to common y-range across trials
+                limit_horizontal_to_common=False
+            )
+            # Final version
+            production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_5(
+                sp_patient_all_structure_shifts_pandas_data_frame=sp_patient_all_structure_shifts_pandas_data_frame,
+                cumulative_dvh_pandas_dataframe=sp_bx_cumulative_dvh_pandas_dataframe,
+                patient_sp_output_figures_dir=patient_dir,
+                patientUID=patient_id,
+                bx_struct_roi=bx_struct_roi,
+                bx_struct_ind=bx_index,
+                bx_ref=bx_ref,
+                general_plot_name_string="cumulative-DVH-paper",
+                num_rand_trials_to_show=3,            # dashed sample trials (1..10)
+                custom_fig_title="Cumulative DVH (Manuscript)",
+                trial_annotation_style='number',  # 'arrow' or 'number'
+                dvh_option={'dvh':'cumulative', 'x-col':'Dose (Gy)', 'x-axis-label':'Dose (Gy)',
+                            'y-col':'Percent volume','y-axis-label':'Percent Volume (%)'},
+                bands_mode="vertical",                     # vertical + horizontal
+                quantile_line_style='smooth',  # 'smooth' or 'step'
+                show_median_line=True,
+                show_mean_line=False,
+                show_ticks=False,                       # show computed Dx/Vy ticks
+                show_markers=False,                     # overlay table markers
+                show_dx_ticks=True,
+                show_vy_ticks=True,
+                show_dx_markers=True,
+                show_vy_markers=True,
+                dx_list=(2,50,98),
+                vy_list=(100,125,150,175,200,300),
+                ref_dose_gy=13.5,
+                dvh_metrics_df=cohort_global_dosimetry_dvh_metrics_df,   # your table df
+                overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
+                # optional: constrain horizontal envelopes to common y-range across trials
+                limit_horizontal_to_common=False
+            )
 
+            print('...done!')
+
+            ### differential DVH
+            if False:
+                print(f'Creating dDVH for {patient_id}, bx index {bx_index}, bx ID {bx_struct_roi}...')
+                random_trial_annotation_style = 'number' # can be 'number' or 'arrow'
+                general_plot_name_string = " - differential-DVH" # file name
+                custom_fig_title = 'Differential DVH' # title of the plot
+
+                sp_bx_differential_dvh_pandas_dataframe = all_differential_dvh_by_mc_trial_number_df[(all_differential_dvh_by_mc_trial_number_df['Patient ID'] == patient_id) & (all_differential_dvh_by_mc_trial_number_df['Bx index'] == bx_index)]
+
+                dvh_option = {'dvh':'differential', 'x-col': 'Dose bin center (Gy)', 'x-axis-label': 'Dose (Gy)', 'y-col': 'Percent volume', 'y-axis-label': 'Percent Volume (%)'}
+                
+                production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v2(sp_patient_all_structure_shifts_pandas_data_frame,
+                                                                                                sp_bx_differential_dvh_pandas_dataframe,
+                                                                                                    patient_dir,
+                                                                                                    patient_id,
+                                                                                                    bx_struct_roi,
+                                                                                                    bx_index,
+                                                                                                    bx_ref,
+                                                                                                    general_plot_name_string,
+                                                                                                    num_rand_trials_to_show,
+                                                                                                    custom_fig_title,
+                                                                                                    trial_annotation_style=random_trial_annotation_style,
+                                                                                                    dvh_option = dvh_option
+                                                                                                    )
+                
+                print('...done!')
 
 
 
@@ -2075,7 +2639,7 @@ def main():
             y_trim=True,
             y_min_fixed=0,
             xlabel="Length Scale (mm)",
-            ylabel="Absolute Dose Difference (Gy)",
+            ylabel="Absolute Dose Gradient Difference (Gy/mm)",
             title_font_size=20,
             axis_label_font_size=14,
             tick_label_font_size=12,
