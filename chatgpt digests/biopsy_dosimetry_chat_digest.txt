@@ -1,0 +1,193 @@
+
+Biopsy Dosimetry Analysis — Chat Digest (Summary for Handoff)
+============================================================
+
+Context
+-------
+Goal: robustly characterize *signed* and *absolute* differences between nominal dosimetry and various comparators (trial values for MC trials; cohort stats such as mean/mode/median), and study how those deltas vary with dose gradient. Build paper-ready plots and CSV outputs with minimal custom math, leaning on seaborn/statsmodels/scipy.
+
+Key Data Shapes
+---------------
+1) Per-voxel multiindex cohort dataframe (`cohort_global_dosimetry_by_voxel_df`):
+   - Top-level metrics: "Dose (Gy)", "Dose grad (Gy/mm)" etc.
+   - Sub-level stats: "nominal", "mean", "argmax_density" (mode), "quantile_50" (median/Q50), etc.
+   - Metadata columns (level-0 name, level-1 empty): "Patient ID", "Bx index", "Voxel index", "Bx ID", "Bx refnum", voxel Z extents, simulation flags, etc.
+
+2) Monte Carlo trial deltas dataframe (`mc_deltas`):
+   - Contains per-trial differences at same voxel: (f"{metric} deltas","nominal_minus_trial"), plus optional abs version in same style.
+   - Columns: ["Patient ID", "Bx index", "Voxel index", "MC trial num", ...].
+
+Major Functionality (What We Added/Changed)
+-------------------------------------------
+A) Deltas vs cohort statistics (per voxel)
+   1) compute_biopsy_nominal_deltas(...)
+      - Computes signed deltas: nominal − mean/mode/median for a given metric (e.g., Dose (Gy)).
+   2) compute_biopsy_nominal_deltas_with_abs(...)
+      - Same as above but also adds absolute-delta block:
+        - Level-0: f"{metric} deltas" with keys nominal_minus_mean/mode/q50
+        - Level-0: f"{metric} abs deltas" with abs_nominal_minus_mean/mode/q50
+      - Metadata preserved and ordered.
+
+B) MC trial deltas & summaries
+   3) compute_mc_trial_deltas(...)
+      - Computes signed nominal_minus_trial for each requested metric per (patient, biopsy, voxel, trial).
+      - (We discussed adding abs; you added "abs_nominal_minus_trial" if needed similarly to other functions.)
+
+   4) save_mc_delta_summary_csv(...)
+      - Summarizes “nominal_minus_trial” for each metric; we extended logic to also handle the added absolute columns if present (so both signed and |Δ| can be summarized) and produce tidy CSVs (means, std, sem, quantiles, IQR, counts).
+
+   5) save_nominal_vs_trial_proportions_csv(...)
+      - For each voxel across trials, computes proportions: P(nominal > trial), P(=), P(<).
+      - Outputs two CSVs:
+        * per-voxel: proportions + n_trials (+ optionally standardized column names: prop_nominal_gt_trial, etc.) and metadata (Patient ID, Bx index, Voxel index, Bx ID/refnum if available).
+        * per-biopsy: medians across voxels including CLES_ties_median and IQR.
+      - Clearer column names and inclusion of biopsy-level metadata were added as requested.
+
+   6) save_cohort_cles_summary_csv(...)
+      - Robust to OLD (“prop_gt/prop_eq/prop_lt”) and NEW (“prop_nominal_*”) schemas. Derives missing columns when needed.
+      - FIX: replaced `pd.isfinite` with `np.isfinite`. Handles weights = n_trials for pooled estimates. Writes single-row-per-metric CSV with pooled CLES and biopsy-level CLES distribution (median/q25/q75/IQR).
+
+   7) save_cohort_pooled_cles_from_mc_deltas(...)
+      - No structural change required. Takes mc_deltas, computes cohort-pooled CLES_strict and CLES_ties from per-voxel, per-trial differences (after optional exclusion of trial 0).
+
+C) Deltas vs Gradient (core merge + plotting)
+   8) build_deltas_vs_gradient_df_with_abs(...)
+      - Joins the delta blocks (signed + precomputed absolute) to one or multiple gradient statistics on the same voxel keys.
+      - Supports gradient_stats being a single stat ("nominal") or multiple ("nominal","mean","mode","median"), mapping “median/Q50” to "quantile_50", “mode” to "argmax_density".
+      - Returns:
+        * WIDE: metadata + Δ_mode/Δ_median/Δ_mean (signed) + |Δ_*| + gradient columns + optional log1p(|Δ|).
+        * LONG: columns: ["Patient ID","Bx index","Voxel index","Grad[stat] (Gy/mm)", "Delta kind", "Delta (signed)", "|Delta|", "log1p|Delta|"].
+      - BUG FIX: earlier long-abs mapping via `wide.loc[r.name, ...]` raised KeyError when melt reindexed; now absolute values are merged by keys, not positional index.
+
+   9) Paper-ready plotting with seaborn/statsmodels (package-first, simple):
+      - plot_abs_delta_vs_gradient_pkg(...): |Δ| vs gradient; OLS fits with 95% CI; optional log1p(|Δ|) for supplemental view.
+      - plot_signed_delta_vs_gradient_pkg(...): Δ (signed) vs gradient; OLS+CI.
+      - Behavior:
+        * Facet by gradient column (panels per Grad[nominal]/Grad[mean]/...).
+        * Hue by Δ-kind (Δ_mode/Δ_median/Δ_mean).
+        * Scatter downsampling to avoid overplotting.
+        * Greek labels: x-axis as ||∇D||_{stat} (Gy/mm); y-axis as Δ or |Δ|; no on-plot annotation by default.
+        * Still writes a per-panel CSV "<file_prefix>__stats.csv" with slope, slope CI, intercept, R², Spearman ρ, n.
+      - Batch wrappers:
+        * plot_abs_delta_vs_gradient_pkg_batch(...): saves one figure per gradient AND a combined multi-panel figure.
+        * plot_signed_delta_vs_gradient_pkg_batch(...): same for signed.
+      - Why separate plots?
+        * Magnitude vs gradient (|Δ|) answers “how much uncertainty grows with gradient”.
+        * Bias vs gradient (Δ signed) answers “directional skew” (whether nominal tends to be higher/lower). Keeping them separate avoids mixed scales.
+
+Bugs/Errors We Addressed
+------------------------
+- statsmodels conf_int return type: replaced `.to_numpy()` with robust extraction using `np.asarray(...)` or `.loc` on DataFrame; now version-agnostic.
+- pandas.isfinite: use `numpy.isfinite` instead.
+- KeyError 413 in long abs mapping: melted frame index no longer matches wide. Solution: compute long |Δ| by direct melt of abs columns or by merging on keys (implemented). No positional indexing.
+- Negative values in |Δ|: We added an assertion check; if encountered, it flags upstream mixing of signed/abs columns.
+
+Plotting Defaults & Options (Paper-Ready)
+-----------------------------------------
+- Axis labels:
+  * X: “Grad[stat] (Gy/mm)” shown as LaTeX:  ||∇D||_{stat} (Gy/mm)
+  * Y: Δ for signed; |Δ| for magnitude; optional log(1+|Δ|) for supplemental.
+- Regression:
+  * OLS with seaborn.regplot for simple linear trend + 95% CI; LOWESS optional (didn’t enable by default).
+- Faceting & Hue:
+  * Panels = gradient stats (nominal, mean, mode, median) if requested.
+  * Hue = Δ_kind (Δ_mode, Δ_median, Δ_mean).
+- No fit annotations on the figure by default (kept for CSV only).
+- Outputs:
+  * SVG + PNG for each figure.
+  * `<file_prefix>__stats.csv` with: gradient_col, delta_kind, y_col, n, slope, slope_lo, slope_hi, intercept, r2, rho, rho_p.
+
+API Call Patterns (Explicit Options)
+------------------------------------
+1) Build Δ vs gradient data (with abs):
+   combined_wide, combined_long = helper_funcs.build_deltas_vs_gradient_df_with_abs(
+       nominal_deltas_df=nominal_deltas_df_with_abs,
+       cohort_by_voxel_df=cohort_global_dosimetry_by_voxel_df,
+       zero_level_index_str='Dose (Gy)',
+       gradient_top='Dose grad (Gy/mm)',
+       gradient_stats=('nominal','median','mean','mode'),
+       gradient_stat=None,
+       meta_keep=('Voxel begin (Z)','Voxel end (Z)','Voxel index',
+                 'Patient ID','Bx ID','Bx index','Bx refnum',
+                 'Simulated bool','Simulated type'),
+       add_abs=True,
+       add_log1p=True,
+       return_long=True,
+       require_precomputed_abs=True,
+       fallback_recompute_abs=False
+   )
+
+2) Absolute magnitude vs gradient (batch: per-gradient + combined):
+   abs_svgs, abs_pngs, abs_combined_stats_csv = plot_abs_delta_vs_gradient_pkg_batch(
+       long_df=combined_long,
+       save_dir=cohort_output_figures_dir,
+       base_prefix="abs_delta_vs_gradient",
+       gradient_cols=["Grad[nominal] (Gy/mm)","Grad[median] (Gy/mm)","Grad[mean] (Gy/mm)","Grad[mode] (Gy/mm)"],
+       delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+       use_log1p=False,
+       scatter=True, scatter_sample=20000, scatter_alpha=0.15, scatter_size=10.0,
+       ci=95, annotate_stats=False, write_stats_csv=True,
+       axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+       height_single=3.0, aspect_single=1.6, height_combined=3.0, aspect_combined=1.5,
+       facet_cols_combined=2
+   )
+
+3) Signed bias vs gradient (batch: per-gradient + combined):
+   signed_svgs, signed_pngs, signed_combined_stats_csv = plot_signed_delta_vs_gradient_pkg_batch(
+       long_df=combined_long,
+       save_dir=cohort_output_figures_dir,
+       base_prefix="signed_delta_vs_gradient",
+       gradient_cols=["Grad[nominal] (Gy/mm)","Grad[median] (Gy/mm)","Grad[mean] (Gy/mm)","Grad[mode] (Gy/mm)"],
+       delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+       scatter=True, scatter_sample=20000, scatter_alpha=0.15, scatter_size=10.0,
+       ci=95, annotate_stats=False, write_stats_csv=True,
+       axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+       height_single=3.0, aspect_single=1.6, height_combined=3.0, aspect_combined=1.5,
+       facet_cols_combined=2
+   )
+
+4) Cohort CLES summaries (robust to schema):
+   cohort_path, cohort_df = save_cohort_cles_summary_csv(
+       voxel_stats=cles_voxel_stats_or_path,
+       biopsy_stats=cles_biopsy_stats_or_path,
+       output_dir=voxel_wise_nominal_analysis_dir,
+       csv_name="cohort_cles_summary.csv",
+       metrics_col="metric",
+       decimals=3
+   )
+
+5) Cohort pooled CLES from mc_deltas (unchanged):
+   pooled_path, pooled_df = save_cohort_pooled_cles_from_mc_deltas(
+       mc_deltas,
+       output_dir=voxel_wise_nominal_analysis_dir,
+       csv_name="cohort_pooled_cles.csv",
+       value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
+       exclude_nominal_trial=True,
+       decimals=3
+   )
+
+Paper Guidance (What to Plot & Why)
+-----------------------------------
+- Keep “magnitude vs gradient” and “bias vs gradient” as **separate figures**:
+  * |Δ| vs ||∇D||_{stat}: shows how uncertainty grows with gradient (slope, R², Spearman ρ).
+  * Δ vs ||∇D||_{stat}: shows directional skew (if nominal systematically > or <).
+- Use **OLS (with 95% CI)** for the main; optionally add a **LOWESS** panel in SI if nonlinearity is suspected.
+- Consider both **voxel-wise scatter+fit** and **biopsy-level summaries** (medians of |Δ| per biopsy vs biopsy-level gradient to show robustness).
+- Optionally, add a **log1p(|Δ|)** supplemental figure to compress tails if needed (but the main text should be on the natural scale).
+
+Known Pitfalls Avoided
+----------------------
+- Do not mix signed and absolute in the same y-axis.
+- Ensure |Δ| never goes negative; if it does, upstream columns are mixed.
+- When melting, never rely on row index alignment to map signed↔abs; merge by keys instead.
+- Use `np.isfinite`, not `pd.isfinite`. Handle `conf_int` output as ndarray or DataFrame.
+
+Open Options / Extensions
+-------------------------
+- Add per-biopsy *robust* regressions (biopsy medians of |Δ| vs median gradient) to complement voxel-wise fits.
+- Provide a caption generator that reads `<file_prefix>__stats.csv` and prints “slope [CI], ρ, R², n” sentences (if desired later).
+- Support alternative units (e.g., dose % differences) via a preprocessing knob.
+
+End
+---
+This digest captures: added/updated functions, bug fixes, plotting approach (package-first), recommended figures, and exemplar call sites with explicit options and CSV outputs.

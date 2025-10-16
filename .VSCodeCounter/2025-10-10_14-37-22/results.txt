@@ -1,0 +1,44 @@
+Date : 2025-10-10 14:37:22
+Directory : /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis
+Total : 18 files,  12540 codes, 3293 comments, 2928 blanks, all 18761 lines
+
+Languages
++----------+------------+------------+------------+------------+------------+
+| language | files      | code       | comment    | blank      | total      |
++----------+------------+------------+------------+------------+------------+
+| Python   |         16 |     11,730 |      3,293 |      2,923 |     17,946 |
+| JSON     |          1 |        793 |          0 |          1 |        794 |
+| toml     |          1 |         17 |          0 |          4 |         21 |
++----------+------------+------------+------------+------------+------------+
+
+Directories
++-----------------------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                                                                        | files      | code       | comment    | blank      | total      |
++-----------------------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                                                                           |         18 |     12,540 |      3,293 |      2,928 |     18,761 |
++-----------------------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++-----------------------------------------------------------------------------------------------------------------------------+----------+------------+------------+------------+------------+
+| filename                                                                                                                    | language | code       | comment    | blank      | total      |
++-----------------------------------------------------------------------------------------------------------------------------+----------+------------+------------+------------+------------+
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/GPR_analysis_helpers.py                               | Python   |        231 |         56 |         53 |        340 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/GPR_analysis_pipeline_functions.py                    | Python   |        299 |         82 |         96 |        477 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/GPR_analysis_plotting_functions_manual_methods.py     | Python   |        412 |         55 |         92 |        559 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/GPR_analysis_plotting_functions_manual_methods_old.py | Python   |        189 |         38 |         36 |        263 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/Pipfile                                               | toml     |         17 |          0 |          4 |         21 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/Pipfile.lock                                          | JSON     |        793 |          0 |          1 |        794 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/biopsy_information.py                                 | Python   |         61 |         44 |         18 |        123 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/helper_funcs.py                                       | Python   |        802 |        270 |        190 |      1,262 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/load_files.py                                         | Python   |         68 |         50 |         31 |        149 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/main_pipe.py                                          | Python   |      1,496 |      1,038 |        516 |      3,050 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/main_pipe_GPR_analysis.py                             | Python   |        152 |         52 |         66 |        270 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/misc_funcs.py                                         | Python   |         18 |         21 |          1 |         40 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/misc_tools.py                                         | Python   |         17 |         13 |          8 |         38 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/plotting_funcs.py                                     | Python   |          8 |          0 |          0 |          8 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/production_plots.py                                   | Python   |      6,672 |      1,085 |      1,499 |      9,256 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/shape_and_radiomic_features.py                        | Python   |        103 |         83 |         35 |        221 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/summary_statistics.py                                 | Python   |      1,172 |        390 |        277 |      1,839 |
+| /home/matthew-muscat/Documents/UBC/Research/biopsy_dosimetry_analysis/uncertainties_analysis.py                             | Python   |         30 |         16 |          5 |         51 |
+| Total                                                                                                                       |          |     12,540 |      3,293 |      2,928 |     18,761 |
++-----------------------------------------------------------------------------------------------------------------------------+----------+------------+------------+------------+------------+

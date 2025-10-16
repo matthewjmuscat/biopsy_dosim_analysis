@@ -1140,15 +1140,15 @@ def compute_mc_trial_deltas_with_abs(
 # ---------------- 2) Summarize and save to CSV ------------------------------
 
 def save_mc_delta_summary_csv(
-    mc_delta_df: pd.DataFrame,
-    output_dir,
-    csv_name: str,
-    *,
-    value_cols: tuple[str, ...] = ('Dose (Gy)', 'Dose grad (Gy/mm)'),
-    group_cols: tuple[str, ...] = ('Patient ID', 'Bx index', 'Voxel index'),
-    include_patient_ids: list | None = None,
-    decimals: int = 3
-) -> Path:
+        mc_delta_df: pd.DataFrame,
+        output_dir,
+        csv_name: str,
+        *,
+        value_cols: tuple[str, ...] = ('Dose (Gy)', 'Dose grad (Gy/mm)'),
+        group_cols: tuple[str, ...] = ('Patient ID', 'Bx index', 'Voxel index'),
+        include_patient_ids: list | None = None,
+        decimals: int = 3
+    ) -> Path:
     """
     Summarize nominal-minus-trial deltas across all trials (and groups) for each metric in value_cols.
 
@@ -1158,7 +1158,7 @@ def save_mc_delta_summary_csv(
 
     Reported columns:
         metric, n_rows, n_trials_unique, n_biopsies, n_group_voxels,
-        mean, std, sem, min, q05, q25, q50, q75, q95, max, iqr
+        mean, std, sem, min, q05, q25, q50, q75, q95, max, iqr, ipr90
     """
     df = mc_delta_df.copy()
 
@@ -1176,7 +1176,6 @@ def save_mc_delta_summary_csv(
         return (key_flat, '') if (key_flat, '') in df.columns else key_flat
 
     pid_c, bxi_c, vox_c = map(_col, ['Patient ID', 'Bx index', 'Voxel index'])
-    # unique biopsies = (Patient ID, Bx index)
     n_biopsies = (
         df[[pid_c, bxi_c]].drop_duplicates().shape[0]
         if all(c in df.columns for c in [pid_c, bxi_c]) else None
@@ -1186,7 +1185,6 @@ def save_mc_delta_summary_csv(
         if all(c in df.columns for c in [pid_c, bxi_c, vox_c]) else None
     )
 
-    # MC trial count (flat only is expected; guard just in case)
     trial_col = 'MC trial num' if 'MC trial num' in df.columns else None
     n_trials_unique = int(df[trial_col].nunique()) if trial_col is not None else None
 
@@ -1196,12 +1194,9 @@ def save_mc_delta_summary_csv(
     for v in value_cols:
         signed_key = (f"{v} deltas", "nominal_minus_trial")
         abs_key    = (f"{v} abs deltas", "abs_nominal_minus_trial")
-        if signed_key not in df.columns:
-            missing.append(signed_key)
-        if abs_key not in df.columns:
-            missing.append(abs_key)
+        if signed_key not in df.columns: missing.append(signed_key)
+        if abs_key not in df.columns:    missing.append(abs_key)
         pairs.append((v, signed_key, abs_key))
-
     if missing:
         raise KeyError(
             "Missing expected delta columns. "
@@ -1209,7 +1204,7 @@ def save_mc_delta_summary_csv(
             f"Missing: {missing}"
         )
 
-    # Summarize helper
+    # Summarize helper (now includes ipr90 = q95 - q05)
     def _summarize_series(s: pd.Series) -> dict:
         s = pd.to_numeric(s, errors='coerce').dropna()
         if s.empty:
@@ -1231,27 +1226,23 @@ def save_mc_delta_summary_csv(
             'q95': q.loc[0.95],
             'max': s.max(),
             'iqr': q.loc[0.75] - q.loc[0.25],
+            'ipr90': q.loc[0.95] - q.loc[0.05],
         }
 
-    # Build rows for signed and abs
     rows = []
     for metric_name, signed_key, abs_key in pairs:
-        # signed
         stats_signed = _summarize_series(df[signed_key])
         if stats_signed is not None:
             rows.append({'metric': metric_name, **stats_signed})
-        # abs
         stats_abs = _summarize_series(df[abs_key])
         if stats_abs is not None:
             rows.append({'metric': f"{metric_name} (abs)", **stats_abs})
 
     summary = pd.DataFrame(rows)
     if not summary.empty:
-        # Round floats; counts remain ints
         num_cols = [c for c in summary.columns if c not in ('metric',)]
         summary[num_cols] = summary[num_cols].round(decimals)
 
-    # Write CSV
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not csv_name.lower().endswith('.csv'):
@@ -1259,6 +1250,276 @@ def save_mc_delta_summary_csv(
     out_path = output_dir / csv_name
     summary.to_csv(out_path, index=False)
     return out_path
+
+
+
+def save_mc_delta_grouped_csvs(
+    mc_delta_df: pd.DataFrame,
+    output_dir,
+    *,
+    base_name: str = "mc_trial_deltas",
+    value_cols: tuple[str, ...] = ('Dose (Gy)', 'Dose grad (Gy/mm)'),
+    decimals: int = 3
+) -> tuple[Path, Path]:
+    """
+    Writes:
+      - <base_name>_by_voxel.csv  (aggregate over MC trials; keep Patient ID, Bx index, Voxel index)
+      - <base_name>_by_biopsy.csv (aggregate over voxels + MC trials; keep Patient ID, Bx index)
+    Columns include: mean, std, sem, min, q05, q25, q50, q75, q95, max, iqr, ipr90.
+    """
+
+    df = mc_delta_df.copy()
+
+    def _col(key_flat: str):
+        return (key_flat, '') if (key_flat, '') in df.columns else key_flat
+
+    metric_pairs = []
+    missing = []
+    for v in value_cols:
+        signed_key = (f"{v} deltas", "nominal_minus_trial")
+        abs_key    = (f"{v} abs deltas", "abs_nominal_minus_trial")
+        if signed_key not in df.columns: missing.append(signed_key)
+        if abs_key not in df.columns:    missing.append(abs_key)
+        metric_pairs.append((v, signed_key, abs_key))
+    if missing:
+        raise KeyError(f"Missing expected delta columns for grouped summaries: {missing}")
+
+    trial_col = 'MC trial num' if 'MC trial num' in df.columns else None
+
+    # now includes ipr90
+    def _summarize_series(s: pd.Series) -> dict | None:
+        s = pd.to_numeric(s, errors='coerce').dropna()
+        if s.empty:
+            return None
+        q = s.quantile([0.05, 0.25, 0.50, 0.75, 0.95])
+        return {
+            'n_rows': int(s.shape[0]),
+            'mean': s.mean(),
+            'std': s.std(ddof=1),
+            'sem': s.sem(ddof=1),
+            'min': s.min(),
+            'q05': q.loc[0.05],
+            'q25': q.loc[0.25],
+            'q50': q.loc[0.50],
+            'q75': q.loc[0.75],
+            'q95': q.loc[0.95],
+            'max': s.max(),
+            'iqr': q.loc[0.75] - q.loc[0.25],
+            'ipr90': q.loc[0.95] - q.loc[0.05],
+        }
+
+    def _constant_metadata(gdf: pd.DataFrame, exclude_cols: set) -> dict:
+        out = {}
+        for c in gdf.columns:
+            if c in exclude_cols or c == trial_col:
+                continue
+            vals = gdf[c].drop_duplicates()
+            if len(vals) == 1:
+                out_key = c if isinstance(c, str) else (c[0] if c[1] == '' else c)
+                out[out_key] = vals.iloc[0]
+        return out
+
+    def _build_grouped_summary(keys: list[str]) -> pd.DataFrame:
+        rows = []
+        for group_vals, gdf in df.groupby([_col(k) for k in keys], dropna=False):
+            if not isinstance(group_vals, tuple):
+                group_vals = (group_vals,)
+            group_info = {k: v for k, v in zip(keys, group_vals)}
+
+            n_trials_unique = int(gdf[trial_col].nunique()) if trial_col and trial_col in gdf.columns else None
+            n_biopsies = int(gdf[[_col('Patient ID'), _col('Bx index')]].drop_duplicates().shape[0]) \
+                         if all(_col(k) in gdf.columns for k in ['Patient ID','Bx index']) else None
+            n_group_voxels = int(gdf[[_col('Patient ID'), _col('Bx index'), _col('Voxel index')]].drop_duplicates().shape[0]) \
+                             if all(_col(k) in gdf.columns for k in ['Patient ID','Bx index','Voxel index']) else None
+
+            exclude_cols = {trial_col}
+            exclude_cols.update({sk for _, sk, _ in metric_pairs})
+            exclude_cols.update({ak for _, _, ak in metric_pairs})
+            const_meta = _constant_metadata(gdf, exclude_cols)
+
+            for metric_name, signed_key, abs_key in metric_pairs:
+                for which, colkey in (('signed', signed_key), ('abs', abs_key)):
+                    stats = _summarize_series(gdf[colkey])
+                    if stats is None:
+                        continue
+                    row = {
+                        **group_info,
+                        **const_meta,
+                        'metric': metric_name if which == 'signed' else f"{metric_name} (abs)",
+                        'n_trials_unique': n_trials_unique,
+                        'n_biopsies': n_biopsies,
+                        'n_group_voxels': n_group_voxels,
+                        **stats,
+                    }
+                    rows.append(row)
+
+        out = pd.DataFrame(rows)
+        if not out.empty:
+            id_like = set(keys) | {'metric'}
+            num_cols = [c for c in out.columns if c not in id_like]
+            out[num_cols] = out[num_cols].round(decimals)
+            out = out.sort_values(keys + ['metric']).reset_index(drop=True)
+        return out
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    by_voxel = _build_grouped_summary(['Patient ID', 'Bx index', 'Voxel index'])
+    path_voxel = output_dir / f"{base_name}_by_voxel.csv"
+    by_voxel.to_csv(path_voxel, index=False)
+
+    by_biopsy = _build_grouped_summary(['Patient ID', 'Bx index'])
+    path_biopsy = output_dir / f"{base_name}_by_biopsy.csv"
+    by_biopsy.to_csv(path_biopsy, index=False)
+
+    return path_voxel, path_biopsy
+
+
+
+from pathlib import Path
+import pandas as pd
+
+def save_nominal_delta_biopsy_stats(
+    nominal_df: pd.DataFrame,
+    output_dir,
+    *,
+    base_name: str = "nominal_deltas",
+    value_blocks: tuple[str, ...] = ('Dose (Gy)', 'Dose grad (Gy/mm)'),
+    decimals: int = 3,
+    include_bx_id: bool = True,
+) -> Path:
+    """
+    Aggregates per-biopsy (Patient ID, Bx index) across voxels for all nominal/abs delta kinds
+    present in `nominal_df`.
+
+    For each metric block in `value_blocks`, looks for:
+      - (f"{metric} deltas", 'nominal_minus_mean'|'nominal_minus_mode'|'nominal_minus_q50')
+      - (f"{metric} abs deltas", 'abs_nominal_minus_mean'|'abs_nominal_minus_mode'|'abs_nominal_minus_q50')
+
+    Outputs one CSV:
+      <base_name>_by_biopsy.csv
+
+    Columns include: mean, std, sem, min, q05, q25, q50, q75, q95, max, iqr, ipr90, and counters.
+    """
+    df = nominal_df.copy()
+
+    # --- helpers ---
+    def _col_present(key):
+        return key in df.columns
+
+    def _summarize_series(s: pd.Series) -> dict | None:
+        s = pd.to_numeric(s, errors='coerce').dropna()
+        if s.empty:
+            return None
+        q = s.quantile([0.05, 0.25, 0.50, 0.75, 0.95])
+        return {
+            'n_rows': int(s.shape[0]),
+            'mean': s.mean(),
+            'std': s.std(ddof=1),
+            'sem': s.sem(ddof=1),
+            'min': s.min(),
+            'q05': q.loc[0.05],
+            'q25': q.loc[0.25],
+            'q50': q.loc[0.50],
+            'q75': q.loc[0.75],
+            'q95': q.loc[0.95],
+            'max': s.max(),
+            'iqr': q.loc[0.75] - q.loc[0.25],
+            'ipr90': q.loc[0.95] - q.loc[0.05],
+        }
+
+    # group keys (MultiIndex-safe)
+    pid_key = ('Patient ID','') if isinstance(df.columns, pd.MultiIndex) and ('Patient ID','') in df.columns else 'Patient ID'
+    bxi_key = ('Bx index','')   if isinstance(df.columns, pd.MultiIndex) and ('Bx index','') in df.columns   else 'Bx index'
+    bxid_key= ('Bx ID','')      if isinstance(df.columns, pd.MultiIndex) and ('Bx ID','') in df.columns      else 'Bx ID'
+    vx_key  = ('Voxel index','')if isinstance(df.columns, pd.MultiIndex) and ('Voxel index','') in df.columns else 'Voxel index'
+
+    # build the list of metric column mappings actually present
+    delta_kinds = (
+        ('mean',   'nominal_minus_mean',      'abs_nominal_minus_mean'),
+        ('mode',   'nominal_minus_mode',      'abs_nominal_minus_mode'),
+        ('median', 'nominal_minus_q50',       'abs_nominal_minus_q50'),
+    )
+
+    metric_specs = []
+    missing = []
+    for metric in value_blocks:
+        signed_block = f"{metric} deltas"
+        abs_block    = f"{metric} abs deltas"
+        for kind, signed_suffix, abs_suffix in delta_kinds:
+            signed_key = (signed_block, signed_suffix)
+            abs_key    = (abs_block, abs_suffix)
+            # tolerate either proper MI keys or flattened strings (rare)
+            ok_signed = _col_present(signed_key) or _col_present(f"{signed_block}_{signed_suffix}")
+            ok_abs    = _col_present(abs_key)    or _col_present(f"{abs_block}_{abs_suffix}")
+            if not ok_signed:
+                missing.append(signed_key)
+            if not ok_abs:
+                missing.append(abs_key)
+            metric_specs.append((metric, kind, signed_key, abs_key))
+    if missing:
+        # Only warn for those truly absent — but continue for present ones
+        # You can raise instead if you want strictness:
+        # raise KeyError(f"Missing columns: {missing}")
+        pass
+
+    rows = []
+    group_keys = [pid_key, bxi_key]
+    if include_bx_id and bxid_key in df.columns:
+        group_keys.append(bxid_key)
+
+    for group_vals, gdf in df.groupby(group_keys, dropna=False):
+        if not isinstance(group_vals, tuple):
+            group_vals = (group_vals,)
+        group_info = { ('Patient ID' if k==pid_key else 'Bx index' if k==bxi_key else 'Bx ID'): v
+                       for k, v in zip(group_keys, group_vals) }
+
+        n_group_voxels = int(gdf[[pid_key, bxi_key, vx_key]].drop_duplicates().shape[0]) \
+                         if vx_key in gdf.columns else None
+
+        for metric, kind, signed_key, abs_key in metric_specs:
+            # resolve keys if flattened
+            if not _col_present(signed_key):
+                signed_key = f"{signed_key[0]}_{signed_key[1]}"
+            if not _col_present(abs_key):
+                abs_key = f"{abs_key[0]}_{abs_key[1]}"
+
+            if _col_present(signed_key):
+                sstats = _summarize_series(gdf[signed_key])
+                if sstats:
+                    rows.append({
+                        **group_info,
+                        'metric': metric,
+                        'delta_kind': kind,          # mean/mode/median (Q50)
+                        'signed_or_abs': 'signed',
+                        'n_group_voxels': n_group_voxels,
+                        **sstats,
+                    })
+            if _col_present(abs_key):
+                astats = _summarize_series(gdf[abs_key])
+                if astats:
+                    rows.append({
+                        **group_info,
+                        'metric': metric,
+                        'delta_kind': kind,
+                        'signed_or_abs': 'abs',
+                        'n_group_voxels': n_group_voxels,
+                        **astats,
+                    })
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        num_cols = [c for c in out.columns if c not in {'Patient ID','Bx index','Bx ID','metric','delta_kind','signed_or_abs'}]
+        out[num_cols] = out[num_cols].round(decimals)
+        out = out.sort_values(['Patient ID','Bx index','Bx ID' if 'Bx ID' in out.columns else 'metric',
+                               'metric','delta_kind','signed_or_abs']).reset_index(drop=True)
+
+    output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
+    path_biopsy = output_dir / f"{base_name}_by_biopsy.csv"
+    out.to_csv(path_biopsy, index=False)
+    return path_biopsy
+
+
 
 
 

@@ -1,0 +1,64 @@
+Digest of Chat on GPR for Biopsy Dose Analysis
+
+---
+
+Key Concepts Discussed:
+
+1. Gaussian Process Regression (GPR) and Assumptions
+   - Latent dose field f(x) assumed to follow a Gaussian process: any finite collection of latent voxel doses are jointly Gaussian.
+   - Noise model: voxel observations y_i = f(x_i) + ε_i with ε_i ~ N(0, σ_i²).
+   - Noise is heteroscedastic (different σ_i² per voxel, estimated from Monte Carlo (MC) trial spread).
+   - Empirical MC distributions do not need to be Gaussian (they may be skewed or heavy-tailed). Only mean/median and variance are used for GPR.
+
+2. Prior vs Posterior in GPR
+   - Prior: GP defined by mean function m(x) and kernel k(x,x'). Represents beliefs about dose smoothness and correlation before seeing data.
+   - Posterior: After conditioning on voxel observations, GPR updates the prior to give posterior mean μ(x) (best estimate of latent dose) and posterior variance σ²(x) (uncertainty remaining about latent dose).
+
+3. Mathematical Formulation
+   - Prior: f(x) ~ GP(m(x), k(x,x')).
+   - Observations: y_i = f(x_i) + ε_i, ε_i ~ N(0, σ_i²).
+   - Joint distribution of observed y: y ~ N(m(X), K_XX + Σ_n).
+   - Posterior mean: μ(X*) = K_*X (K_XX + Σ_n)^(-1) y.
+   - Posterior variance: Σ(X*) = K_** - K_*X (K_XX + Σ_n)^(-1) K_X*.
+
+4. Role of Semivariogram
+   - Empirical semivariogram computed from voxel dose differences vs lag distance.
+   - Fit with Matérn kernel → hyperparameters: σ_f² (variance scale), ℓ (correlation length), ν (smoothness), nugget (small-scale noise).
+   - Kernel built from semivariogram defines the GP prior covariance.
+
+5. What GPR Accomplishes in This Context
+   - Raw MC: noisy voxel estimates, each treated independently (large uncertainty).
+   - GPR: smooth latent dose profile inferred by pooling across correlated voxels.
+   - Posterior uncertainty is reduced relative to voxel MC variance because correlation information is borrowed from neighbors.
+   - Tightly estimated voxels increase precision of nearby voxels (propagation of information through correlation).
+
+6. Difference Between Latent vs Observed
+   - Latent: the smooth true dose field f(x), unobservable directly.
+   - Observed: voxel MC mean/median + noise from MC variability.
+   - GPR infers latent posterior distribution from noisy observations.
+
+7. Predictive vs Latent Uncertainty
+   - Posterior variance σ²(x*) = uncertainty about the latent dose field (epistemic uncertainty).
+   - Predictive variance = σ²(x*) + σ_noise²(x*), i.e. if one were to run another MC measurement at that voxel, includes both latent uncertainty and observation noise.
+
+8. Plots Produced in Pipeline
+   - GP dose profile: posterior mean curve with uncertainty bands (68% and/or 95%); compares to MC voxel estimates ± SD or ± 2SD.
+   - Noise profile: independent MC voxel SD vs distance (shows heteroscedasticity).
+   - Uncertainty reduction: compare independent voxel SD to GP posterior SD; ratio plot.
+   - Residual diagnostics: residuals vs distance, histogram of standardized residuals.
+   - Empirical semivariogram: dose difference variance vs lag distance.
+   - Variogram overlay: empirical semivariogram vs fitted Matérn kernel.
+   - Optional uncertainty ratio: indep SD / GP SD vs distance.
+
+9. Key Interpretation Points
+   - MC variance is not "included" in posterior variance; instead, it's modeled as noise. Posterior variance can be smaller than MC variance because information from other voxels is borrowed.
+   - As MC trials → ∞, noise variance σ_i² → 0, so posterior variance at observed voxels → 0 (perfectly known), but between voxels it remains finite.
+   - GP posterior bands are latent uncertainty; they may not visibly pinch at observation points if heteroscedastic noise is non-zero.
+   - Assumptions: GP prior (multivariate Gaussian latent field) and Gaussian observation noise. No assumption that MC distributions are Gaussian.
+
+10. One-liner Summary
+   - "We use Gaussian Process Regression to denoise noisy Monte Carlo voxel doses by exploiting spatial correlation, giving smoother dose profiles with tighter and more realistic uncertainty bounds."
+
+---
+
+End of Digest.

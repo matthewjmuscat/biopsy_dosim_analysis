@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 import copy
@@ -27,6 +29,11 @@ import matplotlib as mpl
 import matplotlib.colors as mcolors
 import matplotlib.patheffects as pe
 from matplotlib.lines import Line2D
+from typing import Iterable, Optional, Tuple, Literal, Sequence, Dict
+import statsmodels.api as sm
+from scipy.stats import spearmanr
+import re 
+from matplotlib.ticker import StrMethodFormatter
 
 plt.ioff()
 
@@ -5514,9 +5521,18 @@ def plot_dose_vs_length_with_summary_mutlibox(
         title_font_size: int = 16,         # independent font sizes
         axis_label_font_size: int = 14,
         tick_label_font_size: int = 12,
-        multi_pairs: list = None           # list of (Patient ID, Bx index) tuples
+        multi_pairs: list = None,           # list of (Patient ID, Bx index) tuples
+        metric_family: str | None = None,  # 'dose' or 'grad'
+        y_tick_decimals: int | None = 1,
     ):
     plt.ioff()
+
+    # Decide dose vs gradient
+    if metric_family in ('dose', 'grad'):
+        is_grad = (metric_family == 'grad')
+    else:
+        # fallback: try to infer (kept for backward compat)
+        is_grad = ('grad' in (y_col or '').lower()) or ('gamma' in (y_col or '').lower())
 
     # ---- prep ----
     df = df.copy()
@@ -5526,6 +5542,25 @@ def plot_dose_vs_length_with_summary_mutlibox(
     plt.figure(figsize=figsize)
     ax = plt.gca()
     ax.set_axisbelow(True)  # grid under data
+
+    from matplotlib.ticker import StrMethodFormatter
+
+
+
+    # Axis labels consistent with your paper
+    x_label_latex = r'$\ell_k$ (mm)'
+    y_label_latex = r'$\mathcal{S}_b^{\Gamma}(\ell_k)\ \mathrm{(Gy\,mm^{-1})}$' if is_grad else r'$\mathcal{S}_b^{D}(\ell_k)\ \mathrm{(Gy)}$'
+
+    # Apply labels (override any plain-text defaults)
+    ax.set_xlabel(xlabel if xlabel else x_label_latex, fontsize=axis_label_font_size)
+    ax.set_ylabel(ylabel if ylabel else y_label_latex, fontsize=axis_label_font_size)
+
+    # Optional: force tick precision on y (e.g., 1 decimal)
+    if y_tick_decimals is not None:
+        fmt = f'{{x:.{int(y_tick_decimals)}f}}'
+        ax.yaxis.set_major_formatter(StrMethodFormatter(fmt))
+        ax.get_yaxis().get_offset_text().set_visible(False)
+
 
     # Apply tick font size globally for this figure
     plt.rcParams.update({
@@ -5689,8 +5724,7 @@ def plot_dose_vs_length_with_summary_mutlibox(
     if title:
         ax.set_title(title, fontsize=title_font_size)
 
-    ax.set_xlabel(xlabel if xlabel else x_col, fontsize=axis_label_font_size)
-    ax.set_ylabel(ylabel if ylabel else y_col, fontsize=axis_label_font_size)
+
     ax.set_ylim(y_min - 0.05 * (y_max - y_min), y_max * 1.05)
     ax.grid(True)
 
@@ -6477,23 +6511,52 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
     axes_label_fontsize: int = 13,
     tick_label_fontsize: int = 11,
     title: str | None = None,
-    # --- NEW options (match the other plotting APIs) ---
-    include_abs: bool = True,                  # include |Δ| curves
-    require_precomputed_abs: bool = True,      # expect abs block present; do not recompute
-    fallback_recompute_abs: bool = False,      # if abs block missing and you *really* want |Δ| on the fly
-    label_style: str = 'math',                 # 'math' -> Δ^{mean}/Δ^{mode}/Δ^{Q50}; 'text' -> Nominal - Mean, etc.
-    median_superscript: str = 'Q50',           # used when label_style='math'
-    order_kinds: tuple = ('mean', 'mode', 'median'),  # order of Δ kinds in legend
-    show_points: bool = False,                 # overlay points along the lines
+    # --- options ---
+    include_abs: bool = True,
+    require_precomputed_abs: bool = True,
+    fallback_recompute_abs: bool = False,
+    label_style: str = 'math',                 # kept for backward compat (ignored for y/legend)
+    median_superscript: str = 'Q50',
+    order_kinds: tuple = ('mean', 'mode', 'median'),
+    show_points: bool = False,
     point_size: int = 3,
     alpha: float = 0.5,
     linewidth_signed: float = 2.0,
     linewidth_abs: float = 2.0,
+    # --- NEW customization ---
+    show_title: bool = True,                   # set False to remove title completely
+    linestyle_signed: tuple | str = 'solid',
+    linestyle_absolute: tuple | str = (0, (3, 2)),  # dotted
 ):
-    plt.ioff()
 
-    """Line plot of Nominal−(Mean/Mode/Q50) (signed) and |Nominal−(⋅)| (absolute) along the core
-       for one (Patient ID, Bx index). Saves SVG & PNG."""
+
+
+
+    def _as_dashpattern(val):
+        """Return a Seaborn-friendly dash pattern tuple (on, off, ...)."""
+        if isinstance(val, tuple):
+            # If user passed a 2-tuple like (0, (3,2)), unwrap it
+            if len(val) == 2 and isinstance(val[1], (tuple, list)):
+                return tuple(val[1])
+            return val  # assume already a pattern-only tuple like (3,2)
+        if isinstance(val, str):
+            v = val.lower()
+            if v in ("solid", "-"):
+                return ()                # solid -> empty tuple (pattern-only)
+            if v in ("dashed", "--"):
+                return (6, 6)
+            if v in ("dotted", ":"):
+                return (1, 3)
+            if v in ("dashdot", "-."):
+                return (6, 4, 1, 4)
+            raise ValueError(f"Unrecognized linestyle string: {val!r}")
+        # default to solid
+        return ()
+
+
+
+
+    plt.ioff()
 
     # --- filter the biopsy (MultiIndex metadata expected)
     mask = (deltas_df[('Patient ID','')] == patient_id) & (deltas_df[('Bx index','')] == bx_index)
@@ -6507,24 +6570,23 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
         x_label = 'Voxel begin (Z) [mm]'
     else:
         x = sub[('Voxel index', '')]
-        x_label = 'Voxel index (along core)'
+        x_label = 'Voxel index'   # <- final label
+    sub = sub.assign(_x=pd.to_numeric(x, errors='coerce')).sort_values('_x')
+
 
     sub = sub.assign(_x=pd.to_numeric(x, errors='coerce')).sort_values('_x')
 
-    # --- helpers for labels
-    def _math_sup(kind: str) -> str:
-        if kind == 'mean':   return r'\mathrm{mean}'
-        if kind == 'mode':   return r'\mathrm{mode}'
-        if kind == 'median': return r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
-        return r'\mathrm{' + kind + r'}'
-
-    def _label(kind: str, absolute: bool) -> str:
-        if label_style == 'math':
-            base = rf'$\Delta^{{{_math_sup(kind)}}}$'
-            return rf'$|{base[1:-1]}|$' if absolute else base
+    # --- mathy helpers
+    def _latex_j(kind: str) -> str:
+        if kind == 'mean':
+            sup = r'\mathrm{mean}'
+        elif kind == 'mode':
+            sup = r'\mathrm{mode}'
+        elif kind == 'median':
+            sup = r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
         else:
-            txt = {'mean':'Nominal - Mean','mode':'Nominal - Mode','median':'Nominal - Median (Q50)'}[kind]
-            return f'|{txt}|' if absolute else txt
+            sup = r'\mathrm{' + kind + r'}'
+        return rf'$\Delta_{{b,v}}^{{{sup}}}$'
 
     # --- signed delta columns
     block = f"{zero_level_index_str} deltas"
@@ -6543,11 +6605,13 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
     # tidy signed
     signed_cols = [signed_map[k] for k in order_kinds]
     tidy_signed = sub.loc[:, signed_cols].copy()
-    tidy_signed.columns = [_label(k, absolute=False) for k in order_kinds]
-    tidy_signed = tidy_signed.assign(x=sub['_x'].values).melt(id_vars='x', var_name='Delta', value_name='Value')
+    # attach a canonical j column ('mean','mode','median') and a display label column
+    tidy_signed.columns = order_kinds
+    tidy_signed = tidy_signed.assign(x=sub['_x'].values).melt(id_vars='x', var_name='j', value_name='Value')
     tidy_signed['Kind'] = 'Signed'
+    tidy_signed['j_label'] = tidy_signed['j'].map(_latex_j)
 
-    # --- absolute delta columns (prefer precomputed; optional fallback)
+    # --- absolute deltas
     tidy_abs = None
     if include_abs:
         abs_block = f"{zero_level_index_str} abs deltas"
@@ -6567,72 +6631,107 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
         if has_abs:
             abs_cols = [abs_map[k] for k in order_kinds]
             tidy_abs = sub.loc[:, abs_cols].copy()
-            tidy_abs.columns = [_label(k, absolute=True) for k in order_kinds]
-            tidy_abs = tidy_abs.assign(x=sub['_x'].values).melt(id_vars='x', var_name='Delta', value_name='Value')
+            tidy_abs.columns = order_kinds
+            tidy_abs = tidy_abs.assign(x=sub['_x'].values).melt(id_vars='x', var_name='j', value_name='Value')
             tidy_abs['Kind'] = 'Absolute'
+            tidy_abs['j_label'] = tidy_abs['j'].map(_latex_j)
         elif fallback_recompute_abs:
             tidy_abs = tidy_signed.copy()
             tidy_abs['Value'] = tidy_abs['Value'].abs()
-            # convert labels to absolute
-            tidy_abs['Delta'] = tidy_abs['Delta'].map(
-                lambda s: _label('mean', True)   if ('mean'   in s or 'Mean'   in s) else
-                          _label('mode', True)   if ('mode'   in s or 'Mode'   in s) else
-                          _label('median', True)
-            )
             tidy_abs['Kind'] = 'Absolute'
+            tidy_abs['j_label'] = tidy_abs['j'].map(_latex_j)
+
 
     # --- compose plotting frame
-    if include_abs and tidy_abs is not None:
-        tidy_plot = pd.concat([tidy_signed, tidy_abs], ignore_index=True)
-    else:
-        tidy_plot = tidy_signed
+    tidy_plot = pd.concat([tidy_signed, tidy_abs], ignore_index=True) if (include_abs and tidy_abs is not None) else tidy_signed
 
-    # --- y-label
-    y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str.lower() else 'Delta (Gy)'
+    # --- palette: 3 stable colors for the three j's in the requested order
+    j_order = [k for k in order_kinds]  # e.g. ('mean','mode','median')
+    # Convert 'median' to the display-order label \Delta^{Q50} in legend; palette keyed by j (not label)
+    base_palette = sns.color_palette("tab10", n_colors=len(j_order))
+    palette = {j_order[i]: base_palette[i] for i in range(len(j_order))}
 
-    # --- plot (color by Δ kind, linestyle by Signed/Absolute)
+
+    # --- units + axis labels
+    is_gradient = ('grad' in zero_level_index_str.lower()) or ('gradient' in zero_level_index_str.lower())
+    unit_text = r'Gy mm$^{-1}$' if is_gradient else r'Gy'
+    y_label = rf'$\Delta_{{b,v}}^{{j}}$ ({unit_text})'
+
+
+
+
+    # --- plot (color by j, linestyle by Signed/Absolute)
     sns.set(style='whitegrid')
+
+    dash_signed   = _as_dashpattern(linestyle_signed)
+    dash_absolute = _as_dashpattern(linestyle_absolute)
+    dashes_map = {"Signed": dash_signed, "Absolute": dash_absolute} if (include_abs and tidy_abs is not None) else {"Signed": dash_signed}
+
     ax = sns.lineplot(
         data=tidy_plot,
         x='x', y='Value',
-        hue='Delta',
+        hue='j',
+        hue_order=j_order,
+        palette=palette,
         style='Kind',
-        dashes={'Signed': (1,0), 'Absolute': (3,2)} if include_abs and tidy_abs is not None else True,
-        linewidth=linewidth_signed,
-        legend=True
+        dashes=dashes_map,
+        linewidth=linewidth_signed,   # base width for signed; we'll bump absolute next
+        legend=False
     )
 
-    # adjust linewidths so Absolute can be dashed and same width
-    if include_abs and tidy_abs is not None and linewidth_abs != linewidth_signed:
-        # re-apply widths per line
-        for line, kind in zip(ax.lines, [t.get_text() for t in ax.legend_.texts][1:]):  # cautious, but robust enough
-            pass  # seaborn doesn't expose mapping cleanly; we keep single linewidth for simplicity
+    # Make absolute lines thicker (robust to ordering)
+    groups = list(tidy_plot.groupby(['j','Kind'], sort=False))
+    for line, ((jv, kv), _df) in zip(ax.lines, groups):
+        if kv == 'Absolute':
+            line.set_linewidth(linewidth_abs)
 
-    # optional point overlay
+
+
+    # optional points (same hue & style)
     if show_points:
         sns.scatterplot(
             data=tidy_plot,
             x='x', y='Value',
-            hue='Delta',
+            hue='j',
+            hue_order=j_order,
+            palette=palette,
             style='Kind',
-            alpha=alpha, s=point_size**2,  # matplotlib sizes are area-based
+            alpha=alpha, s=point_size**2,
             legend=False
         )
 
-    # labels, title, legend
+    # labels, title
     ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
     ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
     ax.tick_params(axis='both', labelsize=tick_label_fontsize)
 
-    if title:
+    if show_title and title:
         ax.set_title(title, fontsize=axes_label_fontsize)
-    else:
+    elif show_title and not title:
         ax.set_title(f"Patient {patient_id}, Bx {bx_index} — {zero_level_index_str} deltas", fontsize=axes_label_fontsize)
+    # else: no title at all
 
-    leg = ax.legend(title=None, frameon=True)
-    if leg:
-        for txt in leg.get_texts():
-            txt.set_fontsize(tick_label_fontsize)
+    # --- ONE unified legend ---
+    from matplotlib.lines import Line2D
+
+    # 1) Δ kinds (colors)
+    j_labels_display = [_latex_j(j) for j in j_order]
+    color_handles = [Line2D([0],[0], color=palette[j], lw=linewidth_signed, linestyle='solid', label=lab)
+                    for j, lab in zip(j_order, j_labels_display)]
+
+    # 2) Signed vs |Absolute| (linestyles)
+    def _legend_ls_from_pattern(pat): return ('solid' if pat == () else (0, pat))
+    style_handles = [
+        Line2D([0],[0], color='black', lw=linewidth_signed, linestyle=_legend_ls_from_pattern(dash_signed),   label=r'$\Delta$'),
+        Line2D([0],[0], color='black', lw=linewidth_abs,   linestyle=_legend_ls_from_pattern(dash_absolute), label=r'$|\Delta|$'),
+    ]
+
+    # stitch into a single legend
+    handles = color_handles + style_handles
+    leg = ax.legend(handles=handles, title=None, frameon=True, fontsize=tick_label_fontsize, loc='best')
+    for t in leg.get_texts():
+        t.set_fontsize(tick_label_fontsize)
+
 
     # save both SVG + PNG
     Path(save_dir).mkdir(parents=True, exist_ok=True)
@@ -6643,6 +6742,1452 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
     plt.savefig(png_path, format='png')
     plt.close()
     return svg_path, png_path
+
+
+
+
+
+
+def plot_biopsy_deltas_line_multi(
+    deltas_df: pd.DataFrame,
+    biopsies: Sequence[tuple[str, int]],     # [(patient_id, bx_index), ...] (same patient or across)
+    save_dir: str | Path,
+    fig_name: str,
+    *,
+    zero_level_index_str: str = 'Dose (Gy)',
+    x_axis: str = 'Voxel index',
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    title: str | None = None,
+    include_abs: bool = True,
+    require_precomputed_abs: bool = True,
+    fallback_recompute_abs: bool = False,
+    median_superscript: str = 'Q50',
+    order_kinds: tuple = ('mean','mode','median'),
+    linewidth_signed: float = 2.0,
+    linewidth_abs: float = 2.6,              # thicker dotted by default
+    linestyle_signed: tuple | str = 'solid',
+    linestyle_absolute: tuple | str = (0, (2, 2)),
+    show_markers: bool = False,
+    marker_size: int = 36,                   # matplotlib points^2
+    marker_edgewidth: float = 1.0,
+    marker_every: int | None = None,         # e.g., every 2 points
+    palette: str | Iterable = 'tab10',
+    y_tick_decimals: int | None = 1,
+):
+    """
+    Overlay multiple biopsies on one plot:
+      hue = Δ kind (colors)
+      style = Signed vs |Absolute| (linestyle)
+      markers = Biopsy (optional)
+    """
+    import seaborn as sns
+    from matplotlib.lines import Line2D
+    from pathlib import Path
+
+    sns.set(style='whitegrid')
+
+    # helpers
+    def _mi(name: str):
+        return (name, '') if isinstance(deltas_df.columns, pd.MultiIndex) and (name, '') in deltas_df.columns else name
+
+    def _latex_j(kind: str) -> str:
+        if kind == 'mean':   sup = r'\mathrm{mean}'
+        elif kind == 'mode': sup = r'\mathrm{mode}'
+        elif kind == 'median': sup = r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
+        else: sup = r'\mathrm{' + kind + r'}'
+        return rf'$\Delta_{{b,v}}^{{{sup}}}$'
+
+    def _as_dashpattern(val):
+        if isinstance(val, tuple):
+            if len(val) == 2 and isinstance(val[1], (tuple, list)):
+                return tuple(val[1])
+            return val
+        if isinstance(val, str):
+            v = val.lower()
+            if v in ("solid", "-"):  return ()
+            if v in ("dashed","--"): return (6,6)
+            if v in ("dotted",":"):  return (1,3)
+            if v in ("dashdot","-."):return (6,4,1,4)
+            raise ValueError(f"bad linestyle {val!r}")
+        return ()
+
+    pid_c = _mi('Patient ID'); bxi_c = _mi('Bx index')
+    x_c   = _mi(x_axis if x_axis=='Voxel begin (Z)' else 'Voxel index')
+    if x_axis == 'Voxel begin (Z)':
+        x_label = 'Voxel begin (Z) [mm]'
+    else:
+        x_label = 'Voxel index'
+
+    # collect tidy rows for all biopsies
+    frames = []
+    for pid, bx in biopsies:
+        sub = deltas_df[(deltas_df[pid_c]==pid) & (deltas_df[bxi_c]==bx)].copy()
+        if sub.empty:
+            continue
+        sub = sub.assign(_x=pd.to_numeric(sub[x_c], errors='coerce')).sort_values('_x')
+
+        block = f"{zero_level_index_str} deltas"
+        signed_map = {
+            'mean':   (block, 'nominal_minus_mean'),
+            'mode':   (block, 'nominal_minus_mode'),
+            'median': (block, 'nominal_minus_q50'),
+        }
+        if not all(pair in sub.columns for pair in signed_map.values()):
+            raise KeyError(f"Missing signed delta cols for {zero_level_index_str}")
+
+        tidy_s = sub.loc[:, [signed_map[k] for k in order_kinds]].copy()
+        tidy_s.columns = order_kinds
+        tidy_s = tidy_s.assign(x=sub['_x'].values, Biopsy=f"{pid}, Bx {bx}", Kind='Signed')
+        tidy_s = tidy_s.melt(id_vars=['x','Biopsy','Kind'], var_name='j', value_name='Value')
+
+        tidy_a = None
+        if include_abs:
+            abs_block = f"{zero_level_index_str} abs deltas"
+            abs_map = {
+                'mean':   (abs_block, 'abs_nominal_minus_mean'),
+                'mode':   (abs_block, 'abs_nominal_minus_mode'),
+                'median': (abs_block, 'abs_nominal_minus_q50'),
+            }
+            has_abs = all(pair in sub.columns for pair in abs_map.values())
+            if has_abs:
+                tidy_a = sub.loc[:, [abs_map[k] for k in order_kinds]].copy()
+                tidy_a.columns = order_kinds
+                tidy_a = tidy_a.assign(x=sub['_x'].values, Biopsy=f"{pid}, Bx {bx}", Kind='Absolute')
+                tidy_a = tidy_a.melt(id_vars=['x','Biopsy','Kind'], var_name='j', value_name='Value')
+            elif require_precomputed_abs and not fallback_recompute_abs:
+                raise KeyError("Abs delta block missing and recompute disabled.")
+            else:
+                tidy_a = tidy_s.copy()
+                tidy_a['Value'] = tidy_a['Value'].abs()
+                tidy_a['Kind'] = 'Absolute'
+
+        frames.append(tidy_s)
+        if tidy_a is not None:
+            frames.append(tidy_a)
+
+    if not frames:
+        raise ValueError("No data for requested biopsies.")
+    tidy = pd.concat(frames, ignore_index=True)
+    tidy['j_label'] = tidy['j'].map(_latex_j)
+
+    # palettes/styles
+    j_order = list(order_kinds)
+    if isinstance(palette, str):
+        cols = sns.color_palette(palette, n_colors=len(j_order))
+    else:
+        cols = list(palette)
+    color_map = {j_order[i]: cols[i] for i in range(len(j_order))}
+    dashes_map = {'Signed': _as_dashpattern(linestyle_signed),
+                  'Absolute': _as_dashpattern(linestyle_absolute)}
+
+    # ---- split the tidy data for controlled layering ----
+    signed_df = tidy[tidy['Kind'] == 'Signed']
+    abs_df    = tidy[tidy['Kind'] == 'Absolute'] if include_abs else tidy.iloc[0:0]
+
+    dash_signed   = _as_dashpattern(linestyle_signed)      # usually ()
+    dash_absolute = _as_dashpattern(linestyle_absolute)    # e.g. (1,3)
+    # (optional) make dotted more visible than (1,3)
+    if dash_absolute == (1, 3):
+        dash_absolute = (4, 3)
+
+    # compute final linestyles once
+    ls_signed   = 'solid' if dash_signed == () else (0, dash_signed)
+    ls_absolute = 'solid' if dash_absolute == () else (0, dash_absolute)
+
+    # 1) Signed first (under)
+    ax = sns.lineplot(
+        data=signed_df, x='x', y='Value',
+        hue='j', hue_order=j_order, palette=color_map,
+        units='Biopsy', estimator=None, errorbar=None, sort=False,
+        linestyle=ls_signed,                 # <-- use linestyle, not dashes
+        linewidth=linewidth_signed, legend=False,
+        zorder=2
+    )
+
+    # 2) Absolute second (on top)
+    sns.lineplot(
+        data=abs_df, x='x', y='Value',
+        hue='j', hue_order=j_order, palette=color_map,
+        units='Biopsy', estimator=None, errorbar=None, sort=False,
+        linestyle=ls_absolute,               # <-- use linestyle, not dashes
+        linewidth=linewidth_abs, legend=False,
+        zorder=3, ax=ax
+    )
+
+
+    # Round caps so thicker dotted lines look properly thicker
+    for ln in ax.lines:
+        ln.set_solid_capstyle('round')
+        ln.set_dash_capstyle('round')
+
+
+    # optional biopsy markers
+    if show_markers:
+        # give each biopsy a distinct marker
+        marker_cycle = ['o','s','^','D','P','X','v','>','<']
+        biopsy_to_marker = {b: marker_cycle[i % len(marker_cycle)] for i, b in enumerate(tidy['Biopsy'].unique())}
+        # plot markers as a second pass so they sit on top
+        for (jv, kv, bv), g in tidy.groupby(['j','Kind','Biopsy']):
+            m = biopsy_to_marker[bv]
+            sc = ax.scatter(g['x'], g['Value'], marker=m, s=marker_size,
+                            facecolors='none' if kv=='Absolute' else color_map[jv],
+                            edgecolors=color_map[jv], linewidths=marker_edgewidth, zorder=3)
+            if marker_every is not None:
+                # thin markers along the line
+                sc.set_offsets(sc.get_offsets()[::max(1, int(marker_every))])
+
+    # labels
+    ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
+    is_gradient = ('grad' in zero_level_index_str.lower())
+    unit_text = r'Gy mm$^{-1}$' if is_gradient else r'Gy'
+    ax.set_ylabel(rf'$\Delta^{{j}}_{{b,v}}$ and $|\Delta^{{j}}_{{b,v}}|$ ({unit_text})', fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+    if title:
+        ax.set_title(title, fontsize=axes_label_fontsize)
+
+    # unified legend (Δ kinds + Signed/|Abs| + Biopsies when markers shown)
+    from matplotlib.lines import Line2D
+
+    # --- unified legend ---
+    handles = []
+    handles += [Line2D([0],[0], color=color_map[j], lw=linewidth_signed, label=_latex_j(j))
+                for j in j_order]
+
+    # use ls_signed / ls_absolute computed earlier
+    handles += [
+        Line2D([0],[0], color='black', lw=linewidth_signed, linestyle=ls_signed,   label=r'$\Delta$'),
+        Line2D([0],[0], color='black', lw=linewidth_abs,   linestyle=ls_absolute, label=r'$|\Delta|$'),
+    ]
+
+
+    # biopsies (markers) — only if markers are on
+    if show_markers:
+        marker_cycle = ['o','s','^','D','P','X','v','>','<']  # ensure defined here too
+        for i, b in enumerate(tidy['Biopsy'].unique()):
+            m = marker_cycle[i % len(marker_cycle)]
+            handles.append(Line2D([0],[0], marker=m, color='black', linestyle='None', label=b,
+                                markerfacecolor='none', markeredgewidth=1.2))
+
+    leg = ax.legend(handles=handles, frameon=True, fontsize=tick_label_fontsize, loc='best')
+
+
+    if y_tick_decimals is not None:
+        fmt = f'{{x:.{y_tick_decimals}f}}'
+        ax.yaxis.set_major_formatter(StrMethodFormatter(fmt))
+        ax.get_yaxis().get_offset_text().set_visible(False)  # optional
+
+    # save
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    svg_path = Path(save_dir) / f"{fig_name}.svg"
+    png_path = Path(save_dir) / f"{fig_name}.png"
+    plt.tight_layout()
+    plt.savefig(svg_path, format='svg')
+    plt.savefig(png_path, format='png')
+    plt.close()
+    return svg_path, png_path
+
+
+
+
+
+
+
+
+
+
+
+
+
+def plot_biopsy_voxel_trial_boxplots_dual(
+    deltas_df: pd.DataFrame,
+    patient_id: str,
+    bx_index: int,
+    output_dir: str | Path,
+    plot_name_base: str,
+    *,
+    metric: Literal['Dose (Gy)', 'Dose grad (Gy/mm)'] = 'Dose (Gy)',
+    x_axis: Literal['Voxel index', 'Voxel begin (Z)'] = 'Voxel index',
+    # layout & style
+    figsize: tuple[float, float] = (11.0, 5.0),
+    dpi: int = 200,
+    axes_label_fontsize: int = 14,
+    tick_label_fontsize: int = 11,
+    show_title: bool = True,
+    title: Optional[str] = None,
+    tight_layout: bool = True,
+    y0_refline: bool = True,          # helpful for signed deltas
+    ylim: Optional[tuple[float, float]] = None,
+    # boxplot controls
+    whis: float | tuple[float, float] = 1.5,    # e.g., (5,95) for percentile whiskers
+    showfliers: bool = True,
+    box_offset: float = 0.18,                   # signed at x-δ, abs at x+δ
+    # voxel axis density
+    sort_voxels_by: Optional[Literal['median', 'mean']] = 'median',
+    max_voxels: Optional[int] = None,
+    xtick_stride: Optional[int] = None,         # show every k-th label; auto if None
+    # trial-point overlays
+    show_points_signed: bool = True,
+    show_points_abs: bool = True,
+    point_size_signed: float = 7.0,
+    point_size_abs: float = 7.0,
+    point_alpha_signed: float = 0.25,
+    point_alpha_abs: float = 0.25,
+    jitter_width: float = 0.25,
+    # abs handling
+    require_precomputed_abs: bool = True,
+    fallback_recompute_abs: bool = False,
+    # labeling mode
+    label_style: Literal['math', 'text'] = 'math',
+    legend_loc: str = 'best',
+    # saving
+    save_formats: Iterable[str] = ('png', 'pdf'),
+) -> list[Path]:
+    """
+    Per-voxel dual boxplot: for each voxel on the x-axis, draw TWO boxes:
+      - left = signed Δ distribution across trials,
+      - right = |Δ| distribution across trials.
+    Call once for 'Dose (Gy)' and once for 'Dose grad (Gy/mm)'.
+    """
+    # ---- helpers ----
+    def _mi(name: str):
+        return (name, '') if isinstance(deltas_df.columns, pd.MultiIndex) and (name, '') in deltas_df.columns else name
+
+    def _has(key):
+        if isinstance(deltas_df.columns, pd.MultiIndex):
+            return key in deltas_df.columns
+        return key in deltas_df.columns
+
+    def _resolve_trial_col(metric: str, use_abs: bool):
+        if use_abs:
+            mi_key = (f"{metric} abs deltas", "abs_nominal_minus_trial")
+            flat = f"{metric} abs deltas_abs_nominal_minus_trial"
+        else:
+            mi_key = (f"{metric} deltas", "nominal_minus_trial")
+            flat = f"{metric} deltas_nominal_minus_trial"
+        if _has(mi_key): return mi_key
+        if _has(flat):   return flat
+        if use_abs and (not require_precomputed_abs) and fallback_recompute_abs:
+            return ('__compute_abs_from__', _resolve_trial_col(metric, use_abs=False))
+        raise KeyError(f"Missing column for metric={metric!r}, {'abs' if use_abs else 'signed'}.")
+
+    # ---- filter ----
+    pid_c = _mi('Patient ID')
+    bxi_c = _mi('Bx index')
+    x_c   = _mi(x_axis)
+    sub = deltas_df[(deltas_df[pid_c] == patient_id) & (deltas_df[bxi_c] == bx_index)].copy()
+    if sub.empty:
+        raise ValueError(f"No data for patient={patient_id!r}, biopsy={bx_index}.")
+    if x_c not in sub.columns:
+        raise KeyError(f"X-axis column {x_axis!r} not found.")
+
+    # resolve columns
+    signed_key = _resolve_trial_col(metric, use_abs=False)
+    abs_key    = _resolve_trial_col(metric, use_abs=True)
+    compute_abs_from = None
+    if isinstance(abs_key, tuple) and abs_key[0] == '__compute_abs_from__':
+        compute_abs_from = abs_key[1]
+
+    # order by x for nicer axis
+    sub = sub.sort_values(by=x_c).reset_index(drop=True)
+
+    # group per voxel
+    vox_labels = []
+    signed_groups, abs_groups = [], []
+    for vox, g in sub.groupby(x_c, sort=False):
+        s_vals = pd.to_numeric(g[signed_key], errors='coerce').dropna().values
+        if compute_abs_from is not None:
+            a_vals = pd.to_numeric(g[compute_abs_from], errors='coerce').abs().dropna().values
+        else:
+            a_vals = pd.to_numeric(g[abs_key], errors='coerce').dropna().values
+        if s_vals.size or a_vals.size:
+            vox_labels.append(vox)
+            signed_groups.append(s_vals)
+            abs_groups.append(a_vals)
+
+    if not signed_groups and not abs_groups:
+        raise ValueError("No usable trial values found.")
+
+    # optional voxel ordering
+    if sort_voxels_by in {'median', 'mean'}:
+        stat_fn = np.median if sort_voxels_by == 'median' else np.mean
+        # Use signed to sort; if empty, fall back to abs
+        base_stats = np.array([stat_fn(g) if g.size else (stat_fn(h) if h.size else 0.0)
+                               for g, h in zip(signed_groups, abs_groups)])
+        order = np.argsort(base_stats)
+        vox_labels   = [vox_labels[i]   for i in order]
+        signed_groups= [signed_groups[i] for i in order]
+        abs_groups   = [abs_groups[i]    for i in order]
+
+    # cap voxel count
+    if max_voxels is not None and len(vox_labels) > max_voxels:
+        vox_labels    = vox_labels[:max_voxels]
+        signed_groups = signed_groups[:max_voxels]
+        abs_groups    = abs_groups[:max_voxels]
+
+    n = len(vox_labels)
+    centers = np.arange(1, n + 1)
+    pos_signed = centers - box_offset
+    pos_abs    = centers + box_offset
+
+    # ---- plot ----
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    bp_signed = ax.boxplot(
+        signed_groups, positions=pos_signed, widths=0.6,
+        manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=False
+    )
+    bp_abs = ax.boxplot(
+        abs_groups, positions=pos_abs, widths=0.6,
+        manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=False
+    )
+
+    # overlay jittered points
+    rng = np.random.default_rng(12345)  # stable jitter across runs
+    if show_points_signed:
+        for i, arr in enumerate(signed_groups):
+            if arr.size:
+                xj = pos_signed[i] + (rng.random(arr.size) - 0.5) * jitter_width
+                ax.scatter(xj, arr, s=point_size_signed, alpha=point_alpha_signed, marker='o')
+    if show_points_abs:
+        for i, arr in enumerate(abs_groups):
+            if arr.size:
+                xj = pos_abs[i] + (rng.random(arr.size) - 0.5) * jitter_width
+                ax.scatter(xj, arr, s=point_size_abs, alpha=point_alpha_abs, marker='x')
+
+    # labels
+    is_grad = 'grad' in metric.lower()
+    if label_style == 'math':
+        core_signed = r"$\Delta^G_{b,v,i}$" if is_grad else r"$\Delta_{b,v,i}$"
+        core_abs    = r"$|\Delta^G_{b,v,i}|$" if is_grad else r"$|\Delta_{b,v,i}|$"
+        unit = r"$(\mathrm{Gy/mm})$" if is_grad else r"$(\mathrm{Gy})$"
+        ylab = f"{core_signed} / {core_abs} {unit}"
+    else:
+        core_signed = "Δ^G" if is_grad else "Δ"
+        core_abs    = "|Δ^G|" if is_grad else "|Δ|"
+        unit = "(Gy/mm)" if is_grad else "(Gy)"
+        ylab = f"{core_signed} / {core_abs} {unit}"
+
+    ax.set_xlabel(x_axis, fontsize=axes_label_fontsize)
+    ax.set_ylabel(ylab, fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+    # x tick thinning
+    if xtick_stride is None:
+        stride = max(1, int(np.ceil(n / 40)))
+    else:
+        stride = max(1, int(xtick_stride))
+    show_mask = ((centers - 1) % stride) == 0
+    ax.set_xticks(centers[show_mask])
+    ax.set_xticklabels([str(v) for v in np.array(vox_labels)[show_mask]], rotation=90)
+
+    if y0_refline:
+        ax.axhline(0.0, linestyle=':', linewidth=1.0, alpha=0.8)
+
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+    if show_title:
+        if title is None:
+            title = f"{metric} — Δ & |Δ| per voxel — Patient {patient_id}, Bx {bx_index}"
+        ax.set_title(title, fontsize=axes_label_fontsize)
+
+    # legend (proxy artists)
+    from matplotlib.lines import Line2D
+    handles = [
+        Line2D([], [], linestyle='-', marker='o', alpha=0.8, label='Δ trials',  linewidth=1.0),
+        Line2D([], [], linestyle='-', marker='x', alpha=0.8, label='|Δ| trials', linewidth=1.0),
+    ]
+    ax.legend(handles=handles, loc=legend_loc, fontsize=max(axes_label_fontsize - 2, 8))
+
+    if tight_layout:
+        plt.tight_layout()
+
+    # save
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_paths: list[Path] = []
+    for ext in save_formats:
+        fn = f"{plot_name_base}.{ext.lstrip('.')}"
+        outp = output_dir / fn
+        fig.savefig(outp, bbox_inches='tight', dpi=dpi)
+        out_paths.append(outp)
+
+    plt.close(fig)
+    return out_paths
+
+
+
+
+
+
+
+
+
+def plot_dual_boxplots_by_voxel_for_biopsies(
+        deltas_df: pd.DataFrame,
+        biopsies: Sequence[Tuple[str, int]],         # list of (patient_id, bx_index)
+        output_dir: str | Path,
+        plot_name_base: str,
+        *,
+        metric: Literal['Dose (Gy)', 'Dose grad (Gy/mm)'] = 'Dose (Gy)',
+        x_axis: Literal['Voxel index', 'Voxel begin (Z)'] = 'Voxel index',
+        # appearance & layout
+        figsize: tuple[float, float] = (12.0, 5.0),
+        dpi: int = 200,
+        seaborn_style: str = 'whitegrid',
+        seaborn_context: str = 'talk',               # 'paper'|'notebook'|'talk'|'poster'
+        palette: str | Iterable = 'deep',            # seaborn palette name or list of colors
+        axes_label_fontsize: int = 14,
+        tick_label_fontsize: int = 11,
+        show_title: bool = False,
+        title: Optional[str] = None,
+        tight_layout: bool = True,
+        y0_refline: bool = True,                     # useful for signed deltas
+        ylim: Optional[tuple[float, float]] = None,
+        # box placement & style
+        voxel_box_width: float = 0.55,               # width for each (biopsy) box
+        delta_pair_offset: float = 0.28,             # center shift: signed at x-δ, abs at x+δ
+        biopsy_spread: float = 0.20,                 # spread biopsies within each delta position
+        whisker_mode: Literal['iqr1.5','q05q95'] = 'iqr1.5',
+        showfliers: bool = True,
+        signed_fill_alpha: float = 0.35,             # filled boxes for signed
+        abs_edge_only: bool = True,                  # abs as edge-only boxes (no facecolor)
+        # points overlay
+        show_points: bool = False,                   # default OFF per your request
+        point_size: float = 8.0,
+        point_alpha: float = 0.25,
+        jitter_width: float = 0.20,
+        # abs handling
+        require_precomputed_abs: bool = True,
+        fallback_recompute_abs: bool = False,
+        # labeling
+        label_style: Literal['math','text'] = 'math',
+        biopsy_label_map: Optional[Dict[Tuple[str,int], str]] = None,  # custom legend labels
+        legend_loc: str = 'best',
+        # saving
+        save_formats: Iterable[str] = ('png','svg'),
+        layout: str = "overlay",           # keep old behavior by default
+        draw_voxel_guides: bool = True,
+        voxel_guide_alpha: float = 0.06,
+
+    ) -> list[Path]:
+    """
+    One figure for a single metric (Dose or Dose grad) comparing multiple biopsies.
+    At each voxel x-position, draws TWO groups of boxes:
+      - signed Δ (left) for all biopsies (colored)
+      - absolute |Δ| (right) for all biopsies (colored)
+    """
+
+    # ---------------- seaborn look ----------------
+    sns.set_theme(style=seaborn_style, context=seaborn_context)
+    colors = sns.color_palette(palette, n_colors=max(1, len(biopsies)))
+
+    # ---------------- helpers ----------------
+    def _mi(name: str):
+        return (name, '') if isinstance(deltas_df.columns, pd.MultiIndex) and (name, '') in deltas_df.columns else name
+
+    def _has(key):
+        if isinstance(deltas_df.columns, pd.MultiIndex):
+            return key in deltas_df.columns
+        return key in deltas_df.columns
+
+    def _trial_col(metric: str, use_abs: bool):
+        if use_abs:
+            mi_key = (f"{metric} abs deltas", "abs_nominal_minus_trial")
+            flat  = f"{metric} abs deltas_abs_nominal_minus_trial"
+        else:
+            mi_key = (f"{metric} deltas", "nominal_minus_trial")
+            flat  = f"{metric} deltas_nominal_minus_trial"
+        if _has(mi_key): return mi_key, None
+        if _has(flat):   return flat, None
+        if use_abs and (not require_precomputed_abs) and fallback_recompute_abs:
+            signed_key, _ = _trial_col(metric, use_abs=False)
+            return ('__compute_abs_from__', signed_key), signed_key
+        raise KeyError(f"Missing column for metric={metric!r}, {'abs' if use_abs else 'signed'}.")
+
+    def _ylabel():
+        # Proper mathtext units: Gy mm^{-1} for gradient
+        if 'grad' in metric.lower():
+            unit = r"$\mathrm{Gy}\ \mathrm{mm}^{-1}$"
+            return r"$\Delta^G_{b,v,i}$ / $|\Delta^G_{b,v,i}|$ " + unit if label_style == 'math' else "Δ/|Δ| (Gy mm^-1)"
+        else:
+            unit = r"$\mathrm{Gy}$"
+            return r"$\Delta_{b,v,i}$ / $|\Delta_{b,v,i}|$ " + unit if label_style == 'math' else "Δ/|Δ| (Gy)"
+
+
+    # ---------------- collect data ----------------
+    pid_c = _mi('Patient ID')
+    bxi_c = _mi('Bx index')
+    x_c   = _mi(x_axis)
+
+    # filter once to speed up
+    df = deltas_df[(deltas_df[pid_c].isin([p for p,_ in biopsies])) & (deltas_df[bxi_c].isin([b for _,b in biopsies]))].copy()
+    if df.empty:
+        raise ValueError("No rows for requested biopsies.")
+
+    if x_c not in df.columns:
+        raise KeyError(f"X-axis column {x_axis!r} not found in dataframe.")
+
+    # resolve trial columns
+    signed_key, _ = _trial_col(metric, use_abs=False)
+    abs_key, compute_abs_from = _trial_col(metric, use_abs=True)
+
+    # numeric, ordered x-values per-biopsy
+    def _cast_numeric(s):
+        return pd.to_numeric(s, errors='coerce')
+
+    # global voxel order (sorted unique union)
+    all_x = (
+        pd.concat([
+            _cast_numeric(
+                df[(df[pid_c]==pid) & (df[bxi_c]==bx)][x_c]
+            )
+            for pid,bx in biopsies
+        ])
+        .dropna().unique()
+    )
+    x_vals_sorted = np.sort(all_x)
+
+    # build groups: for each voxel and each biopsy, signed and abs arrays
+    per_voxel_signed = { (pid,bx): [] for pid,bx in biopsies }
+    per_voxel_abs    = { (pid,bx): [] for pid,bx in biopsies }
+
+    for pid, bx in biopsies:
+        sub = df[(df[pid_c]==pid) & (df[bxi_c]==bx)].copy()
+        sub['_x'] = _cast_numeric(sub[x_c])
+        sub = sub.dropna(subset=['_x'])
+
+        # ensure order by voxel
+        sub = sub.sort_values('_x')
+
+        for xv in x_vals_sorted:
+            g = sub[sub['_x'] == xv]
+
+            s_vals = pd.to_numeric(g[signed_key], errors='coerce').dropna().values
+            if isinstance(abs_key, tuple) and abs_key[0] == '__compute_abs_from__':
+                a_vals = pd.to_numeric(g[compute_abs_from], errors='coerce').abs().dropna().values
+            else:
+                a_vals = pd.to_numeric(g[abs_key], errors='coerce').dropna().values
+
+            per_voxel_signed[(pid,bx)].append(s_vals)  # can be empty
+            per_voxel_abs[(pid,bx)].append(a_vals)     # can be empty
+
+    # ---------------- plotting ----------------
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    if draw_voxel_guides:
+        # centers must be your integer x tick positions
+        for c in centers:  # centers = np.arange(1, len(x_vals_sorted)+1)
+            ax.axvspan(c-0.5, c+0.5, color='k', alpha=voxel_guide_alpha, zorder=0)
+
+
+    n_vox = len(x_vals_sorted)
+    centers = np.arange(1, n_vox + 1)
+
+    # whisker style
+    whis = 1.5 if whisker_mode == 'iqr1.5' else (5, 95)
+
+    # for legend proxies
+    from matplotlib.patches import Patch
+    legend_patches = []
+
+    # loop biopsies in color
+    for bi, (pid,bx) in enumerate(biopsies):
+        color = colors[bi % len(colors)]
+        label = biopsy_label_map.get((pid,bx), f"{pid}, Bx {bx}") if biopsy_label_map else f"{pid}, Bx {bx}"
+
+        # positions for this biopsy within each delta side
+        # spread multiple biopsies within signed and within abs sides
+        if len(biopsies) == 1:
+            offsets_in_group = [0.0]
+        else:
+            # symmetric small spread around group center
+            span = biopsy_spread
+            offsets_in_group = np.linspace(-span, span, len(biopsies))
+        inner_off = offsets_in_group[bi]
+
+        pos_signed = centers - delta_pair_offset + inner_off
+        pos_abs    = centers + delta_pair_offset + inner_off
+
+        # signed boxes (filled with alpha)
+        groups_s = per_voxel_signed[(pid,bx)]
+        if any(len(a) for a in groups_s):
+            bp_s = ax.boxplot(
+                groups_s,
+                positions=pos_signed,
+                widths=voxel_box_width,
+                manage_ticks=False,
+                whis=whis,
+                showfliers=showfliers,
+                patch_artist=True
+            )
+            for box in bp_s['boxes']:
+                box.set_facecolor(color)
+                box.set_alpha(signed_fill_alpha)
+                box.set_edgecolor(color)
+                box.set_linewidth(1.2)
+            for element in ['whiskers','caps','medians']:
+                for line in bp_s[element]:
+                    line.set_color(color)
+                    line.set_linewidth(1.2)
+
+            if show_points:
+                rng = np.random.default_rng(12345 + bi)
+                for x0, arr in zip(pos_signed, groups_s):
+                    if arr.size:
+                        xj = x0 + (rng.random(arr.size) - 0.5) * jitter_width
+                        ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='o')
+
+        # absolute boxes (edge only)
+        groups_a = per_voxel_abs[(pid,bx)]
+        if any(len(a) for a in groups_a):
+            bp_a = ax.boxplot(
+                groups_a,
+                positions=pos_abs,
+                widths=voxel_box_width,
+                manage_ticks=False,
+                whis=whis,
+                showfliers=showfliers,
+                patch_artist=True
+            )
+            for box in bp_a['boxes']:
+                if abs_edge_only:
+                    box.set_facecolor('white')
+                    box.set_alpha(1.0)
+                else:
+                    box.set_facecolor(color)
+                    box.set_alpha(0.15)
+                box.set_edgecolor(color)
+                box.set_linewidth(1.2)
+                # distinguish abs: dashed box edges
+                box.set_linestyle('--')
+            for element in ['whiskers','caps','medians']:
+                for line in bp_a[element]:
+                    line.set_color(color)
+                    line.set_linewidth(1.2)
+                    line.set_linestyle('--')
+
+            if show_points:
+                rng = np.random.default_rng(54321 + bi)
+                for x0, arr in zip(pos_abs, groups_a):
+                    if arr.size:
+                        xj = x0 + (rng.random(arr.size) - 0.5) * jitter_width
+                        ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='x')
+
+        # legend proxy for this biopsy
+        legend_patches.append(Patch(facecolor=color, edgecolor=color, alpha=signed_fill_alpha, label=label))
+
+    # axis labels, ticks, etc.
+    # x ticks at centers labeled by voxel index (sorted numeric)
+    ax.set_xticks(centers)
+    # show integers if they are (1,2,3,...)
+    # if x_axis is 'Voxel index', labels are integers; else show float
+    if x_axis == 'Voxel index':
+        ax.set_xticklabels([str(int(v)) for v in x_vals_sorted], rotation=0)
+        xlab = 'Voxel index'
+    else:
+        ax.set_xticklabels([f"{v:g}" for v in x_vals_sorted], rotation=0)
+        xlab = 'Voxel begin (Z) [mm]'
+
+    # y-label based on metric
+    ax.set_xlabel(xlab, fontsize=axes_label_fontsize)
+    ax.set_ylabel(_ylabel(), fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+    # zero reference
+    if y0_refline:
+        ax.axhline(0.0, linestyle=':', linewidth=1.0, alpha=0.8, color='0.3')
+
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+    # legend
+    # add two line styles proxies for signed vs abs
+    from matplotlib.lines import Line2D
+    signed_proxy = Line2D([], [], color='black', linewidth=1.2, alpha=0.8, label='Δ (filled)')
+    abs_proxy    = Line2D([], [], color='black', linewidth=1.2, alpha=0.8, linestyle='--', label='|Δ| (dashed)')
+    leg = ax.legend(handles=legend_patches + [signed_proxy, abs_proxy], loc=legend_loc, frameon=True)
+    for txt in leg.get_texts():
+        txt.set_fontsize(max(tick_label_fontsize - 0, 9))
+
+    # title
+    if show_title:
+        if title is None:
+            title = f"{metric} — Δ & |Δ| per voxel"
+        ax.set_title(title, fontsize=axes_label_fontsize)
+
+    if tight_layout:
+        plt.tight_layout()
+
+    # save
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_paths: list[Path] = []
+    for ext in save_formats:
+        fp = output_dir / f"{plot_name_base}.{ext.lstrip('.')}"
+        fig.savefig(fp, bbox_inches='tight', dpi=dpi)
+        out_paths.append(fp)
+
+    plt.close(fig)
+    return out_paths
+
+
+
+
+
+
+
+
+
+
+
+
+
+def plot_biopsy_voxel_dualboxes(
+    deltas_df: pd.DataFrame,
+    biopsies: Sequence[Tuple[str, int]],          # e.g., [("184 (F2)",1), ("184 (F2)",2)]
+    output_dir: str | Path,
+    plot_name_base: str,
+    *,
+    metric: Literal['Dose (Gy)', 'Dose grad (Gy/mm)'] = 'Dose (Gy)',
+    x_axis: Literal['Voxel index', 'Voxel begin (Z)'] = 'Voxel index',
+
+    # Layout: 'overlay' = multiple biopsies on one axes; 'facet' = one column per biopsy (no overlap)
+    layout: Literal['overlay', 'facet'] = 'overlay',
+
+    # Seaborn & figure style
+    figsize: tuple[float, float] = (12.0, 5.0),
+    dpi: int = 200,
+    seaborn_style: str = 'whitegrid',
+    seaborn_context: str = 'talk',               # 'paper'|'notebook'|'talk'|'poster'
+    palette: str | Iterable = 'deep',
+
+    # Axes text
+    axes_label_fontsize: int = 14,
+    tick_label_fontsize: int = 11,
+    show_title: bool = False,
+    title: Optional[str] = None,
+    tight_layout: bool = True,
+    y0_refline: bool = True,
+    ylim: Optional[tuple[float, float]] = None,
+
+    # Box geometry (overlay mode)
+    signed_offset: float = 0.28,                 # signed at x - signed_offset
+    abs_offset: float    = 0.28,                 # abs at    x + abs_offset
+    box_width: float = 0.42,                     # width for each biopsy box in overlay
+    biopsy_spread: float = 0.14,                 # tiny intra-side spread among biopsies (overlay)
+    whisker_mode: Literal['iqr1.5','q05q95'] = 'q05q95',
+    showfliers: bool = False,
+
+    # Visual clarity helpers
+    show_voxel_guides: bool = True,
+    voxel_guide_alpha: float = 0.08,
+
+    # Points (OFF by default)
+    show_points: bool = False,
+    point_size: float = 7.0,
+    point_alpha: float = 0.25,
+    jitter_width: float = 0.16,
+
+    # Abs handling
+    require_precomputed_abs: bool = True,
+    fallback_recompute_abs: bool = False,
+
+    # Labels / legend
+    label_style: Literal['math','text'] = 'math',
+    biopsy_label_map: Optional[Dict[Tuple[str,int], str]] = None,
+    legend_loc: str = 'upper right',
+
+    # Save
+    save_formats: Iterable[str] = ('png','svg'),
+) -> list[Path]:
+    """
+    Draw per-voxel boxplots that show BOTH signed Δ and absolute |Δ| on the same plot.
+    - In 'overlay' mode, multiple biopsies share one axes (colored by biopsy).
+    - In 'facet'  mode, each biopsy gets its own axes column (no overlap), still with Δ (left) & |Δ| (right).
+    """
+
+    # ---------- seaborn theme ----------
+    sns.set_theme(style=seaborn_style, context=seaborn_context)
+    colors = sns.color_palette(palette, n_colors=max(1, len(biopsies)))
+
+    # ---------- helpers ----------
+    def _mi(name: str):
+        return (name, '') if isinstance(deltas_df.columns, pd.MultiIndex) and (name, '') in deltas_df.columns else name
+
+    def _has(key):
+        if isinstance(deltas_df.columns, pd.MultiIndex):
+            return key in deltas_df.columns
+        return key in deltas_df.columns
+
+    def _trial_col(metric: str, use_abs: bool):
+        if use_abs:
+            mi_key = (f"{metric} abs deltas", "abs_nominal_minus_trial")
+            flat  = f"{metric} abs deltas_abs_nominal_minus_trial"
+        else:
+            mi_key = (f"{metric} deltas", "nominal_minus_trial")
+            flat  = f"{metric} deltas_nominal_minus_trial"
+        if _has(mi_key): return mi_key, None
+        if _has(flat):   return flat, None
+        if use_abs and (not require_precomputed_abs) and fallback_recompute_abs:
+            signed_key, _ = _trial_col(metric, use_abs=False)
+            return ('__compute_abs_from__', signed_key), signed_key
+        raise KeyError(f"Missing col for metric={metric!r}, {'abs' if use_abs else 'signed'}.")
+
+    def _ylabel():
+        if label_style == 'math':
+            # Dose grad unit in LaTeX: Gy mm^{-1}
+            unit = r"$\mathrm{Gy}$" if 'grad' not in metric.lower() else r"$\mathrm{Gy}\ \mathrm{mm}^{-1}$"
+            if 'grad' in metric.lower():
+                return r"$\Delta^G_{b,v,i}\ /\ |\Delta^G_{b,v,i}|$" + f" {unit}"
+            else:
+                return r"$\Delta_{b,v,i}\ /\ |\Delta_{b,v,i}|$" + f" {unit}"
+        else:
+            return "Δ / |Δ| (Gy mm^-1)" if 'grad' in metric.lower() else "Δ / |Δ| (Gy)"
+
+    # ---------- filter once ----------
+    pid_c = _mi('Patient ID')
+    bxi_c = _mi('Bx index')
+    x_c   = _mi(x_axis)
+
+    # keep only needed biopsies
+    df = deltas_df[
+        (deltas_df[pid_c].isin([p for p,_ in biopsies])) &
+        (deltas_df[bxi_c].isin([b for _,b in biopsies]))
+    ].copy()
+    if df.empty:
+        raise ValueError("No rows for requested biopsies.")
+    if x_c not in df.columns:
+        raise KeyError(f"X-axis column {x_axis!r} not in dataframe.")
+
+    # resolve columns
+    signed_key, _ = _trial_col(metric, use_abs=False)
+    abs_key, compute_abs_from = _trial_col(metric, use_abs=True)
+
+    # numeric x; global ordered voxel positions
+    def _to_num(s): return pd.to_numeric(s, errors='coerce')
+    all_xvals = (
+        pd.concat([ _to_num(df[(df[pid_c]==pid) & (df[bxi_c]==bx)][x_c]) for pid,bx in biopsies ])
+        .dropna().unique()
+    )
+    x_vals_sorted = np.sort(all_xvals)
+    centers = np.arange(1, len(x_vals_sorted) + 1)
+
+    # convenience for legend labels
+    def _biopsy_label(pair):
+        return biopsy_label_map.get(pair, f"{pair[0]}, Bx {pair[1]}") if biopsy_label_map else f"{pair[0]}, Bx {pair[1]}"
+
+    # ---------- build per-voxel groups ----------
+    def _groups_for_biopsy(pid, bx):
+        sub = df[(df[pid_c]==pid) & (df[bxi_c]==bx)].copy()
+        sub['_x'] = _to_num(sub[x_c])
+        sub = sub.dropna(subset=['_x']).sort_values('_x')
+        gs, ga = [], []
+        for xv in x_vals_sorted:
+            g = sub[sub['_x'] == xv]
+            s_vals = pd.to_numeric(g[signed_key], errors='coerce').dropna().values
+            if isinstance(abs_key, tuple) and abs_key[0] == '__compute_abs_from__':
+                a_vals = pd.to_numeric(g[compute_abs_from], errors='coerce').abs().dropna().values
+            else:
+                a_vals = pd.to_numeric(g[abs_key], errors='coerce').dropna().values
+            gs.append(s_vals)  # may be empty
+            ga.append(a_vals)
+        return gs, ga
+
+    per_signed = {}
+    per_abs    = {}
+    for pair in biopsies:
+        gs, ga = _groups_for_biopsy(*pair)
+        per_signed[pair] = gs
+        per_abs[pair]    = ga
+
+    whis = 1.5 if whisker_mode == 'iqr1.5' else (5, 95)
+
+    out_paths: list[Path] = []
+    output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---------- overlay layout ----------
+    if layout == 'overlay':
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+        # vertical voxel guides to make alignment obvious
+        if show_voxel_guides:
+            for x in centers:
+                ax.axvspan(x-0.5, x+0.5, color='grey', alpha=voxel_guide_alpha, zorder=0)
+
+        # deterministic intra-side offsets for biopsies
+        if len(biopsies) == 1:
+            offsets = [0.0]
+        else:
+            offsets = np.linspace(-biopsy_spread, biopsy_spread, len(biopsies))
+
+        # draw boxes per biopsy
+        for bi, pair in enumerate(biopsies):
+            color = colors[bi % len(colors)]
+            label = _biopsy_label(pair)
+            off   = offsets[bi]
+
+            # signed at left
+            pos_s = centers - signed_offset + off
+            gs = per_signed[pair]
+            if any(len(a) for a in gs):
+                bp = ax.boxplot(gs, positions=pos_s, widths=box_width,
+                                manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=True)
+                for box in bp['boxes']:
+                    box.set_facecolor(color); box.set_alpha(0.35)
+                    box.set_edgecolor(color); box.set_linewidth(1.1)
+                for k in ['whiskers','caps','medians']:
+                    for line in bp[k]:
+                        line.set_color(color); line.set_linewidth(1.1)
+                if show_points:
+                    rng = np.random.default_rng(2025 + bi)
+                    for x0, arr in zip(pos_s, gs):
+                        if arr.size:
+                            xj = x0 + (rng.random(arr.size) - 0.5)*jitter_width
+                            ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='o', zorder=3)
+
+            # abs at right (dashed edges / hollow face)
+            pos_a = centers + abs_offset + off
+            ga = per_abs[pair]
+            if any(len(a) for a in ga):
+                bp = ax.boxplot(ga, positions=pos_a, widths=box_width,
+                                manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=True)
+                for box in bp['boxes']:
+                    box.set_facecolor('white'); box.set_alpha(1.0)
+                    box.set_edgecolor(color);  box.set_linewidth(1.1); box.set_linestyle('--')
+                for k in ['whiskers','caps','medians']:
+                    for line in bp[k]:
+                        line.set_color(color); line.set_linewidth(1.1); line.set_linestyle('--')
+                if show_points:
+                    rng = np.random.default_rng(4040 + bi)
+                    for x0, arr in zip(pos_a, ga):
+                        if arr.size:
+                            xj = x0 + (rng.random(arr.size) - 0.5)*jitter_width
+                            ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='x', zorder=3)
+
+        # ticks & labels
+        ax.set_xticks(centers)
+        if x_axis == 'Voxel index':
+            ax.set_xticklabels([str(int(v)) for v in x_vals_sorted], rotation=0)
+            xlab = 'Voxel index'
+        else:
+            ax.set_xticklabels([f"{v:g}" for v in x_vals_sorted], rotation=0)
+            xlab = 'Voxel begin (Z) [mm]'
+
+        ax.set_xlabel(xlab, fontsize=axes_label_fontsize)
+        ax.set_ylabel(_ylabel(), fontsize=axes_label_fontsize)
+        ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+        if y0_refline:
+            ax.axhline(0.0, linestyle=':', linewidth=1.0, alpha=0.85, color='0.25')
+
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+
+        # legend: biopsy colors + line style keys
+        from matplotlib.patches import Patch
+        from matplotlib.lines import Line2D
+        patches = [Patch(facecolor=colors[i % len(colors)], edgecolor=colors[i % len(colors)],
+                         alpha=0.35, label=_biopsy_label(biopsies[i])) for i in range(len(biopsies))]
+        signed_key = Line2D([], [], color='black', linewidth=1.1, label='Δ (left)')
+        abs_key    = Line2D([], [], color='black', linewidth=1.1, linestyle='--', label='|Δ| (right)')
+        leg = ax.legend(handles=patches + [signed_key, abs_key], loc=legend_loc, frameon=True)
+        for t in leg.get_texts():
+            t.set_fontsize(max(tick_label_fontsize-0, 9))
+
+        if show_title:
+            if title is None:
+                title = f"{metric} — Δ & |Δ| per voxel"
+            ax.set_title(title, fontsize=axes_label_fontsize)
+
+        if tight_layout:
+            plt.tight_layout()
+
+        for ext in save_formats:
+            fp = output_dir / f"{plot_name_base}.{ext.lstrip('.')}"
+            fig.savefig(fp, bbox_inches='tight', dpi=dpi)
+            out_paths.append(fp)
+        plt.close(fig)
+
+    # ---------- facet layout ----------
+    else:
+        # one column per biopsy; inside each, Δ on left and |Δ| on right
+        n_b = len(biopsies)
+        fig, axes = plt.subplots(1, n_b, figsize=(max(8.0, 6.0*n_b), figsize[1]), dpi=dpi, sharey=True)
+
+        if n_b == 1:
+            axes = [axes]
+
+        for ax, (pair, color) in zip(axes, zip(biopsies, colors)):
+            pid, bx = pair
+            gs = per_signed[pair]
+            ga = per_abs[pair]
+
+            if show_voxel_guides:
+                for x in centers:
+                    ax.axvspan(x-0.5, x+0.5, color='grey', alpha=voxel_guide_alpha, zorder=0)
+
+            pos_s = centers - signed_offset
+            pos_a = centers + abs_offset
+
+            bp_s = ax.boxplot(gs, positions=pos_s, widths=box_width,
+                              manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=True)
+            for box in bp_s['boxes']:
+                box.set_facecolor(color); box.set_alpha(0.35)
+                box.set_edgecolor(color); box.set_linewidth(1.1)
+            for k in ['whiskers','caps','medians']:
+                for line in bp_s[k]:
+                    line.set_color(color); line.set_linewidth(1.1)
+
+            bp_a = ax.boxplot(ga, positions=pos_a, widths=box_width,
+                              manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=True)
+            for box in bp_a['boxes']:
+                box.set_facecolor('white'); box.set_alpha(1.0)
+                box.set_edgecolor(color);  box.set_linewidth(1.1); box.set_linestyle('--')
+            for k in ['whiskers','caps','medians']:
+                for line in bp_a[k]:
+                    line.set_color(color); line.set_linewidth(1.1); line.set_linestyle('--')
+
+            if show_points:
+                rng1 = np.random.default_rng(2025)
+                rng2 = np.random.default_rng(4040)
+                for x0, arr in zip(pos_s, gs):
+                    if arr.size:
+                        xj = x0 + (rng1.random(arr.size)-0.5)*jitter_width
+                        ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='o', zorder=3)
+                for x0, arr in zip(pos_a, ga):
+                    if arr.size:
+                        xj = x0 + (rng2.random(arr.size)-0.5)*jitter_width
+                        ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='x', zorder=3)
+
+            ax.set_xticks(centers)
+            if x_axis == 'Voxel index':
+                ax.set_xticklabels([str(int(v)) for v in x_vals_sorted], rotation=0)
+                xlab = 'Voxel index'
+            else:
+                ax.set_xticklabels([f"{v:g}" for v in x_vals_sorted], rotation=0)
+                xlab = 'Voxel begin (Z) [mm]'
+
+            ax.set_xlabel(xlab, fontsize=axes_label_fontsize)
+            ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+            ax.set_title(_biopsy_label(pair), fontsize=axes_label_fontsize)
+
+            if y0_refline:
+                ax.axhline(0.0, linestyle=':', linewidth=1.0, alpha=0.85, color='0.25')
+
+        axes[0].set_ylabel(_ylabel(), fontsize=axes_label_fontsize)
+        if ylim is not None:
+            axes[0].set_ylim(*ylim)
+
+        if show_title:
+            if title is None:
+                title = f"{metric} — Δ & |Δ| per voxel"
+            fig.suptitle(title, fontsize=axes_label_fontsize)
+            fig.subplots_adjust(top=0.88)
+
+        if tight_layout:
+            plt.tight_layout()
+
+        for ext in save_formats:
+            fp = output_dir / f"{plot_name_base}.{ext.lstrip('.')}"
+            fig.savefig(fp, bbox_inches='tight', dpi=dpi)
+            out_paths.append(fp)
+        plt.close(fig)
+
+    return out_paths
+
+
+
+
+
+def plot_voxel_dualboxes_by_biopsy_lanes(
+    deltas_df: pd.DataFrame,
+    biopsies: Sequence[Tuple[str, int]],          # e.g. [("184 (F2)",1), ("184 (F2)",2)]
+    output_dir: str | Path,
+    plot_name_base: str,
+    *,
+    metric: Literal['Dose (Gy)', 'Dose grad (Gy/mm)'] = 'Dose (Gy)',
+    x_axis: Literal['Voxel index', 'Voxel begin (Z)'] = 'Voxel index',
+
+    # Styling / seaborn
+    seaborn_style: str = 'whitegrid',
+    seaborn_context: str = 'talk',
+    palette: str | Iterable = 'deep',
+
+    # Figure & axes
+    figsize: tuple[float, float] = (12.0, 5.0),
+    dpi: int = 200,
+    axes_label_fontsize: int = 14,
+    tick_label_fontsize: int = 11,
+    show_title: bool = False,
+    title: Optional[str] = None,
+    tight_layout: bool = True,
+    y0_refline: bool = True,
+    ylim: Optional[tuple[float, float]] = None,
+
+    # Lane layout (all are in "x units"; the function spaces lanes on a custom axis)
+    lane_gap: float = 1.2,          # spacing between voxel lanes (increase to spread out lanes)
+    box_width: float = 0.35,        # width of each box
+    pair_gap: float = 0.08,         # gap between Δ and |Δ| for the SAME biopsy
+    biopsy_gap: float = 0.18,       # extra gap between biopsy pairs inside a lane
+
+    # Boxplot specifics
+    whisker_mode: Literal['iqr1.5','q05q95'] = 'q05q95',
+    showfliers: bool = False,
+
+    # Trial points (OFF by default)
+    show_points: bool = False,
+    point_size: float = 7.0,
+    point_alpha: float = 0.25,
+    jitter_width: float = 0.12,
+
+    # Abs handling
+    require_precomputed_abs: bool = True,
+    fallback_recompute_abs: bool = False,
+
+    # Labels / legend
+    label_style: Literal['math','text'] = 'math',
+    biopsy_label_map: Optional[Dict[Tuple[str,int], str]] = None,
+    legend_loc: str = 'best',
+    y_label_mode: str = 'comma',   # 'and'|'comma'|'slash'
+
+
+    # Save
+    save_formats: Iterable[str] = ('png','svg'),
+) -> list[Path]:
+    """
+    Per-voxel 'lane' layout:
+      lane = voxel v
+      inside each lane: for each biopsy in `biopsies`:
+         [ Δ (solid) ] --pair_gap--> [ |Δ| (dashed) ] --biopsy_gap--> next biopsy pair
+    """
+    sns.set_theme(style=seaborn_style, context=seaborn_context)
+    colors = sns.color_palette(palette, n_colors=max(1, len(biopsies)))
+
+    # ----- helpers -----
+    def _mi(name: str):
+        return (name, '') if isinstance(deltas_df.columns, pd.MultiIndex) and (name, '') in deltas_df.columns else name
+
+    def _has(key):
+        if isinstance(deltas_df.columns, pd.MultiIndex):
+            return key in deltas_df.columns
+        return key in deltas_df.columns
+
+    def _trial_col(metric: str, use_abs: bool):
+        if use_abs:
+            mi_key = (f"{metric} abs deltas", "abs_nominal_minus_trial")
+            flat  = f"{metric} abs deltas_abs_nominal_minus_trial"
+        else:
+            mi_key = (f"{metric} deltas", "nominal_minus_trial")
+            flat  = f"{metric} deltas_nominal_minus_trial"
+        if _has(mi_key): return mi_key, None
+        if _has(flat):   return flat, None
+        if use_abs and (not require_precomputed_abs) and fallback_recompute_abs:
+            signed_key, _ = _trial_col(metric, use_abs=False)
+            return ('__compute_abs_from__', signed_key), signed_key
+        raise KeyError(f"Missing col for metric={metric!r}, {'abs' if use_abs else 'signed'}.")
+
+    def _ylabel(metric: str, mode: str = 'and'):
+        is_grad = 'grad' in metric.lower()
+        unit = r"(Gy mm$^{-1}$)" if is_grad else r"(Gy)"
+        if is_grad:
+            left, right = r"$\Delta^G_{b,v,i}$", r"$|\Delta^G_{b,v,i}|$"
+        else:
+            left, right = r"$\Delta_{b,v,i}$", r"$|\Delta_{b,v,i}|$"
+        if mode == 'and':
+            return f"{left} and {right}  {unit}"
+        elif mode == 'comma':
+            return f"{left}, {right}  {unit}"
+        else:  # fallback
+            return f"{left} / {right}  {unit}"
+
+
+    pid_c = _mi('Patient ID')
+    bxi_c = _mi('Bx index')
+    x_c   = _mi(x_axis)
+
+    df = deltas_df[
+        (deltas_df[pid_c].isin([p for p,_ in biopsies])) &
+        (deltas_df[bxi_c].isin([b for _,b in biopsies]))
+    ].copy()
+    if df.empty:
+        raise ValueError("No rows for requested biopsies.")
+    if x_c not in df.columns:
+        raise KeyError(f"X-axis column {x_axis!r} missing.")
+
+    signed_key, _ = _trial_col(metric, use_abs=False)
+    abs_key, compute_abs_from = _trial_col(metric, use_abs=True)
+
+    def _to_num(s): return pd.to_numeric(s, errors='coerce')
+
+    # global voxel order (sorted union)
+    all_xvals = (
+        pd.concat([ _to_num(df[(df[pid_c]==pid) & (df[bxi_c]==bx)][x_c]) for pid,bx in biopsies ])
+        .dropna().unique()
+    )
+    x_vals_sorted = np.sort(all_xvals)
+    n_vox = len(x_vals_sorted)
+
+    # gather per-voxel per-biopsy trial arrays
+    per_signed: Dict[Tuple[str,int], list] = {}
+    per_abs:    Dict[Tuple[str,int], list] = {}
+    for pair in biopsies:
+        pid, bx = pair
+        sub = df[(df[pid_c]==pid) & (df[bxi_c]==bx)].copy()
+        sub['_x'] = _to_num(sub[x_c])
+        sub = sub.dropna(subset=['_x']).sort_values('_x')
+        gs, ga = [], []
+        for xv in x_vals_sorted:
+            g = sub[sub['_x'] == xv]
+            s_vals = pd.to_numeric(g[signed_key], errors='coerce').dropna().values
+            if isinstance(abs_key, tuple) and abs_key[0] == '__compute_abs_from__':
+                a_vals = pd.to_numeric(g[compute_abs_from], errors='coerce').abs().dropna().values
+            else:
+                a_vals = pd.to_numeric(g[abs_key], errors='coerce').dropna().values
+            gs.append(s_vals)  # can be empty
+            ga.append(a_vals)  # can be empty
+        per_signed[pair] = gs
+        per_abs[pair]    = ga
+
+    # lane centers spaced by lane_gap
+    lane_centers = np.arange(n_vox, dtype=float) * lane_gap
+
+    # build within-lane offsets: for each biopsy j -> two boxes (Δ then |Δ|)
+    # pattern: [Δ_j], [|Δ|_j], then biopsy_gap before next biopsy’s Δ
+    # offsets start from a negative value so the whole lane is centered on lane_center
+    # compute total width of one full biopsy pair
+    pair_width = 2*box_width + pair_gap
+    # total width for all biopsy pairs + gaps between pairs (biopsy_gap between pairs)
+    lane_span = len(biopsies) * pair_width + (len(biopsies)-1) * biopsy_gap
+    # start so that lane is centered
+    start = -lane_span / 2.0
+    # offsets for each biopsy j
+    biopsy_pair_starts = [start + j*(pair_width + biopsy_gap) for j in range(len(biopsies))]
+    # final offsets for Δ and |Δ| within a lane, per biopsy
+    rel_offsets_signed = [s for s in biopsy_pair_starts]
+    rel_offsets_abs    = [s + box_width + pair_gap for s in biopsy_pair_starts]
+
+    # begin plotting
+    sns.set_style(seaborn_style)
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    whis = 1.5 if whisker_mode == 'iqr1.5' else (5, 95)
+
+    # draw per biopsy
+    for bi, pair in enumerate(biopsies):
+        color = sns.color_palette(palette, n_colors=len(biopsies))[bi % len(biopsies)]
+        label = biopsy_label_map.get(pair, f"{pair[0]}, Bx {pair[1]}") if biopsy_label_map else f"{pair[0]}, Bx {pair[1]}"
+
+        # positions for this biopsy across lanes
+        pos_signed = lane_centers + rel_offsets_signed[bi] + box_width/2.0
+        pos_abs    = lane_centers + rel_offsets_abs[bi]    + box_width/2.0
+
+        gs = per_signed[pair]
+        ga = per_abs[pair]
+
+        # Δ (solid filled)
+        if any(len(a) for a in gs):
+            bp = ax.boxplot(gs, positions=pos_signed, widths=box_width,
+                            manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=True)
+            for box in bp['boxes']:
+                box.set_facecolor(color); box.set_alpha(0.35)
+                box.set_edgecolor(color); box.set_linewidth(1.15)
+            for k in ['whiskers','caps','medians']:
+                for line in bp[k]:
+                    line.set_color(color); line.set_linewidth(1.15)
+            if show_points:
+                rng = np.random.default_rng(1000 + bi)
+                for x0, arr in zip(pos_signed, gs):
+                    if arr.size:
+                        xj = x0 + (rng.random(arr.size)-0.5)*jitter_width
+                        ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='o', zorder=3)
+
+        # |Δ| (dashed, hollow)
+        if any(len(a) for a in ga):
+            bp = ax.boxplot(ga, positions=pos_abs, widths=box_width,
+                            manage_ticks=False, whis=whis, showfliers=showfliers, patch_artist=True)
+            for box in bp['boxes']:
+                box.set_facecolor('white'); box.set_alpha(1.0)
+                box.set_edgecolor(color);  box.set_linewidth(1.15); box.set_linestyle('--')
+            for k in ['whiskers','caps','medians']:
+                for line in bp[k]:
+                    line.set_color(color); line.set_linewidth(1.15); line.set_linestyle('--')
+            if show_points:
+                rng = np.random.default_rng(2000 + bi)
+                for x0, arr in zip(pos_abs, ga):
+                    if arr.size:
+                        xj = x0 + (rng.random(arr.size)-0.5)*jitter_width
+                        ax.scatter(xj, arr, s=point_size, alpha=point_alpha, color=color, marker='x', zorder=3)
+
+    # x ticks at lane centers with voxel labels
+    ax.set_xticks(lane_centers)
+    if x_axis == 'Voxel index':
+        ax.set_xticklabels([str(int(v)) for v in x_vals_sorted], rotation=0)
+        xlab = 'Voxel index'
+    else:
+        ax.set_xticklabels([f"{v:g}" for v in x_vals_sorted], rotation=0)
+        xlab = 'Voxel begin (Z) [mm]'
+
+    # subtle vertical guides to clarify lanes
+    for c in lane_centers:
+        ax.axvline(c, color='0.85', linewidth=0.6, alpha=0.6, zorder=0)
+
+    ax.set_xlabel(xlab, fontsize=axes_label_fontsize)
+    ax.set_ylabel(_ylabel(metric, mode=y_label_mode), fontsize=axes_label_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+    if y0_refline:
+        ax.axhline(0.0, linestyle=':', linewidth=1.0, alpha=0.85, color='0.25')
+
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+    # Legend = biopsies only
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+
+    # biopsy color swatches
+    patches = [
+        Patch(facecolor=colors[i % len(colors)],
+            edgecolor=colors[i % len(colors)],
+            alpha=0.35,
+            label=(biopsy_label_map.get(biopsies[i], f"{biopsies[i][0]}, Bx {biopsies[i][1]}")
+                    if biopsy_label_map else f"{biopsies[i][0]}, Bx {biopsies[i][1]}"))
+        for i in range(len(biopsies))
+    ]
+
+    # Δ / |Δ| style keys — no extra text
+    delta_key   = Line2D([], [], color='black', linewidth=1.2, label=r'$\Delta$')
+    absdelta_key= Line2D([], [], color='black', linewidth=1.2, linestyle='--', label=r'$|\Delta|$')
+
+    leg = ax.legend(handles=patches + [delta_key, absdelta_key], loc=legend_loc, frameon=True)
+    for t in leg.get_texts():
+        t.set_fontsize(max(tick_label_fontsize - 0, 9))
+
+
+    if show_title:
+        if title is None:
+            title = f"{metric} — Δ & |Δ| per voxel"
+        ax.set_title(title, fontsize=axes_label_fontsize)
+
+    if tight_layout:
+        plt.tight_layout()
+
+    output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
+    out_paths: list[Path] = []
+    for ext in save_formats:
+        fp = output_dir / f"{plot_name_base}.{ext.lstrip('.')}"
+        fig.savefig(fp, bbox_inches='tight', dpi=dpi)
+        out_paths.append(fp)
+    plt.close(fig)
+    return out_paths
+
+
+
+
+
+
 
 
 
@@ -7178,3 +8723,832 @@ def plot_cohort_deltas_boxplot(
     plt.savefig(png_path, format='png')
     plt.close()
     return svg_path, png_path
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+########## delta D vs grad plots################
+
+
+
+
+
+# ---------- helper: robust binned trend (with safer fallbacks) ----------
+def compute_binned_trend(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    *,
+    bins: int = 24,
+    binning: str = "quantile",   # "quantile" or "width"
+    min_per_bin: int = 20,
+    qs: Tuple[float,...] = (0.05, 0.25, 0.50, 0.75, 0.95)
+) -> pd.DataFrame:
+    """Return per-bin robust summary: n, q05/q25/median/q75/q95, and x_center."""
+    dd = df[[x, y]].copy()
+    dd[x] = pd.to_numeric(dd[x], errors='coerce')
+    dd[y] = pd.to_numeric(dd[y], errors='coerce')
+    dd = dd.dropna()
+    if dd.empty:
+        return pd.DataFrame(columns=["x_center","n","q05","q25","q50","q75","q95"])
+
+    # choose edges
+    def _edges_quantile(d: pd.Series, k: int) -> np.ndarray:
+        qs_edges = np.linspace(0, 1, k + 1)
+        e = d.quantile(qs_edges).to_numpy()
+        e = np.unique(e)
+        if e.size < 3:  # not enough unique edges → fallback to width
+            lo, hi = d.min(), d.max()
+            e = np.linspace(lo, hi, min(k, 10) + 1)
+        return e
+
+    if binning == "quantile":
+        edges = _edges_quantile(dd[x], bins)
+    else:
+        lo, hi = dd[x].min(), dd[x].max()
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+            # no spread, return empty
+            return pd.DataFrame(columns=["x_center","n","q05","q25","q50","q75","q95"])
+        edges = np.linspace(lo, hi, bins + 1)
+
+    dd["__bin__"] = pd.cut(dd[x], bins=edges, include_lowest=True, duplicates="drop")
+    gb = dd.groupby("__bin__", observed=True, sort=True)
+
+    rows = []
+    for b, g in gb:
+        if g.shape[0] < min_per_bin:
+            continue
+        q = g[y].quantile(qs)
+        lo5, q25, med, q75, hi95 = q.iloc[0], q.iloc[1], q.iloc[2], q.iloc[3], q.iloc[4]
+        if isinstance(b, pd.Interval):
+            x_center = 0.5 * (float(b.left) + float(b.right))
+        else:
+            try:
+                left, right = [float(v) for v in str(b).strip("[]()").split(",")]
+                x_center = 0.5 * (left + right)
+            except Exception:
+                x_center = np.nan
+        rows.append({"x_center": x_center, "n": int(g.shape[0]),
+                     "q05": lo5, "q25": q25, "q50": med, "q75": q75, "q95": hi95})
+
+    out = pd.DataFrame(rows).dropna(subset=["x_center"])
+    return out
+
+
+# ---------- main plotter (fixed grouping + optional regression) ----------
+def plot_delta_vs_gradient(
+    long_df: pd.DataFrame,
+    save_dir,
+    fig_name: str,
+    *,
+    # what to plot
+    gradient_cols: Optional[Iterable[str]] = None,   # None -> auto: all 'Grad[...]'
+    delta_kinds: Iterable[str] = ("Δ_mode", "Δ_median", "Δ_mean"),  # by prefix match
+    y_variant: str = "both",          # 'signed' | 'abs' | 'both'
+    use_log1p_abs: bool = False,      # when plotting abs, use log1p(|Δ|)
+    # visuals
+    show_scatter: bool = True,
+    scatter_sample: int = 20000,
+    scatter_alpha: float = 0.15,
+    scatter_size: float = 8.0,
+    # trend grouping & legend
+    hue_by: str = "Measure",          # 'Measure' or 'Delta kind'  (default fixed to 'Measure' for 'both')
+    trend_split: str = "auto",        # 'auto' | 'Measure' | 'Delta kind'
+    # binned trend
+    bins: int = 24,
+    binning: str = "quantile",
+    min_per_bin: int = 20,
+    show_iqr_band: bool = True,
+    show_90_band: bool = True,
+    # optional regression over raw points (per panel & group)
+    regression: str = "none",         # 'none' | 'ols' | 'loess'
+    poly_order: int = 1,              # for 'ols' (1 = linear)
+    loess_frac: float = 0.2,          # for 'loess' if statsmodels is available
+    max_points_for_reg: int = 50000,  # downsample for regression fit
+    # labels & fonts
+    label_style: str = "math",
+    median_superscript: str = "Q50",
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    legend_fontsize: int = 11,
+    title: Optional[str] = None,
+    # layout & export
+    facet_cols: int = 2,
+    height: float = 3.2,
+    aspect: float = 1.4,
+):
+    """
+    Δ (and/or |Δ|) vs dose-gradient with robust binned trends (+ optional regression).
+    Expects the long table from build_deltas_vs_gradient_df_with_abs(..., return_long=True):
+        ['Patient ID','Bx index','Voxel index', 'Grad[⋯]', 'Delta kind', 'Delta (signed)', '|Delta|','log1p|Delta|']
+    """
+    plt.ioff()
+    df = long_df.copy()
+
+    # --- choose gradient columns ---
+    if gradient_cols is None:
+        gradient_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("Grad[")]
+    gradient_cols = list(gradient_cols)
+    if not gradient_cols:
+        raise KeyError("No gradient columns found. Ensure columns like 'Grad[nominal] (Gy/mm)' exist.")
+
+    # --- normalize 'Delta kind' to prefixes (Δ_mode / Δ_median / Δ_mean) ---
+    def _kind_of(s: str) -> str:
+        if isinstance(s, str) and "Δ_mode" in s: return "Δ_mode"
+        if isinstance(s, str) and "Δ_median" in s: return "Δ_median"
+        if isinstance(s, str) and "Δ_mean" in s: return "Δ_mean"
+        return str(s)
+
+    df["__kind__"] = df["Delta kind"].map(_kind_of)
+    df = df[df["__kind__"].isin(delta_kinds)].copy()
+    if df.empty:
+        raise ValueError("No rows after filtering to requested delta_kinds.")
+
+    # --- build 'Value' + 'Measure' (Signed/Absolute/Absolute (log1p)) ---
+    parts = []
+    if y_variant in ("signed", "both"):
+        tmp = df.copy()
+        tmp["Value"] = pd.to_numeric(tmp["Delta (signed)"], errors='coerce')
+        tmp["Measure"] = "Signed"
+        parts.append(tmp)
+
+    if y_variant in ("abs", "both"):
+        if use_log1p_abs:
+            if "log1p|Delta|" not in df.columns:
+                raise KeyError("use_log1p_abs=True but 'log1p|Delta|' column is missing.")
+            tmp = df.copy()
+            tmp["Value"] = pd.to_numeric(tmp["log1p|Delta|"], errors='coerce')
+            tmp["Measure"] = "Absolute (log1p)"
+        else:
+            if "|Delta|" not in df.columns:
+                raise KeyError("y_variant includes abs but '|Delta|' column is missing.")
+            tmp = df.copy()
+            tmp["Value"] = pd.to_numeric(tmp["|Delta|"], errors='coerce')
+            tmp["Measure"] = "Absolute"
+        parts.append(tmp)
+
+    plot_df = pd.concat(parts, ignore_index=True).dropna(subset=["Value"])
+
+    # --- trend grouping: never mix Signed with Absolute in same trend ---
+    if trend_split == "auto":
+        split_col = "Measure" if y_variant == "both" else "__kind__"
+    else:
+        split_col = trend_split
+        if y_variant == "both" and split_col != "Measure":
+            # force a safe choice: separate trends by Signed vs Absolute
+            split_col = "Measure"
+
+    # hue choice for scatter
+    if hue_by not in ("Measure", "Delta kind", "__kind__"):
+        hue_by = "Measure" if y_variant == "both" else "Delta kind"
+
+    # layout
+    n = len(gradient_cols)
+    ncols = min(facet_cols, n)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(aspect*height*ncols, height*nrows), squeeze=False)
+    sns.set(style="whitegrid")
+
+    # optional regression helpers
+    try:
+        from statsmodels.nonparametric.smoothers_lowess import lowess as _lowess
+        _has_loess = True
+    except Exception:
+        _has_loess = False
+
+    # panels
+    for i, gcol in enumerate(gradient_cols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+        pane = plot_df[[gcol, "Value", "__kind__", "Delta kind", "Measure"]].dropna().rename(columns={gcol: "Grad"})
+
+        # scatter (downsample for speed)
+        if show_scatter and not pane.empty:
+            pp = pane
+            if scatter_sample and pp.shape[0] > scatter_sample:
+                pp = pp.sample(scatter_sample, random_state=42)
+            sns.scatterplot(
+                data=pp,
+                x="Grad", y="Value",
+                hue=(hue_by if hue_by in pp.columns else None),
+                alpha=scatter_alpha, s=scatter_size, ax=ax, legend=False
+            )
+
+        # trend groups
+        groups = pane[split_col].dropna().unique()
+        palette = sns.color_palette(n_colors=len(groups))
+
+        for color, grp in zip(palette, groups):
+            sub = pane[pane[split_col] == grp]
+            if sub.empty:
+                continue
+
+            # robust binned trend
+            trend = compute_binned_trend(
+                sub.rename(columns={"Grad":"x","Value":"y"}),
+                x="x", y="y",
+                bins=bins, binning=binning, min_per_bin=min_per_bin
+            )
+
+            # if no bins survive, relax criteria once
+            if trend.empty and binning == "quantile":
+                trend = compute_binned_trend(
+                    sub.rename(columns={"Grad":"x","Value":"y"}),
+                    x="x", y="y", bins=max(8, bins//2), binning="width", min_per_bin=max(5, min_per_bin//2)
+                )
+
+            if not trend.empty:
+                if show_90_band:
+                    ax.fill_between(trend["x_center"], trend["q05"], trend["q95"], color=color, alpha=0.08, lw=0)
+                if show_iqr_band:
+                    ax.fill_between(trend["x_center"], trend["q25"], trend["q75"], color=color, alpha=0.18, lw=0)
+                ax.plot(trend["x_center"], trend["q50"], color=color, lw=2.0, label=str(grp))
+
+            # optional regression (over raw points)
+            if regression != "none" and not sub.empty:
+                rr = sub
+                if max_points_for_reg and rr.shape[0] > max_points_for_reg:
+                    rr = rr.sample(max_points_for_reg, random_state=123)
+
+                x = pd.to_numeric(rr["Grad"], errors='coerce').to_numpy()
+                y = pd.to_numeric(rr["Value"], errors='coerce').to_numpy()
+                mask = np.isfinite(x) & np.isfinite(y)
+                x, y = x[mask], y[mask]
+                if x.size >= 5:
+                    xs = np.linspace(x.min(), x.max(), 200)
+                    if regression == "ols":
+                        # simple polynomial fit
+                        coefs = np.polyfit(x, y, deg=poly_order)
+                        ys = np.polyval(coefs, xs)
+                        ax.plot(xs, ys, color=color, lw=2.0, ls='--')
+                    elif regression == "loess" and _has_loess:
+                        sm = _lowess(y, x, frac=loess_frac, it=1, return_sorted=True)
+                        ax.plot(sm[:,0], sm[:,1], color=color, lw=2.0, ls='--')
+
+        # labels
+        ax.set_xlabel(gcol, fontsize=axes_label_fontsize)
+        # y label (generic; legend carries the group meaning)
+        if y_variant == "signed":
+            ylab = r"$\Delta$"
+        elif use_log1p_abs:
+            ylab = r"$\log(1+|\Delta|)$"
+        else:
+            ylab = r"$|\Delta|$"
+        ax.set_ylabel(ylab, fontsize=axes_label_fontsize)
+        ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+        # legend
+        if len(groups):
+            leg = ax.legend(title=None, frameon=True, fontsize=legend_fontsize)
+            if leg:
+                for txt in leg.get_texts():
+                    txt.set_fontsize(legend_fontsize)
+
+    # hide unused axes
+    for j in range(i+1, nrows*ncols):
+        r, c = divmod(j, ncols)
+        axes[r][c].axis("off")
+
+    # title
+    if title:
+        fig.suptitle(title, fontsize=axes_label_fontsize)
+        fig.subplots_adjust(top=0.90)
+
+    # save
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    svg_path = Path(save_dir) / f"{fig_name}.svg"
+    png_path = Path(save_dir) / f"{fig_name}.png"
+    fig.tight_layout()
+    fig.savefig(svg_path, format="svg", dpi=300)
+    fig.savefig(png_path, format="png", dpi=300)
+    plt.close(fig)
+    return svg_path, png_path
+
+
+
+
+def _stat_tex(stat: str, overrides: dict | None) -> str:
+    """
+    Map a gradient 'stat' token to LaTeX-friendly text.
+    """
+    defaults = {
+        "nominal": r"\mathrm{nom}",
+        "mean":    r"\mathrm{mean}",
+        "mode":    r"\mathrm{mode}",
+        "median":  r"\mathrm{median}",
+        "q50":     r"\mathrm{Q50}",
+        "quantile_50": r"\mathrm{Q50}",
+    }
+    if overrides and stat in overrides:
+        return overrides[stat]
+    return defaults.get(stat, rf"\mathrm{{{stat}}}")
+
+def _x_label_for(gcol: str, label_style: str, grad_stat_tex: dict | None) -> str:
+    """
+    'Grad[nominal] (Gy/mm)' -> LaTeX '||∇D||_{nom} (Gy mm^{-1})'
+    Keeps working even if the units part is missing.
+    """
+    m = re.search(r"Grad\[(.*?)\]", gcol)
+    stat = m.group(1) if m else "nominal"
+
+    if label_style != "latex":
+        # Plain text, but fix the unit formatting to Gy mm^-1
+        return f"Grad[{stat}] (Gy mm^-1)"
+
+    s = _stat_tex(stat, grad_stat_tex)
+    # Mathtext LaTeX; do not require usetex=True
+    return rf"$\|\nabla D\|_{{{s}}}\ \mathrm{{(Gy\ mm^{{-1}})}}$"
+
+def _y_label_for(y_col: str, label_style: str, j_symbol: str, idx_sub: tuple[str,str]) -> str:
+    """
+    Map internal y_col → axis label with indices/superscripts.
+    """
+    b, v = idx_sub
+    is_abs = (y_col == "|Delta|")
+    is_logabs = (y_col == "log1p|Delta|")
+
+    if label_style != "latex":
+        if is_abs:     return f"|Delta|^{j_symbol}_{{{b},{v}}}"
+        if is_logabs:  return f"log(1+|Delta|)^{j_symbol}_{{{b},{v}}}"
+        return f"Delta^{j_symbol}_{{{b},{v}}}"
+
+    if is_abs:
+        return rf"$|\Delta|^{{{j_symbol}}}_{{{b},{v}}}$"
+    if is_logabs:
+        return rf"$\log(1+|\Delta|)^{{{j_symbol}}}_{{{b},{v}}}$"
+    return rf"$\Delta^{{{j_symbol}}}_{{{b},{v}}}$"
+
+def _legend_label_for(kind: str, y_col: str, label_style: str, idx_sub: tuple[str,str]) -> str:
+    """
+    Δ_mode → Δ^{mode}_{b,v}  (or |Δ|^{mode}_{b,v} if abs plot)
+    """
+    if label_style != "latex":
+        return kind
+
+    b, v = idx_sub
+    is_abs = (y_col == "|Delta|") or (y_col == "log1p|Delta|")
+    # which stat?
+    stat = "mode" if "mode" in kind else ("median" if "median" in kind else ("mean" if "mean" in kind else kind))
+    if is_abs:
+        return rf"$|\Delta|^{{\mathrm{{{stat}}}}}_{{{b},{v}}}$"
+    else:
+        return rf"$\Delta^{{\mathrm{{{stat}}}}}_{{{b},{v}}}$"
+
+def _relabel_legend_texts(legend, y_col: str, label_style: str, idx_sub: tuple[str,str]) -> None:
+    """
+    Mutate legend texts in-place to LaTeX forms.
+    """
+    if not legend: 
+        return
+    for txt in legend.get_texts():
+        raw = txt.get_text()
+        txt.set_text(_legend_label_for(raw, y_col, label_style, idx_sub))
+
+
+
+
+
+def _kind_prefix(s: str) -> str:
+    if isinstance(s, str) and "Δ_mode"   in s: return "Δ_mode"
+    if isinstance(s, str) and "Δ_median" in s: return "Δ_median"
+    if isinstance(s, str) and "Δ_mean"   in s: return "Δ_mean"
+    return str(s)
+
+
+def _ols_stats(x: pd.Series, y: pd.Series) -> dict:
+    x = pd.to_numeric(x, errors='coerce'); y = pd.to_numeric(y, errors='coerce')
+    m = x.notna() & y.notna()
+    x, y = x[m].to_numpy(), y[m].to_numpy()
+    n = x.size
+    out = {'n': int(n), 'slope': np.nan, 'slope_lo': np.nan, 'slope_hi': np.nan,
+           'intercept': np.nan, 'r2': np.nan, 'rho': np.nan, 'rho_p': np.nan}
+    if n < 3: return out
+    X = sm.add_constant(x)
+    model = sm.OLS(y, X).fit()
+    out['intercept'] = float(model.params[0])
+    out['slope']     = float(model.params[1])
+    ci = np.asarray(model.conf_int(alpha=0.05))
+    out['slope_lo']  = float(ci[1,0])
+    out['slope_hi']  = float(ci[1,1])
+    out['r2']        = float(model.rsquared)
+    rho, p = spearmanr(x, y)
+    out['rho'], out['rho_p'] = float(rho), float(p)
+    return out
+
+
+def _panel_regplot(ax, df, xcol, ycol, hue, ci=95, scatter=True,
+                   scatter_sample=20000, scatter_alpha=0.15, scatter_size=10.0):
+    # scatter (downsample for speed/overplotting)
+    if scatter:
+        dd = df if (scatter_sample is None or len(df) <= scatter_sample) else df.sample(scatter_sample, random_state=42)
+        sns.scatterplot(data=dd, x=xcol, y=ycol, hue=hue, ax=ax,
+                        alpha=scatter_alpha, s=scatter_size, legend=False)
+
+    # regression per hue with seaborn (OLS + CI)
+    for k, sub in df.groupby(hue, observed=True, sort=False):
+        sns.regplot(data=sub, x=xcol, y=ycol, ax=ax, scatter=False, ci=ci, label=str(k))
+
+def _plot_delta_vs_gradient_pkg_core(
+    long_df: pd.DataFrame,
+    save_dir,
+    file_prefix: str,
+    *,
+    y_col: str,
+    gradient_cols=None,
+    delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+    scatter: bool = True,
+    scatter_sample: int = 20000,
+    scatter_alpha: float = 0.15,
+    scatter_size: float = 10.0,
+    ci: int = 95,
+    annotate_stats: bool = False,
+    write_stats_csv: bool = True,
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    legend_fontsize: int = 11,
+    height: float = 3.2,
+    aspect: float = 1.4,
+    facet_cols: int = 2,
+    title: str | None = None,
+    # label/style knobs
+    label_style: str = "latex",         # "plain" or "latex"
+    idx_sub: tuple[str,str] = ("b","v"),
+    j_symbol: str = "j",
+    grad_stat_tex: dict | None = None,
+):
+    """
+    Core engine used by the two wrappers below.
+    Expects long_df with columns:
+      ['Delta kind', 'Delta (signed)', '|Delta|', 'log1p|Delta|', 'Grad[...] (Gy/mm)', ...]
+    """
+    df = long_df.copy()
+
+    # pick gradient columns
+    if gradient_cols is None:
+        gradient_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("Grad[")]
+    gradient_cols = list(gradient_cols)
+    if not gradient_cols:
+        raise KeyError("No gradient columns detected (need columns like 'Grad[nominal] (Gy/mm)')")
+
+    # normalize Δ-kind and filter
+    df["__kind__"] = df["Delta kind"].map(_kind_prefix)
+    df = df[df["__kind__"].isin(delta_kinds)].copy()
+    if df.empty:
+        raise ValueError("No rows after filtering to requested delta_kinds")
+
+    # |Δ| should be non-negative
+    if y_col == "|Delta|" and (pd.to_numeric(df[y_col], errors='coerce').dropna() < 0).any():
+        raise ValueError("|Delta| contains negatives — upstream column mixing issue.")
+
+    # layout
+    n = len(gradient_cols)
+    ncols = min(facet_cols, n) if n > 0 else 1
+    nrows = int(np.ceil(n / ncols)) if n > 0 else 1
+    fig, axes = plt.subplots(nrows, ncols, figsize=(aspect*height*ncols, height*nrows), squeeze=False)
+    sns.set(style="whitegrid")
+
+    # collect stats for CSV
+    stats_rows = []
+
+    for i, gcol in enumerate(gradient_cols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+        pane = df[[gcol, "Delta kind", y_col]].dropna().rename(columns={gcol: "Grad", y_col: "Value"})
+        if pane.empty:
+            ax.set_visible(False)
+            continue
+
+        # plot
+        _panel_regplot(ax, pane, xcol="Grad", ycol="Value", hue="Delta kind",
+                       ci=ci, scatter=scatter, scatter_sample=scatter_sample,
+                       scatter_alpha=scatter_alpha, scatter_size=scatter_size)
+
+        # labels
+        ax.set_xlabel(_x_label_for(gcol, label_style, grad_stat_tex), fontsize=axes_label_fontsize)
+        ax.set_ylabel(_y_label_for(y_col, label_style, j_symbol, idx_sub), fontsize=axes_label_fontsize)
+        ax.tick_params(axis='both', labelsize=tick_label_fontsize)
+
+        # single legend call + relabel (do NOT call legend() again after this)
+        leg = ax.legend(title=None, frameon=True)
+        if leg:
+            for txt in leg.get_texts():
+                txt.set_fontsize(legend_fontsize)
+            _relabel_legend_texts(leg, y_col, label_style, idx_sub)
+
+        # stats per Δ-kind
+        panel_lines = []
+        for kind, sub in pane.groupby("Delta kind", observed=True, sort=False):
+            s = _ols_stats(sub["Grad"], sub["Value"])
+            stats_rows.append({
+                'gradient_col': gcol,
+                'delta_kind': kind,
+                'y_col': y_col,
+                **s
+            })
+            panel_lines.append(f"{kind}: slope={s['slope']:.3f} [{s['slope_lo']:.3f},{s['slope_hi']:.3f}], "
+                               f"ρ={s['rho']:.3f}, R²={s['r2']:.3f}, n={s['n']}")
+
+        if annotate_stats and panel_lines:
+            ax.text(0.02, 0.98, "\n".join(panel_lines[:3]), transform=ax.transAxes,
+                    va='top', ha='left', fontsize=max(legend_fontsize-1, 9),
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.6, lw=0))
+
+    # hide unused axes
+    for j in range(i+1, nrows*ncols):
+        r, c = divmod(j, ncols)
+        axes[r][c].axis("off")
+
+    if title:
+        fig.suptitle(title, fontsize=axes_label_fontsize)
+        fig.subplots_adjust(top=0.90)
+
+    # save images
+    out_dir = Path(save_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    svg = out_dir / f"{file_prefix}.svg"
+    png = out_dir / f"{file_prefix}.png"
+    fig.tight_layout()
+    fig.savefig(svg, format="svg", dpi=300)
+    fig.savefig(png, format="png", dpi=300)
+    plt.close(fig)
+
+    # optional CSV of slopes/ρ/R²
+    stats_df = pd.DataFrame(stats_rows)
+    csv_path = None
+    if write_stats_csv and not stats_df.empty:
+        csv_path = out_dir / f"{file_prefix}__stats.csv"
+        stats_df.to_csv(csv_path, index=False)
+
+    return svg, png, csv_path, stats_df
+
+
+# ---------------- public wrappers ----------------
+
+def plot_abs_delta_vs_gradient_pkg(
+    long_df: pd.DataFrame,
+    save_dir,
+    file_prefix: str,
+    label_style="latex",      # "plain" or "latex"
+    idx_sub=("b","v"),        # indices shown as _{b,v}
+    j_symbol="j",             # y-axis generic superscript
+    grad_stat_tex=None,       # optional dict to customize stat labels
+    *,
+    gradient_cols=None,
+    delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+    use_log1p: bool = False,
+    **kwargs
+):
+    """
+    |Δ| vs gradient (or log1p(|Δ|) if use_log1p=True), with OLS+95% CI per Δ-kind, per gradient panel.
+    Also returns/saves per-panel stats (slope±CI, ρ, R², n).
+    """
+    y_col = "log1p|Delta|" if use_log1p else "|Delta|"
+    return _plot_delta_vs_gradient_pkg_core(
+        long_df, save_dir, file_prefix,
+        y_col=y_col,
+        gradient_cols=gradient_cols,
+        delta_kinds=delta_kinds,
+        label_style=label_style,
+        idx_sub=idx_sub,
+        j_symbol=j_symbol,
+        grad_stat_tex=grad_stat_tex,
+        **kwargs
+    )
+
+
+
+def plot_signed_delta_vs_gradient_pkg(
+    long_df: pd.DataFrame,
+    save_dir,
+    file_prefix: str,
+    label_style="latex",      # "plain" or "latex"
+    idx_sub=("b","v"),        # indices shown as _{b,v}
+    j_symbol="j",             # y-axis generic superscript
+    grad_stat_tex=None,       # optional dict to customize stat labels
+    *,
+    gradient_cols=None,
+    delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+    **kwargs
+):
+    """
+    Signed Δ vs gradient, with OLS+95% CI per Δ-kind, per gradient panel.
+    Also returns/saves per-panel stats (slope±CI, ρ, R², n).
+    """
+    return _plot_delta_vs_gradient_pkg_core(
+        long_df, save_dir, file_prefix,
+        y_col="Delta (signed)",
+        gradient_cols=gradient_cols,
+        delta_kinds=delta_kinds,
+        label_style=label_style,
+        idx_sub=idx_sub,
+        j_symbol=j_symbol,
+        grad_stat_tex=grad_stat_tex,
+        **kwargs
+    )
+
+
+
+
+
+from pathlib import Path
+from typing import Iterable, Optional, Tuple, List
+def plot_abs_delta_vs_gradient_pkg_batch(
+    long_df: pd.DataFrame,
+    save_dir,
+    base_prefix: str,
+    *,
+    gradient_cols: Optional[Iterable[str]] = None,      # None -> auto all Grad[⋯]
+    delta_kinds: Iterable[str] = ("Δ_mode","Δ_median","Δ_mean"),
+    use_log1p: bool = False,
+    # viz defaults (explicit so you see them at the callsite)
+    scatter: bool = True,
+    scatter_sample: int = 20000,
+    scatter_alpha: float = 0.15,
+    scatter_size: float = 10.0,
+    ci: int = 95,
+    annotate_stats: bool = False,
+    write_stats_csv: bool = True,
+    axes_label_fontsize: int = 14,
+    tick_label_fontsize: int = 12,
+    legend_fontsize: int = 12,
+    height_single: float = 3.0,
+    aspect_single: float = 1.6,
+    height_combined: float = 3.0,
+    aspect_combined: float = 1.5,
+    facet_cols_combined: int = 2,
+    # label/style knobs
+    label_style="latex",
+    idx_sub=("b","v"),
+    j_symbol="j",
+    grad_stat_tex=None,
+) -> Tuple[List[Path], List[Path], Optional[Path]]:
+    """
+    Returns (per_grad_svgs, per_grad_pngs, combined_stats_csv_path)
+    """
+    if gradient_cols is None:
+        gradient_cols = [c for c in long_df.columns if isinstance(c, str) and c.startswith("Grad[")]
+    gradient_cols = list(gradient_cols)
+    if not gradient_cols:
+        raise KeyError("No gradient columns detected for batch plotting.")
+
+    per_svgs, per_pngs = [], []
+
+    # 1) per-gradient single-panel figs
+    for g in gradient_cols:
+        suffix = re.sub(r"[^A-Za-z0-9]+", "_", g).strip("_")
+        file_prefix = f"{base_prefix}__{suffix}"
+        svg, png, stats_csv, _stats_df = plot_abs_delta_vs_gradient_pkg(
+            long_df=long_df,
+            save_dir=save_dir,
+            file_prefix=file_prefix,
+            gradient_cols=[g],
+            delta_kinds=delta_kinds,
+            use_log1p=use_log1p,
+            scatter=scatter, scatter_sample=scatter_sample,
+            scatter_alpha=scatter_alpha, scatter_size=scatter_size,
+            ci=ci,
+            annotate_stats=annotate_stats,
+            write_stats_csv=write_stats_csv,
+            axes_label_fontsize=axes_label_fontsize,
+            tick_label_fontsize=tick_label_fontsize,
+            legend_fontsize=legend_fontsize,
+            height=height_single,
+            aspect=aspect_single,
+            facet_cols=1,
+            title=None,
+            # pass label knobs through
+            label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol, grad_stat_tex=grad_stat_tex,
+        )
+        per_svgs.append(svg); per_pngs.append(png)
+
+    # 2) combined multi-panel fig (all gradients)
+    svg_c, png_c, stats_csv_c, _ = plot_abs_delta_vs_gradient_pkg(
+        long_df=long_df,
+        save_dir=save_dir,
+        file_prefix=f"{base_prefix}__combined",
+        gradient_cols=gradient_cols,
+        delta_kinds=delta_kinds,
+        use_log1p=use_log1p,
+        scatter=scatter, scatter_sample=scatter_sample,
+        scatter_alpha=scatter_alpha, scatter_size=scatter_size,
+        ci=ci,
+        annotate_stats=annotate_stats,
+        write_stats_csv=write_stats_csv,
+        axes_label_fontsize=axes_label_fontsize,
+        tick_label_fontsize=tick_label_fontsize,
+        legend_fontsize=legend_fontsize,
+        height=height_combined,
+        aspect=aspect_combined,
+        facet_cols=facet_cols_combined,
+        title=None,
+        # pass label knobs through
+        label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol, grad_stat_tex=grad_stat_tex,
+    )
+
+    return per_svgs + [svg_c], per_pngs + [png_c], stats_csv_c
+
+def plot_signed_delta_vs_gradient_pkg_batch(
+    long_df: pd.DataFrame,
+    save_dir,
+    base_prefix: str,
+    *,
+    gradient_cols: Optional[Iterable[str]] = None,
+    delta_kinds: Iterable[str] = ("Δ_mode","Δ_median","Δ_mean"),
+    scatter: bool = True,
+    scatter_sample: int = 20000,
+    scatter_alpha: float = 0.15,
+    scatter_size: float = 10.0,
+    ci: int = 95,
+    annotate_stats: bool = False,
+    write_stats_csv: bool = True,
+    axes_label_fontsize: int = 14,
+    tick_label_fontsize: int = 12,
+    legend_fontsize: int = 12,
+    height_single: float = 3.0,
+    aspect_single: float = 1.6,
+    height_combined: float = 3.0,
+    aspect_combined: float = 1.5,
+    facet_cols_combined: int = 2,
+    # label/style knobs
+    label_style="latex",
+    idx_sub=("b","v"),
+    j_symbol="j",
+    grad_stat_tex=None,
+) -> Tuple[List[Path], List[Path], Optional[Path]]:
+    if gradient_cols is None:
+        gradient_cols = [c for c in long_df.columns if isinstance(c, str) and c.startswith("Grad[")]
+    gradient_cols = list(gradient_cols)
+    if not gradient_cols:
+        raise KeyError("No gradient columns detected for batch plotting.")
+
+    per_svgs, per_pngs = [], []
+
+    for g in gradient_cols:
+        suffix = re.sub(r"[^A-Za-z0-9]+", "_", g).strip("_")
+        file_prefix = f"{base_prefix}__{suffix}"
+        svg, png, stats_csv, _stats_df = plot_signed_delta_vs_gradient_pkg(
+            long_df=long_df,
+            save_dir=save_dir,
+            file_prefix=file_prefix,
+            gradient_cols=[g],
+            delta_kinds=delta_kinds,
+            scatter=scatter, scatter_sample=scatter_sample,
+            scatter_alpha=scatter_alpha, scatter_size=scatter_size,
+            ci=ci,
+            annotate_stats=annotate_stats,
+            write_stats_csv=write_stats_csv,
+            axes_label_fontsize=axes_label_fontsize,
+            tick_label_fontsize=tick_label_fontsize,
+            legend_fontsize=legend_fontsize,
+            height=height_single,
+            aspect=aspect_single,
+            facet_cols=1,
+            title=None,
+            # pass label knobs through
+            label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol, grad_stat_tex=grad_stat_tex,
+        )
+        per_svgs.append(svg); per_pngs.append(png)
+
+    svg_c, png_c, stats_csv_c, _ = plot_signed_delta_vs_gradient_pkg(
+        long_df=long_df,
+        save_dir=save_dir,
+        file_prefix=f"{base_prefix}__combined",
+        gradient_cols=gradient_cols,
+        delta_kinds=delta_kinds,
+        scatter=scatter, scatter_sample=scatter_sample,
+        scatter_alpha=scatter_alpha, scatter_size=scatter_size,
+        ci=ci,
+        annotate_stats=annotate_stats,
+        write_stats_csv=write_stats_csv,
+        axes_label_fontsize=axes_label_fontsize,
+        tick_label_fontsize=tick_label_fontsize,
+        legend_fontsize=legend_fontsize,
+        height=height_combined,
+        aspect=aspect_combined,
+        facet_cols=facet_cols_combined,
+        title=None,
+        # pass label knobs through
+        label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol, grad_stat_tex=grad_stat_tex,
+    )
+    return per_svgs + [svg_c], per_pngs + [png_c], stats_csv_c

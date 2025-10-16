@@ -563,6 +563,15 @@ def main():
 
 
 
+    #### Create figures directories
+    # make dirs
+    output_fig_directory = output_dir.joinpath("figures")
+    os.makedirs(output_fig_directory, exist_ok=True)
+    cohort_output_figures_dir = output_fig_directory.joinpath("cohort_output_figures")
+    os.makedirs(cohort_output_figures_dir, exist_ok=True)
+    pt_sp_figures_dir = output_fig_directory.joinpath("patient_specific_output_figures")
+    os.makedirs(pt_sp_figures_dir, exist_ok=True)
+
 
     ### Get unqiue patient IDs
     # Get ALL unique patient IDs from the cohort_3d_radiomic_features_all_oar_dil_df DataFrame
@@ -830,14 +839,32 @@ Index([                                               'Patient ID',
 
     # Summarizes the signed nominal–trial deltas across all voxels/trials for each metric
     # (n, mean, std, quantiles, etc.) and writes a single CSV per cohort.
-    summary_statistics.save_mc_delta_summary_csv(
+
+    # existing overall summary (all groups pooled)
+    summary_path = summary_statistics.save_mc_delta_summary_csv(
         mc_deltas,
         output_dir=voxel_wise_nominal_analysis_dir,
         csv_name="mc_trial_deltas_summary.csv",
         value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
-        include_patient_ids=None,  # or ['184', '201']
+        include_patient_ids=None,
         decimals=3
     )
+
+    # new grouped summaries
+    voxel_csv, biopsy_csv = summary_statistics.save_mc_delta_grouped_csvs(
+        mc_deltas,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        base_name="mc_trial_deltas",
+        value_cols=('Dose (Gy)', 'Dose grad (Gy/mm)'),
+        decimals=3
+    )
+
+    print("Saved:")
+    print(" - overall:", summary_path)
+    print(" - per-voxel:", voxel_csv)
+    print(" - per-biopsy:", biopsy_csv)
+
+
     print('mc deltas summary csv saved to file')
 
     """
@@ -899,13 +926,66 @@ Index([                                               'Patient ID',
     """
 
     nominal_deltas_df_with_abs = summary_statistics.compute_biopsy_nominal_deltas_with_abs(cohort_global_dosimetry_by_voxel_df)
-
+    """
+    print(nominal_deltas_df_with_abs.columns) = 
+    MultiIndex([(     'Voxel begin (Z)',                       ''),
+                (       'Voxel end (Z)',                       ''),
+                (         'Voxel index',                       ''),
+                (          'Patient ID',                       ''),
+                (               'Bx ID',                       ''),
+                (            'Bx index',                       ''),
+                (           'Bx refnum',                       ''),
+                (      'Simulated bool',                       ''),
+                (      'Simulated type',                       ''),
+                (    'Dose (Gy) deltas',     'nominal_minus_mean'),
+                (    'Dose (Gy) deltas',     'nominal_minus_mode'),
+                (    'Dose (Gy) deltas',      'nominal_minus_q50'),
+                ('Dose (Gy) abs deltas', 'abs_nominal_minus_mean'),
+                ('Dose (Gy) abs deltas', 'abs_nominal_minus_mode'),
+                ('Dose (Gy) abs deltas',  'abs_nominal_minus_q50')],
+            )
+    """
     nominal_gradient_deltas_df_with_abs = summary_statistics.compute_biopsy_nominal_deltas_with_abs(cohort_global_dosimetry_by_voxel_df,
                                                                                            zero_level_index_str='Dose grad (Gy/mm)')
-    
+    """
+    print(nominal_gradient_deltas_df_with_abs.columns) =
+    MultiIndex([(             'Voxel begin (Z)',                       ''),
+                (               'Voxel end (Z)',                       ''),
+                (                 'Voxel index',                       ''),
+                (                  'Patient ID',                       ''),
+                (                       'Bx ID',                       ''),
+                (                    'Bx index',                       ''),
+                (                   'Bx refnum',                       ''),
+                (              'Simulated bool',                       ''),
+                (              'Simulated type',                       ''),
+                (    'Dose grad (Gy/mm) deltas',     'nominal_minus_mean'),
+                (    'Dose grad (Gy/mm) deltas',     'nominal_minus_mode'),
+                (    'Dose grad (Gy/mm) deltas',      'nominal_minus_q50'),
+                ('Dose grad (Gy/mm) abs deltas', 'abs_nominal_minus_mean'),
+                ('Dose grad (Gy/mm) abs deltas', 'abs_nominal_minus_mode'),
+                ('Dose grad (Gy/mm) abs deltas',  'abs_nominal_minus_q50')],
+            )
+    """
 
 
 
+    # Dose (Gy)
+    dose_csv = summary_statistics.save_nominal_delta_biopsy_stats(
+        nominal_deltas_df_with_abs,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        base_name="nominal_deltas_dose",
+        value_blocks=('Dose (Gy)',),
+        decimals=3
+    )
+
+    # Dose grad (Gy/mm)
+    grad_csv = summary_statistics.save_nominal_delta_biopsy_stats(
+        nominal_gradient_deltas_df_with_abs,
+        output_dir=voxel_wise_nominal_analysis_dir,
+        base_name="nominal_deltas_grad",
+        value_blocks=('Dose grad (Gy/mm)',),
+        decimals=3
+    )
 
 
 
@@ -970,7 +1050,7 @@ Index([                                               'Patient ID',
     )
     """
     
-    combined_wide, combined_long = helper_funcs.build_deltas_vs_gradient_df_with_abs(
+    combined_wide_deltas_vs_gradient, combined_long_deltas_vs_gradient = helper_funcs.build_deltas_vs_gradient_df_with_abs(
         nominal_deltas_df=nominal_deltas_df_with_abs,
         cohort_by_voxel_df=cohort_global_dosimetry_by_voxel_df,
         zero_level_index_str='Dose (Gy)',
@@ -988,15 +1068,229 @@ Index([                                               'Patient ID',
         require_precomputed_abs=True,  # expect abs block; do not recompute
         fallback_recompute_abs=False   # set True only if you want on-the-fly |Δ|
     )
-
-
+    # long:
+    """
+    print(combined_long_deltas_vs_gradient.columns) = 
+    Index(['Patient ID', 'Bx index', 'Voxel index', 'Grad[nominal] (Gy/mm)',
+        'Grad[median] (Gy/mm)', 'Grad[mean] (Gy/mm)', 'Grad[mode] (Gy/mm)',
+        'Delta kind', 'Delta (signed)', '|Delta|', 'log1p|Delta|'],
+        dtype='object')
+    """
+    # wide: 
+    """
+    print(combined_wide_deltas_vs_gradient.columns) =
+    Index(['Voxel begin (Z)_x', 'Voxel end (Z)_x', 'Voxel index', 'Patient ID',
+        'Bx ID_x', 'Bx index', 'Bx refnum_x', 'Simulated bool_x',
+        'Simulated type_x', 'Δ_mode (Gy)', 'Δ_median (Gy)', 'Δ_mean (Gy)',
+        '|Δ_mode| (Gy)', '|Δ_median| (Gy)', '|Δ_mean| (Gy)',
+        'Voxel begin (Z)_y', 'Voxel end (Z)_y', 'Bx ID_y', 'Bx refnum_y',
+        'Simulated bool_y', 'Simulated type_y', 'Grad[nominal] (Gy/mm)',
+        'Grad[median] (Gy/mm)', 'Grad[mean] (Gy/mm)', 'Grad[mode] (Gy/mm)',
+        'log1p|Δ_mode| (Gy)', 'log1p|Δ_median| (Gy)', 'log1p|Δ_mean| (Gy)'],
+        dtype='object')
+    """
     
-    
+    #### plot deltas vs grad :
+    # 1) Signed & |Δ| together — separate trends by Measure (never mixed),
+    #    color by Measure (clearer), plus optional LOESS overlay.
+    _ = production_plots.plot_delta_vs_gradient(
+        combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        fig_name="delta_vs_gradient_signed_and_abs",
+        gradient_cols=None,                         # auto
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        y_variant="both",
+        use_log1p_abs=True,                         # avoids tail squash
+        show_scatter=True,
+        scatter_sample=20000,
+        bins=24, binning="quantile", min_per_bin=20,
+        show_iqr_band=True, show_90_band=True,
+        hue_by="Measure",                           # <<< key change
+        trend_split="Measure",                      # <<< never mix Signed with Absolute
+        regression="none",                          # or 'ols' / 'loess' if statsmodels is installed
+        axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+        facet_cols=2, height=3.0, aspect=1.5,
+        title="Δ vs Dose Gradient (Signed vs |Δ|)"
+    )
 
-    # example: Spearman correlation per delta kind
-    for dcol in ['Δ_mode (Gy)','Δ_median (Gy)','Δ_mean (Gy)']:
-        rho = wide[[dcol,'Grad (Gy/mm)']].corr(method='spearman').iloc[0,1]
-        print(f"Spearman(Grad, {dcol}) = {rho:.3f}")
+    # 2) Absolute only — by Δ kind — ensure trends have enough points; add scatter or relax min_per_bin.
+    grad_nom = [c for c in combined_long_deltas_vs_gradient.columns if c.startswith("Grad[nominal]")]
+    _ = production_plots.plot_delta_vs_gradient(
+        combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        fig_name="abs_delta_vs_grad_nominal",
+        gradient_cols=grad_nom,
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        y_variant="abs",
+        use_log1p_abs=False,
+        hue_by="Delta kind",
+        trend_split="Delta kind",
+        show_scatter=True,               # turn on scatter to see points even if bins are thin
+        bins=20, binning="quantile", min_per_bin=10,   # relax for per-kind splits
+        regression="ols", poly_order=1,  # optional linear overlay
+        label_style="math",
+        title="|Δ| vs Grad[nominal]"
+    )
+
+
+
+    """
+    # 1) Magnitude vs gradient (main figure, linear scale)
+    _, _, stats_csv1, stats_df1 = production_plots.plot_abs_delta_vs_gradient_pkg(
+        combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        file_prefix="abs_delta_vs_gradient",
+        gradient_cols=None,                        # auto-detect all Grad[⋯]
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        use_log1p=False,                           # <- main text result
+        scatter=True, scatter_sample=20000,
+        ci=95, annotate_stats=True, write_stats_csv=True,
+        title="|Δ| vs Dose Gradient",
+        axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+        facet_cols=2, height=3.0, aspect=1.5
+    )
+
+    # 2) Same on log1p scale (supplement, optional)
+    _, _, stats_csv2, _ =  production_plots.plot_abs_delta_vs_gradient_pkg(
+        combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        file_prefix="abs_delta_vs_gradient_log1p",
+        gradient_cols=["Grad[nominal] (Gy/mm)"],
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        use_log1p=True,                            # <- supplemental view
+        scatter=True, scatter_sample=20000,
+        ci=95, annotate_stats=True, write_stats_csv=True,
+        title="log(1+|Δ|) vs Grad[nominal]",
+        axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+        facet_cols=1, height=3.0, aspect=1.6
+    )
+
+    # 3) Bias vs gradient (signed), single key gradient
+    _, _, stats_csv3, stats_df3 =  production_plots.plot_signed_delta_vs_gradient_pkg(
+        combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        file_prefix="signed_delta_vs_grad_nominal",
+        gradient_cols=["Grad[nominal] (Gy/mm)"],
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        scatter=True, scatter_sample=20000,
+        ci=95, annotate_stats=True, write_stats_csv=True,
+        title="Signed Δ vs Grad[nominal]",
+        axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+        facet_cols=1, height=3.0, aspect=1.6
+    )
+    """
+
+    """
+    # 1) Magnitude: |Δ| vs gradient (facets over all Grad[⋯] columns)
+    abs_svg, abs_png, abs_stats_csv, abs_stats_df = production_plots.plot_abs_delta_vs_gradient_pkg(
+        long_df=combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        file_prefix="abs_delta_vs_gradient",
+        # --- options ---
+        gradient_cols=None,                              # auto-detect all columns starting with "Grad["
+        delta_kinds=("Δ_mode", "Δ_median", "Δ_mean"),
+        use_log1p=False,                                 # set True only for supplemental view
+        scatter=True,
+        scatter_sample=20000,
+        scatter_alpha=0.15,
+        scatter_size=10.0,
+        ci=95,                                           # 95% CI for OLS bands
+        annotate_stats=True,                             # add slope±CI, Spearman ρ, R² panel text
+        write_stats_csv=True,                            # save <file_prefix>__stats.csv
+        axes_label_fontsize=14,
+        tick_label_fontsize=12,
+        legend_fontsize=12,
+        height=3.0,
+        aspect=1.5,
+        facet_cols=2,
+        title="|Δ| vs Dose Gradient"
+    )
+
+    # 2) Bias: signed Δ vs gradient (single key gradient panel)
+    grad_nom = ["Grad[nominal] (Gy/mm)"]
+    signed_svg, signed_png, signed_stats_csv, signed_stats_df = production_plots.plot_signed_delta_vs_gradient_pkg(
+        long_df=combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        file_prefix="signed_delta_vs_grad_nominal",
+        # --- options ---
+        gradient_cols=grad_nom,                          # or None to facet all gradient stats
+        delta_kinds=("Δ_mode", "Δ_median", "Δ_mean"),
+        scatter=True,
+        scatter_sample=20000,
+        scatter_alpha=0.15,
+        scatter_size=10.0,
+        ci=95,
+        annotate_stats=True,
+        write_stats_csv=True,
+        axes_label_fontsize=14,
+        tick_label_fontsize=12,
+        legend_fontsize=12,
+        height=3.0,
+        aspect=1.6,
+        facet_cols=1,
+        title="Signed Δ vs Grad[nominal]"
+    )
+    """
+
+
+    # 3) Batch mode: all gradients in one figure with subpanels
+    gradients = [
+        "Grad[nominal] (Gy/mm)",
+        "Grad[median] (Gy/mm)",
+        "Grad[mean] (Gy/mm)",
+        "Grad[mode] (Gy/mm)",
+    ]
+
+    # Common label options:
+    label_style = "latex"     # "latex" → mathtext (Δ^{mode}_{b,v}, Gy mm^{-1}); use "plain" for no math
+    idx_sub     = ("b","v")   # the indices under Δ
+    j_symbol    = "j"         # the superscript on Δ
+
+    # ABSOLUTE batch (|Δ|)
+    abs_svgs, abs_pngs, abs_combined_stats_csv = production_plots.plot_abs_delta_vs_gradient_pkg_batch(
+        long_df=combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        base_prefix="abs_delta_vs_gradient",
+        gradient_cols=gradients,                   # or None for all Grad[⋯]
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        use_log1p=False,                           # set True for a supplemental view
+        # visuals & export
+        scatter=True, scatter_sample=20000, scatter_alpha=0.15, scatter_size=10.0,
+        ci=95, annotate_stats=False, write_stats_csv=True,
+        axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+        height_single=3.0, aspect_single=1.6,
+        height_combined=3.0, aspect_combined=1.5, facet_cols_combined=2,
+        # <<— label knobs
+        label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol,
+        grad_stat_tex=None,  # or e.g. {"nominal": r"\mathrm{nom}"}
+    )
+
+    # SIGNED batch (Δ)
+    signed_svgs, signed_pngs, signed_combined_stats_csv = production_plots.plot_signed_delta_vs_gradient_pkg_batch(
+        long_df=combined_long_deltas_vs_gradient,
+        save_dir=cohort_output_figures_dir,
+        base_prefix="signed_delta_vs_gradient",
+        gradient_cols=gradients,                   # pass ["Grad[nominal] (Gy/mm)"] for 1 panel
+        delta_kinds=("Δ_mode","Δ_median","Δ_mean"),
+        # visuals & export
+        scatter=True, scatter_sample=20000, scatter_alpha=0.15, scatter_size=10.0,
+        ci=95, annotate_stats=False, write_stats_csv=True,
+        axes_label_fontsize=14, tick_label_fontsize=12, legend_fontsize=12,
+        height_single=3.0, aspect_single=1.6,
+        height_combined=3.0, aspect_combined=1.5, facet_cols_combined=2,
+        # <<— label knobs
+        label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol,
+        grad_stat_tex=None,
+    )
+
+
+
+
+
+
+
+
+
 
     print('test')
 
@@ -1306,13 +1600,7 @@ Index([                                               'Patient ID',
     print("--------------------------------------------------")
 
 
-    # make dirs
-    output_fig_directory = output_dir.joinpath("figures")
-    os.makedirs(output_fig_directory, exist_ok=True)
-    cohort_output_figures_dir = output_fig_directory.joinpath("cohort_output_figures")
-    os.makedirs(cohort_output_figures_dir, exist_ok=True)
-    pt_sp_figures_dir = output_fig_directory.joinpath("patient_specific_output_figures")
-    os.makedirs(pt_sp_figures_dir, exist_ok=True)
+
 
 
 
@@ -1428,7 +1716,7 @@ Index([                                               'Patient ID',
         
     print('stop')
 
-    if False:
+    if True:
         print("Skipping!")
     else:
 
@@ -2021,6 +2309,7 @@ Index([                                               'Patient ID',
                 alpha = 0.5,
                 linewidth_signed = 2.0,
                 linewidth_abs = 2.0,
+                show_title=False
             )
 
             # ----- Dose gradient (Gy/mm) -----
@@ -2054,7 +2343,132 @@ Index([                                               'Patient ID',
                 alpha = 0.5,
                 linewidth_signed = 2.0,
                 linewidth_abs = 2.0,
+                show_title=False
             )
+
+
+
+            biopsies = [(patient_id, 1), (patient_id, 2)]
+
+            production_plots.plot_biopsy_deltas_line_multi(
+                deltas_df=nominal_deltas_df_with_abs,
+                biopsies=biopsies,
+                save_dir=patient_dir,
+                fig_name=f"{patient_id} - Bx1&2 - dosimetry-deltas-line-overlay",
+                zero_level_index_str='Dose (Gy)',
+                x_axis='Voxel index',
+                linewidth_signed=2.0,
+                linewidth_abs=3.5,            # thicker dotted
+                show_markers=True,           # flip True to encode biopsy by marker
+            )
+
+            production_plots.plot_biopsy_deltas_line_multi(
+                deltas_df=nominal_gradient_deltas_df_with_abs,
+                biopsies=biopsies,
+                save_dir=patient_dir,
+                fig_name=f"{patient_id} - Bx1&2 - gradient-deltas-line-overlay",
+                zero_level_index_str='Dose grad (Gy/mm)',
+                x_axis='Voxel index',
+                linewidth_signed=2.0,
+                linewidth_abs=3.5,
+                show_markers=True,
+            )
+
+
+
+            # --- Dose (Gy): Δ and |Δ| on same axes ---
+            base = f"{patient_id} - {bx_id} - voxel-boxplot-dose-dual"
+            production_plots.plot_biopsy_voxel_trial_boxplots_dual(
+                deltas_df=mc_deltas,             # trial-level df with Δ columns
+                patient_id=patient_id,
+                bx_index=bx_index,
+                output_dir=patient_dir,
+                plot_name_base=base,
+                metric='Dose (Gy)',
+                x_axis='Voxel index',
+                axes_label_fontsize=14,
+                tick_label_fontsize=12,
+                show_title=False,
+                whis=(5, 95),                    # whiskers match IPR90 narrative
+                showfliers=False,
+                sort_voxels_by='median',
+                show_points_signed=True,
+                show_points_abs=True,
+                point_size_signed=6,
+                point_size_abs=6,
+                point_alpha_signed=0.30,
+                point_alpha_abs=0.30,
+                require_precomputed_abs=True,
+                fallback_recompute_abs=False,
+                save_formats=('png', 'svg'),
+            )
+
+            # --- Dose grad (Gy/mm): Δ and |Δ| on same axes ---
+            base = f"{patient_id} - {bx_id} - voxel-boxplot-grad-dual"
+            production_plots.plot_biopsy_voxel_trial_boxplots_dual(
+                deltas_df=mc_deltas,             # or gradient-specific df if stored separately
+                patient_id=patient_id,
+                bx_index=bx_index,
+                output_dir=patient_dir,
+                plot_name_base=base,
+                metric='Dose grad (Gy/mm)',
+                x_axis='Voxel index',
+                axes_label_fontsize=14,
+                tick_label_fontsize=12,
+                show_title=False,
+                whis=(5, 95),
+                showfliers=False,
+                sort_voxels_by='median',
+                show_points_signed=True,
+                show_points_abs=True,
+                point_size_signed=6,
+                point_size_abs=6,
+                point_alpha_signed=0.30,
+                point_alpha_abs=0.30,
+                require_precomputed_abs=True,
+                fallback_recompute_abs=False,
+                save_formats=('png', 'svg'),
+            )
+
+
+
+
+            biopsies = [(patient_id, 1), (patient_id, 2)]
+            patient_id = biopsies[0][0]
+            multi = "Bx" + "&".join(str(bx) for _, bx in biopsies)
+
+            # Dose
+            production_plots.plot_voxel_dualboxes_by_biopsy_lanes(
+                deltas_df=mc_deltas,
+                biopsies=biopsies,
+                output_dir=patient_dir,
+                plot_name_base=f"{patient_id} - {multi} - voxel-boxplot-dose-dual",
+                metric="Dose (Gy)",
+                x_axis="Voxel index",
+                lane_gap=2.0, box_width=0.32, pair_gap=0.10, biopsy_gap=0.22,
+                show_points=False,
+                whisker_mode='q05q95',
+                showfliers=False,
+                save_formats=("png","svg")
+            )
+
+            # Dose grad
+            production_plots.plot_voxel_dualboxes_by_biopsy_lanes(
+                deltas_df=mc_deltas,
+                biopsies=biopsies,
+                output_dir=patient_dir,
+                plot_name_base=f"{patient_id} - {multi} - voxel-boxplot-grad-dual",
+                metric="Dose grad (Gy/mm)",
+                x_axis="Voxel index",
+                lane_gap=2.0, box_width=0.32, pair_gap=0.10, biopsy_gap=0.22,
+                show_points=False,
+                whisker_mode='q05q95',
+                showfliers=False,
+                save_formats=("png","svg"),
+            )
+
+
+
 
 
     print("--------------------------------------------------")
@@ -2541,12 +2955,14 @@ Index([                                               'Patient ID',
             annotation_box=False,
             y_trim=True,
             y_min_fixed=0,
-            xlabel="Length Scale (mm)",
-            ylabel="Absolute Dose Difference (Gy)",
+            xlabel=None,
+            ylabel=None,
             title_font_size=20,
             axis_label_font_size=14,
             tick_label_font_size=12,
-            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot,
+            metric_family='dose',           # <-- add this
+
         )
         """
         production_plots.plot_dose_vs_length_with_summary_mutlibox(
@@ -2638,12 +3054,14 @@ Index([                                               'Patient ID',
             annotation_box=False,
             y_trim=True,
             y_min_fixed=0,
-            xlabel="Length Scale (mm)",
-            ylabel="Absolute Dose Gradient Difference (Gy/mm)",
+            xlabel=None,
+            ylabel=None,
             title_font_size=20,
             axis_label_font_size=14,
             tick_label_font_size=12,
-            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot
+            multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot,
+            metric_family='grad',           # <-- add this
+
         )
 
         

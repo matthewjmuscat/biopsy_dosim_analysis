@@ -1224,20 +1224,39 @@ def build_deltas_vs_gradient_df_with_abs(
     if return_long:
         keep_id = ['Patient ID', 'Bx index', 'Bx ID', 'Voxel index'] + [gc for gc in grad_colnames if gc in wide.columns]
         keep_id = [c for c in keep_id if c in wide.columns]
-        value_vars = [c for c in [f'Δ_mode {dose_unit}', f'Δ_median {dose_unit}', f'Δ_mean {dose_unit}'] if c in wide.columns]
-        long = wide.melt(id_vars=keep_id, value_vars=value_vars, var_name='Delta kind', value_name='Delta (signed)')
+
+        signed_vars = [c for c in [f'Δ_mode {dose_unit}', f'Δ_median {dose_unit}', f'Δ_mean {dose_unit}'] if c in wide.columns]
+        long = wide.melt(
+            id_vars=keep_id,
+            value_vars=signed_vars,
+            var_name='Delta kind',
+            value_name='Delta (signed)'
+        )
+
         if add_abs:
-            name_map = {
-                f'Δ_mode {dose_unit}':   f'|Δ_mode| {dose_unit}',
-                f'Δ_median {dose_unit}': f'|Δ_median| {dose_unit}',
-                f'Δ_mean {dose_unit}':   f'|Δ_mean| {dose_unit}',
-            }
-            # map abs values row-wise
-            long['|Delta|'] = long.apply(
-                lambda r: wide.loc[r.name, name_map.get(r['Delta kind'], '')] if name_map.get(r['Delta kind'], '') in wide.columns else np.nan,
-                axis=1
-            )
-        if add_log1p and '|Delta|' in long.columns:
+            abs_vars = [c for c in [f'|Δ_mode| {dose_unit}', f'|Δ_median| {dose_unit}', f'|Δ_mean| {dose_unit}'] if c in wide.columns]
+            if abs_vars:
+                abs_long = wide.melt(
+                    id_vars=keep_id,
+                    value_vars=abs_vars,
+                    var_name='Abs kind',
+                    value_name='|Delta|'
+                )
+                # normalize abs labels to match 'Delta kind' (strip surrounding |...|)
+                if dose_unit:
+                    # keep the unit; strip only the bars
+                    abs_long['Delta kind'] = abs_long['Abs kind'].str.replace('|Δ', 'Δ', regex=False).str.replace('| ', ' ', regex=False)
+                    abs_long['Delta kind'] = abs_long['Delta kind'].str.replace('|', '', regex=False)
+                else:
+                    abs_long['Delta kind'] = abs_long['Abs kind'].str.replace('|', '', regex=False)
+
+                abs_long = abs_long.drop(columns=['Abs kind'])
+                long = long.merge(abs_long, on=keep_id + ['Delta kind'], how='left')
+            elif require_precomputed_abs and not fallback_recompute_abs:
+                raise KeyError("Requested |Δ| in long output but absolute delta columns are not present.")
+
+        if add_log1p and ('|Delta|' in long.columns):
             long['log1p|Delta|'] = np.log1p(long['|Delta|'])
+
 
     return wide, long
