@@ -367,6 +367,320 @@ def production_plot_axial_dose_distribution_quantile_regression_by_patient_matpl
     plt.close(fig)
             
 
+def production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib_v2(
+    sp_patient_all_structure_shifts_pandas_data_frame,
+    dose_output_nominal_and_all_MC_trials_pandas_data_frame,
+    dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
+    patientUID,
+    bx_struct_roi,
+    bx_struct_ind,
+    bx_ref,
+    value_col_key,
+    patient_sp_output_figures_dir,
+    general_plot_name_string,
+    num_rand_trials_to_show,
+    y_axis_label,          # kept for backward compatibility; if None we auto-pick from value_col_key
+    custom_fig_title,
+    trial_annotation_style='number',      # 'arrow' or 'number'  (unchanged)
+    # --- NEW options ---
+    axis_label_fontsize: int = 15,        # x/y label font size
+    tick_labelsize: int = 14,             # tick label size
+    show_x_direction_arrow: bool = False, # draw direction arrow + phrase under x-axis
+    x_direction_label: str = "To biopsy needle tip / patient superior",
+    use_latex_labels: bool = True,         # render labels with mathtext/LaTeX
+    show_title: bool = True,
+
+):
+    import os, math
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from statsmodels.nonparametric.kernel_regression import KernelReg
+    from scipy.stats import gaussian_kde
+
+    # plotting function (internals unchanged except for label sizes/latex + arrow)
+    def plot_quantile_regression_and_more_corrected(
+        df,
+        df_voxelized,
+        sp_patient_all_structure_shifts_pandas_data_frame,
+        patientUID,
+        bx_id,
+        bx_struct_ind,
+        bx_ref,
+        trial_annotation_style=trial_annotation_style,
+        linestyle_regressions='-',
+        line_width_regressions=2,
+        linestyle_regressions_trials='--',
+        line_width_regressions_trials=1,
+        linestyle_quantiles=':',
+        line_width_quantiles=1
+    ):
+        plt.ioff()
+        fig = plt.figure(figsize=(12, 8))
+
+        # Common x-range
+        x_range = np.linspace(df['Z (Bx frame)'].min(), df['Z (Bx frame)'].max(), 500)
+
+        # Placeholder for quantile regressions
+        y_regressions = {}
+
+        # Kernel regression helper (unchanged rendering, now reused for annotations)
+        def perform_and_plot_kernel_regression(x, y, x_range, label, color,
+                                               annotation_text=None, target_offset=0,
+                                               linestyle='-', linewidth=2):
+            kr = KernelReg(endog=y, exog=x, var_type='c', bw=[1])
+            y_kr, _ = kr.fit(x_range)
+            plotted_line, = plt.plot(x_range, y_kr, label=label,
+                                     color=color, linewidth=linewidth, linestyle=linestyle)
+
+            # Optional arrow annotation on line (only used in 'arrow' style)
+            if annotation_text is not None:
+                total_points = len(x_range)
+                target_index = (total_points // 5 * target_offset) % total_points
+                target_x = x_range[target_index]
+                target_y = y_kr[target_index]
+                plt.annotate(
+                    annotation_text,
+                    xy=(target_x, target_y),
+                    xytext=(target_x + 1, target_y + 1),
+                    arrowprops=dict(arrowstyle="->", color=color, lw=1.5),
+                    fontsize=10,
+                    color=color,
+                    bbox=dict(boxstyle="round,pad=0.3", edgecolor=color,
+                              facecolor="white", alpha=0.8)
+                )
+            return y_kr, plotted_line
+
+        # Quantile curves (unchanged)
+        for quantile in [0.05, 0.25, 0.75, 0.95]:
+            q_df = df.groupby('Z (Bx frame)')[value_col_key].quantile(quantile).reset_index()
+            kr = KernelReg(endog=q_df[value_col_key], exog=q_df['Z (Bx frame)'], var_type='c', bw=[1])
+            y_kr, _ = kr.fit(x_range)
+            y_regressions[quantile] = y_kr
+
+        fill_1 = plt.fill_between(x_range, y_regressions[0.05], y_regressions[0.25], color='springgreen', alpha=0.5)
+        fill_2 = plt.fill_between(x_range, y_regressions[0.25], y_regressions[0.75], color='dodgerblue', alpha=0.5)
+        fill_3 = plt.fill_between(x_range, y_regressions[0.75], y_regressions[0.95], color='springgreen', alpha=0.5)
+
+        plt.plot(x_range, y_regressions[0.05], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
+        plt.plot(x_range, y_regressions[0.25], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
+        plt.plot(x_range, y_regressions[0.75], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
+        plt.plot(x_range, y_regressions[0.95], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
+
+        # Nominal (trial 0)
+        mc_trial_0 = df[df['MC trial num'] == 0]
+        _, nominal_line = perform_and_plot_kernel_regression(
+            mc_trial_0['Z (Bx frame)'], mc_trial_0[value_col_key], x_range,
+            'Nominal', 'red', linestyle='-', linewidth=2
+        )
+
+        # KDE max-density & mean per unique Z (unchanged)
+        kde_max_doses, mean_doses, z_vals = [], [], []
+        for z_val in df['Z (Bx frame)'].unique():
+            pt_data = df[df['Z (Bx frame)'] == z_val]
+            kde = gaussian_kde(pt_data[value_col_key])
+            kde_doses = np.linspace(pt_data[value_col_key].min(), pt_data[value_col_key].max(), 500)
+            max_density_dose = kde_doses[np.argmax(kde(kde_doses))]
+            kde_max_doses.append(max_density_dose)
+            mean_doses.append(pt_data[value_col_key].mean())
+            z_vals.append(z_val)
+
+        _, max_density_line = perform_and_plot_kernel_regression(
+            z_vals, kde_max_doses, x_range, 'Mode (KDE)', 'magenta',
+            linestyle='-', linewidth=2
+        )
+        _, mean_line = perform_and_plot_kernel_regression(
+            z_vals, mean_doses, x_range, 'Mean Dose', 'orange',
+            linestyle='-', linewidth=2
+        )
+
+        # Random trial regressions + scatter (unchanged logic)
+        annotation_offset_index = 0
+        annotation_lines = []  # used only for 'number' style
+
+        for trial in range(1, num_rand_trials_to_show + 1):
+            mc_trial_shift_vec_df = sp_patient_all_structure_shifts_pandas_data_frame[
+                (sp_patient_all_structure_shifts_pandas_data_frame["Trial"] == trial) &
+                (sp_patient_all_structure_shifts_pandas_data_frame["Structure type"] == bx_ref) &
+                (sp_patient_all_structure_shifts_pandas_data_frame["Structure index"] == bx_struct_ind)
+            ].reset_index(drop=True)
+
+            mc_trial = df[df['MC trial num'] == trial]
+            mc_trial_voxelized = df_voxelized[df_voxelized['MC trial num'] == trial]
+
+            x_dist = mc_trial_shift_vec_df.at[0, 'Shift (X)']
+            y_dist = mc_trial_shift_vec_df.at[0, 'Shift (Y)']
+            z_dist = mc_trial_shift_vec_df.at[0, 'Shift (Z)']
+            d_tot = math.sqrt(x_dist**2 + y_dist**2 + z_dist**2)
+
+            if trial_annotation_style == 'arrow':
+                annotation_text_for_trial = f"({x_dist:.1f},{y_dist:.1f},{z_dist:.1f}), d = {d_tot:.1f} mm"
+                perform_and_plot_kernel_regression(
+                    mc_trial['Z (Bx frame)'],
+                    mc_trial[value_col_key],
+                    x_range,
+                    f"Trial: {trial}",
+                    'black',
+                    annotation_text=annotation_text_for_trial,
+                    target_offset=annotation_offset_index,
+                    linestyle='--',
+                    linewidth=1
+                )
+                plt.scatter(mc_trial_voxelized['Z (Bx frame)'],
+                            mc_trial_voxelized[value_col_key],
+                            color='grey', alpha=0.1, s=10, zorder=1.1)
+                annotation_offset_index += 1
+            else:  # 'number' style
+                line_str = f"{trial}: ({x_dist:.1f}, {y_dist:.1f}, {z_dist:.1f}), d = {d_tot:.1f} mm"
+                annotation_lines.append(line_str)
+
+                y_kr, _ = perform_and_plot_kernel_regression(
+                    mc_trial['Z (Bx frame)'],
+                    mc_trial[value_col_key],
+                    x_range,
+                    str(trial),
+                    'black',
+                    linestyle='--',
+                    linewidth=1
+                )
+                plt.scatter(mc_trial_voxelized['Z (Bx frame)'],
+                            mc_trial_voxelized[value_col_key],
+                            color='grey', alpha=0.1, s=10, zorder=1.1)
+                # Right-end line number
+                plt.text(x_range[-1] + 0.1, y_kr[-1], str(trial),
+                         fontsize=14, color='black', ha='left', va='center')
+
+        ax = plt.gca()
+
+        # --- Titles and labels (sizes & LaTeX units) ---
+        if show_title and custom_fig_title not in (None, "", False):
+            ax.set_title(f'{patientUID} - {bx_id} - {custom_fig_title}', fontsize=16)
+
+
+        # Default label texts (LaTeX/mathtext friendly)
+        if use_latex_labels:
+            x_label_default = r'Biopsy Coordinate $z$ $(\mathrm{mm})$'
+            if y_axis_label is not None and 'grad' in y_axis_label.lower():
+                y_label_default = r'Dose-gradient Magnitude $(\mathrm{Gy}\ \mathrm{mm}^{-1})$'
+            elif y_axis_label is not None and 'dose' in y_axis_label.lower():
+                y_label_default = r'Dose $(\mathrm{Gy})$'
+            else:
+                # Infer from value_col_key
+                if 'grad' in value_col_key.lower():
+                    y_label_default = r'Dose-gradient Magnitude $(\mathrm{Gy}\ \mathrm{mm}^{-1})$'
+                else:
+                    y_label_default = r'Dose $(\mathrm{Gy})$'
+        else:
+            x_label_default = 'Biopsy Coordinate z (mm)'
+            if y_axis_label is not None:
+                y_label_default = y_axis_label
+            else:
+                y_label_default = 'Dose (Gy)' if 'grad' not in value_col_key.lower() else 'Dose-gradient Magnitude (Gy/mm)'
+
+        ax.set_xlabel(x_label_default, fontsize=axis_label_fontsize)
+        ax.set_ylabel(y_label_default, fontsize=axis_label_fontsize)
+
+        # Legend (unchanged content)
+        legend_handles = [fill_1, fill_2, fill_3] + [nominal_line, max_density_line, mean_line]
+        quantile_labels = ['5th–25th Q', '25th–75th Q', '75th–95th Q']
+        main_labels = ['Nominal', 'Mode', 'Mean']
+        leg = ax.legend(
+            legend_handles,
+            quantile_labels + main_labels,
+            loc='upper left',                 # force inside
+            bbox_to_anchor=(0.02, 0.98),     # 2% from left, 98% high (inside)
+            borderaxespad=0.0,
+            facecolor='white',
+            framealpha=1.0,
+            prop={'size': 12}                # slightly smaller so it fits comfortably
+        )
+
+
+        # Layout & the per-trial annotation block (unchanged)
+        plt.tight_layout(rect=[0.01, 0.06, 1, 1])  # leave a bit more bottom room for the optional x-arrow
+
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        leg_frame = leg.get_frame()
+        bbox_disp = leg_frame.get_window_extent(renderer)
+        inv_fig = fig.transFigure.inverted()
+        frame_x0, frame_y0 = inv_fig.transform((bbox_disp.x0, bbox_disp.y0))
+
+        text_x = frame_x0
+        text_y = frame_y0 - 0.02
+        if trial_annotation_style == 'number' and len(annotation_lines) > 0:
+            annotation_text = "\n".join(annotation_lines)
+            fig.text(
+                text_x, text_y, annotation_text,
+                transform=fig.transFigure,
+                ha='left', va='top',
+                multialignment='left',
+                fontsize=14, color='black',
+                bbox=dict(facecolor='white', edgecolor='gray', alpha=0.5, boxstyle='round')
+            )
+
+        # Grid & ticks (sizes customizable)
+        from matplotlib.ticker import AutoMinorLocator, MultipleLocator, NullFormatter
+
+        # draw grids under data
+        ax.set_axisbelow(True)
+
+        # --- ticks ---
+        # sizes & direction
+        ax.tick_params(axis='both', which='major', length=6, width=1.0, direction='out', labelsize=tick_labelsize)
+        ax.tick_params(axis='both', which='minor', length=3, width=0.8, direction='out')
+
+        # minor ticks on
+        ax.minorticks_on()
+
+        # If your x is in mm and you want integers as major ticks:
+        ax.xaxis.set_major_locator(MultipleLocator(1))     # major every 1 mm (adjust as needed)
+        ax.xaxis.set_minor_locator(MultipleLocator(0.5))   # minor halfway between majors
+
+        # Let y auto-place minors between majors (2 per major interval)
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+
+        # (Optional) hide minor tick labels but keep ticks
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_minor_formatter(NullFormatter())
+
+        # --- grids ---
+        ax.grid(which='major', linestyle='--', linewidth=0.6, alpha=0.7)
+        ax.grid(which='minor', linestyle=':',  linewidth=0.4, alpha=0.45)
+
+
+        # Optional x-direction arrow + label just below x-axis label
+        if show_x_direction_arrow:
+            # Put a LaTeX right-arrow directly in the label text
+            x_dir = x_direction_label
+            if r"\rightarrow" not in x_dir:
+                x_dir = x_dir.rstrip() + r" $\rightarrow$"
+
+            # Draw only the text (no separate arrow annotation)
+            y_off = -0.14  # keep your vertical placement
+            ax.text(
+                0.50, y_off - 0.02, x_dir,
+                transform=ax.transAxes, ha='center', va='top',
+                fontsize=max(10, axis_label_fontsize - 1)
+            )
+
+        return fig
+
+    # === Call the inner plotting function (unchanged data flow) ===
+    fig = plot_quantile_regression_and_more_corrected(
+        dose_output_nominal_and_all_MC_trials_pandas_data_frame,
+        dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
+        sp_patient_all_structure_shifts_pandas_data_frame,
+        patientUID,
+        bx_struct_roi,
+        bx_struct_ind,
+        bx_ref
+    )
+
+    svg_dose_fig_name = f"{patientUID}-{bx_struct_roi}-{general_plot_name_string}.svg"
+    svg_dose_fig_file_path = patient_sp_output_figures_dir.joinpath(svg_dose_fig_name)
+    fig.savefig(svg_dose_fig_file_path, format='svg')
+
+    plt.close(fig)
 
 
 
@@ -2558,7 +2872,12 @@ def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NE
     dx_tick_len_y=1.0,     # vertical tick half-height (%volume)
     vy_tick_len_x=0.4,     # horizontal tick half-width (Gy)
     # Horizontal envelope extrapolation policy
-    limit_horizontal_to_common=False,  # restrict y-grid to common range (no extrapolation)
+    limit_horizontal_to_common=False,  # restrict y-grid to common range (no extrapolation),
+    # NEW typography controls
+    axis_label_fontsize: int = 16,
+    tick_label_fontsize: int = 14,
+    show_title: bool = False,
+    title_fontsize: int = 16,
 ):
     """
     v4_5: v4_4 + restored trial annotations:
@@ -2691,15 +3010,15 @@ def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NE
 
     # Bands
     if bands_mode in ("vertical", "both"):
-        f1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.7)
-        f2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.7)
-        f3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.7)
+        f1 = plt.fill_between(x_grid, q05_v, q25_v, color='springgreen', alpha=0.5)
+        f2 = plt.fill_between(x_grid, q25_v, q75_v, color='dodgerblue',  alpha=0.5)
+        f3 = plt.fill_between(x_grid, q75_v, q95_v, color='springgreen', alpha=0.5)
         _plot_qline_x(x_grid, q05_v, linestyle=':', linewidth=1, color='black')
         _plot_qline_x(x_grid, q25_v, linestyle=':', linewidth=1, color='black')
         _plot_qline_x(x_grid, q75_v, linestyle=':', linewidth=1, color='black')
         _plot_qline_x(x_grid, q95_v, linestyle=':', linewidth=1, color='black')
 
-        handles += [f1, f2, f3]; labels += ['5–25% (Vy)', '25–75% (Vy)', '75–95% (Vy)']
+        handles += [f1, f2, f3]; labels += ['5–25%', '25–75%', '75–95%']
 
     if dvh_kind == 'cumulative' and bands_mode in ("horizontal", "both"):
         _plot_qline_y(q25_h, y_grid, linestyle='-',  linewidth=1.6, color='black', alpha=0.95)
@@ -2724,11 +3043,11 @@ def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NE
     if show_median_line:
         med_line, = plt.plot(x_grid, q50_v, color='black', linewidth=2, linestyle='-',
                              label='Median (Vy)')
-        handles.append(med_line); labels.append('Median (Vy)')
+        handles.append(med_line); labels.append('Median')
     if show_mean_line:
         mean_line, = plt.plot(x_grid, mean_v, color='orange', linewidth=2, linestyle='--',
                               label='Mean (Vy)')
-        handles.append(mean_line); labels.append('Mean (Vy)')
+        handles.append(mean_line); labels.append('Mean')
 
     # --- Random trials (dashed) + annotations (arrow/number) ---
     chosen = [t for t in range(1, num_rand_trials_to_show + 1) if t in trials_dict]
@@ -2856,11 +3175,15 @@ def production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NE
         labels  += ['Dx markers (table)', 'Vy markers (table)', 'Nominal marker (table)']
 
     # ---- Labels, legend ----
-    ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}', fontsize=16)
-    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=16)
-    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=16)
+    if show_title and custom_fig_title not in (None, "", False):
+        ax.set_title(f'{patientUID} - {bx_struct_roi} - {custom_fig_title}',
+                    fontsize=title_fontsize)
+
+    ax.set_xlabel(dvh_option['x-axis-label'], fontsize=axis_label_fontsize)
+    ax.set_ylabel(dvh_option['y-axis-label'], fontsize=axis_label_fontsize)
+
     ax.grid(True, which='major', linestyle='--', linewidth=0.5)
-    ax.tick_params(axis='both', which='major', labelsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=tick_label_fontsize)
 
     leg = ax.legend(handles, labels, loc='best', facecolor='white', prop={'size': 13})
     plt.tight_layout(rect=[0.01, 0.01, 1, 1])
@@ -5549,7 +5872,7 @@ def plot_dose_vs_length_with_summary_mutlibox(
 
     # Axis labels consistent with your paper
     x_label_latex = r'$\ell_k$ (mm)'
-    y_label_latex = r'$\mathcal{S}_b^{\Gamma}(\ell_k)\ \mathrm{(Gy\,mm^{-1})}$' if is_grad else r'$\mathcal{S}_b^{D}(\ell_k)\ \mathrm{(Gy)}$'
+    y_label_latex = r'$\mathcal{S}_b^{G}(\ell_k)\ \mathrm{(Gy\,mm^{-1})}$' if is_grad else r'$\mathcal{S}_b^{D}(\ell_k)\ \mathrm{(Gy)}$'
 
     # Apply labels (override any plain-text defaults)
     ax.set_xlabel(xlabel if xlabel else x_label_latex, fontsize=axis_label_font_size)
@@ -5563,10 +5886,13 @@ def plot_dose_vs_length_with_summary_mutlibox(
 
 
     # Apply tick font size globally for this figure
+    """
     plt.rcParams.update({
         'xtick.labelsize': tick_label_font_size,
         'ytick.labelsize': tick_label_font_size
     })
+    """
+    ax.tick_params(axis='both', which='both', labelsize=tick_label_font_size)
 
     # ---- y-limits ----
     if y_min_fixed is not None:
@@ -6655,7 +6981,8 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
     # --- units + axis labels
     is_gradient = ('grad' in zero_level_index_str.lower()) or ('gradient' in zero_level_index_str.lower())
     unit_text = r'Gy mm$^{-1}$' if is_gradient else r'Gy'
-    y_label = rf'$\Delta_{{b,v}}^{{j}}$ ({unit_text})'
+    delta_type_text = r'G' if is_gradient else r'D' 
+    y_label = rf'$\Delta {delta_type_text}_{{b,v}}^{{j}}$ ({unit_text})'
 
 
 
@@ -6756,8 +7083,8 @@ def plot_biopsy_deltas_line_multi(
     *,
     zero_level_index_str: str = 'Dose (Gy)',
     x_axis: str = 'Voxel index',
-    axes_label_fontsize: int = 13,
-    tick_label_fontsize: int = 11,
+    axes_label_fontsize: int = 16,
+    tick_label_fontsize: int = 14,
     title: str | None = None,
     include_abs: bool = True,
     require_precomputed_abs: bool = True,
@@ -6774,6 +7101,8 @@ def plot_biopsy_deltas_line_multi(
     marker_every: int | None = None,         # e.g., every 2 points
     palette: str | Iterable = 'tab10',
     y_tick_decimals: int | None = 1,
+    legend_fontsize: int | None = None,   # default: use tick_label_fontsize
+
 ):
     """
     Overlay multiple biopsies on one plot:
@@ -6787,16 +7116,20 @@ def plot_biopsy_deltas_line_multi(
 
     sns.set(style='whitegrid')
 
+    is_gradient = ('grad' in zero_level_index_str.lower())
+    delta_type_text = r'G' if is_gradient else r'D'
+
     # helpers
     def _mi(name: str):
         return (name, '') if isinstance(deltas_df.columns, pd.MultiIndex) and (name, '') in deltas_df.columns else name
 
     def _latex_j(kind: str) -> str:
-        if kind == 'mean':   sup = r'\mathrm{mean}'
-        elif kind == 'mode': sup = r'\mathrm{mode}'
-        elif kind == 'median': sup = r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
-        else: sup = r'\mathrm{' + kind + r'}'
-        return rf'$\Delta_{{b,v}}^{{{sup}}}$'
+        if kind == 'mean':      sup = r'\mathrm{mean}'
+        elif kind == 'mode':    sup = r'\mathrm{mode}'
+        elif kind == 'median':  sup = r'\mathrm{' + (median_superscript.replace('%', r'\%')) + r'}'
+        else:                   sup = r'\mathrm{' + kind + r'}'
+        # include D/G just like the y-axis
+        return rf'$\Delta {delta_type_text}_{{b,v}}^{{{sup}}}$'
 
     def _as_dashpattern(val):
         if isinstance(val, tuple):
@@ -6915,6 +7248,31 @@ def plot_biopsy_deltas_line_multi(
         zorder=3, ax=ax
     )
 
+    # --- enforce integer x ticks spanning min..max ---
+    # collect x from whichever data exists
+    if include_abs and not abs_df.empty:
+        x_vals = np.concatenate([signed_df['x'].values, abs_df['x'].values])
+    else:
+        x_vals = signed_df['x'].values
+
+    # guard against NaNs
+    x_vals = np.asarray(x_vals)
+    x_vals = x_vals[~np.isnan(x_vals)]
+    if x_vals.size:
+        x_min = int(np.floor(x_vals.min()))
+        x_max = int(np.ceil(x_vals.max()))
+
+        # prefer step = 1, but cap number of ticks to ~25 if needed
+        max_ticks = 25
+        span = max(1, x_max - x_min)
+        step = max(1, int(np.ceil(span / max_ticks)))
+
+        ax.set_xlim(x_min, x_max)  # hard-limit to min..max
+        ticks = np.arange(x_min, x_max + 1, step, dtype=int)
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f"{t:d}" for t in ticks])
+
+
 
     # Round caps so thicker dotted lines look properly thicker
     for ln in ax.lines:
@@ -6941,7 +7299,11 @@ def plot_biopsy_deltas_line_multi(
     ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
     is_gradient = ('grad' in zero_level_index_str.lower())
     unit_text = r'Gy mm$^{-1}$' if is_gradient else r'Gy'
-    ax.set_ylabel(rf'$\Delta^{{j}}_{{b,v}}$ and $|\Delta^{{j}}_{{b,v}}|$ ({unit_text})', fontsize=axes_label_fontsize)
+    if include_abs:
+        ax.set_ylabel(rf'$\Delta {delta_type_text}^{{j}}_{{b,v}}$ and $|\Delta {delta_type_text}^{{j}}_{{b,v}}|$ ({unit_text})', fontsize=axes_label_fontsize)
+    else:
+        ax.set_ylabel(rf'$\Delta {delta_type_text}^{{j}}_{{b,v}}$ ({unit_text})', fontsize=axes_label_fontsize)
+
     ax.tick_params(axis='both', labelsize=tick_label_fontsize)
     if title:
         ax.set_title(title, fontsize=axes_label_fontsize)
@@ -6955,10 +7317,16 @@ def plot_biopsy_deltas_line_multi(
                 for j in j_order]
 
     # use ls_signed / ls_absolute computed earlier
-    handles += [
-        Line2D([0],[0], color='black', lw=linewidth_signed, linestyle=ls_signed,   label=r'$\Delta$'),
-        Line2D([0],[0], color='black', lw=linewidth_abs,   linestyle=ls_absolute, label=r'$|\Delta|$'),
-    ]
+    handles.append(
+        Line2D([0],[0], color='black', lw=linewidth_signed, linestyle=ls_signed,
+            label=rf'$\Delta {delta_type_text}$')
+    )
+    if include_abs:
+        handles.append(
+            Line2D([0],[0], color='black', lw=linewidth_abs, linestyle=ls_absolute,
+                label=rf'$|\Delta {delta_type_text}|$')
+        )
+
 
 
     # biopsies (markers) — only if markers are on
@@ -6969,7 +7337,9 @@ def plot_biopsy_deltas_line_multi(
             handles.append(Line2D([0],[0], marker=m, color='black', linestyle='None', label=b,
                                 markerfacecolor='none', markeredgewidth=1.2))
 
-    leg = ax.legend(handles=handles, frameon=True, fontsize=tick_label_fontsize, loc='best')
+    fs = legend_fontsize if legend_fontsize is not None else tick_label_fontsize
+    leg = ax.legend(handles=handles, frameon=True, fontsize=fs, loc='best')
+
 
 
     if y_tick_decimals is not None:
@@ -7918,8 +8288,8 @@ def plot_voxel_dualboxes_by_biopsy_lanes(
     # Figure & axes
     figsize: tuple[float, float] = (12.0, 5.0),
     dpi: int = 200,
-    axes_label_fontsize: int = 14,
-    tick_label_fontsize: int = 11,
+    axes_label_fontsize: int = 16,
+    tick_label_fontsize: int = 14,
     show_title: bool = False,
     title: Optional[str] = None,
     tight_layout: bool = True,
@@ -7992,9 +8362,9 @@ def plot_voxel_dualboxes_by_biopsy_lanes(
         is_grad = 'grad' in metric.lower()
         unit = r"(Gy mm$^{-1}$)" if is_grad else r"(Gy)"
         if is_grad:
-            left, right = r"$\Delta^G_{b,v,i}$", r"$|\Delta^G_{b,v,i}|$"
+            left, right = r"$\Delta G_{b,v,i}$", r"$|\Delta G_{b,v,i}|$"
         else:
-            left, right = r"$\Delta_{b,v,i}$", r"$|\Delta_{b,v,i}|$"
+            left, right = r"$\Delta D_{b,v,i}$", r"$|\Delta D_{b,v,i}|$"
         if mode == 'and':
             return f"{left} and {right}  {unit}"
         elif mode == 'comma':

@@ -1334,6 +1334,15 @@ Index([                                               'Patient ID',
     ('Simulated bool',''),
     ('Simulated type','')]
 
+
+    ### simply save the global dosimetry by biopsy dataframe to csv (with included IQR and IPR90 columns now that we calced above)
+    output_path = global_dosimetry_dir / 'cohort_global_dosimetry_by_biopsy.csv'
+    cohort_global_dosimetry_df.to_csv(output_path, index=False)
+    print(f'cohort global dosimetry by biopsy csv saved to file: {output_path}')
+
+
+
+
     # Get global dosimetry statistics
     biopsy_level_summary_statistics_df = summary_statistics.generate_summary_csv_with_argmax(global_dosimetry_dir, output_filename, cohort_global_dosimetry_df, col_pairs = None, exclude_columns = exclude_for_all)
     ## Global dosimetry analysis (END)
@@ -2354,26 +2363,57 @@ Index([                                               'Patient ID',
                 deltas_df=nominal_deltas_df_with_abs,
                 biopsies=biopsies,
                 save_dir=patient_dir,
-                fig_name=f"{patient_id} - Bx1&2 - dosimetry-deltas-line-overlay",
+                fig_name=f"{patient_id} - Bx1&2 - dosimetry-deltas-line-overlay-with-abs",
                 zero_level_index_str='Dose (Gy)',
                 x_axis='Voxel index',
                 linewidth_signed=2.0,
                 linewidth_abs=3.5,            # thicker dotted
                 show_markers=True,           # flip True to encode biopsy by marker
+                legend_fontsize = 12,
+                include_abs = True,
+            )
+
+            production_plots.plot_biopsy_deltas_line_multi(
+                deltas_df=nominal_deltas_df_with_abs,
+                biopsies=biopsies,
+                save_dir=patient_dir,
+                fig_name=f"{patient_id} - Bx1&2 - dosimetry-deltas-line-overlay-no-abs",
+                zero_level_index_str='Dose (Gy)',
+                x_axis='Voxel index',
+                linewidth_signed=2.0,
+                linewidth_abs=3.5,            # thicker dotted
+                show_markers=True,           # flip True to encode biopsy by marker
+                legend_fontsize = 12,
+                include_abs = False,
             )
 
             production_plots.plot_biopsy_deltas_line_multi(
                 deltas_df=nominal_gradient_deltas_df_with_abs,
                 biopsies=biopsies,
                 save_dir=patient_dir,
-                fig_name=f"{patient_id} - Bx1&2 - gradient-deltas-line-overlay",
+                fig_name=f"{patient_id} - Bx1&2 - gradient-deltas-line-overlay-with-abs",
                 zero_level_index_str='Dose grad (Gy/mm)',
                 x_axis='Voxel index',
                 linewidth_signed=2.0,
                 linewidth_abs=3.5,
                 show_markers=True,
+                legend_fontsize = 12,
+                include_abs = True,
             )
 
+            production_plots.plot_biopsy_deltas_line_multi(
+                deltas_df=nominal_gradient_deltas_df_with_abs,
+                biopsies=biopsies,
+                save_dir=patient_dir,
+                fig_name=f"{patient_id} - Bx1&2 - gradient-deltas-line-overlay-no-abs",
+                zero_level_index_str='Dose grad (Gy/mm)',
+                x_axis='Voxel index',
+                linewidth_signed=2.0,
+                linewidth_abs=3.5,
+                show_markers=True,
+                legend_fontsize = 12,
+                include_abs = False,
+            )
 
 
             # --- Dose (Gy): Δ and |Δ| on same axes ---
@@ -2478,10 +2518,11 @@ Index([                                               'Patient ID',
 
 
 
-    if True:
+    if False:
         print("Skipping!")
     else:
         # 1. individual patient dosimetry and dose gradient kernel regressions
+        """
         for patient_id, bx_index in patient_id_and_bx_index_pairs:
             # Create a directory for the patient
             patient_dir = pt_sp_figures_dir.joinpath(patient_id)
@@ -2536,6 +2577,81 @@ Index([                                               'Patient ID',
                                                                                         y_axis_label,
                                                                                         custom_fig_title,
                                                                                         trial_annotation_style = random_trial_annotation_style)
+
+
+        """
+
+        for patient_id, bx_index in patient_id_and_bx_index_pairs:
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+
+            random_trial_annotation_style = 'number'  # or 'arrow'
+            num_rand_trials_to_show = 3
+
+            sp_patient_all_structure_shifts_pandas_data_frame = \
+                all_mc_structure_transformation_df[all_mc_structure_transformation_df['Patient ID'] == patient_id]
+
+            dose_output_nominal_and_all_MC_trials_pandas_data_frame = \
+                all_point_wise_dose_df[(all_point_wise_dose_df['Patient ID'] == patient_id) &
+                                    (all_point_wise_dose_df['Bx index'] == bx_index)]
+
+            dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame = \
+                all_voxel_wise_dose_df[(all_voxel_wise_dose_df['Patient ID'] == patient_id) &
+                                    (all_voxel_wise_dose_df['Bx index'] == bx_index)]
+
+            bx_struct_roi = cohort_biopsy_basic_spatial_features_df[
+                (cohort_biopsy_basic_spatial_features_df['Patient ID'] == patient_id) &
+                (cohort_biopsy_basic_spatial_features_df['Bx index'] == bx_index)
+            ]['Bx ID'].values[0]
+
+            # --- Dose (Gy) ---
+            production_plots.production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib_v2(
+                sp_patient_all_structure_shifts_pandas_data_frame,
+                dose_output_nominal_and_all_MC_trials_pandas_data_frame,
+                dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
+                patient_id,
+                bx_struct_roi,
+                bx_index,
+                bx_ref,
+                value_col_key='Dose (Gy)',
+                patient_sp_output_figures_dir=patient_dir,
+                general_plot_name_string=" - dosimetry-kernel-regression",
+                num_rand_trials_to_show=3,
+                y_axis_label=r'Dose $(\mathrm{Gy})$',
+                custom_fig_title="",                 # ignored when show_title=False
+                trial_annotation_style=random_trial_annotation_style,
+                axis_label_fontsize=16,
+                tick_labelsize=14,
+                show_x_direction_arrow=True,
+                x_direction_label="To biopsy needle tip / patient superior",
+                use_latex_labels=True,
+                show_title=False                     # <-- turn off title
+            )
+
+            # --- Dose-gradient Magnitude (Gy mm^-1) ---
+            production_plots.production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib_v2(
+                sp_patient_all_structure_shifts_pandas_data_frame,
+                dose_output_nominal_and_all_MC_trials_pandas_data_frame,
+                dose_output_nominal_and_all_MC_trials_fully_voxelized_pandas_data_frame,
+                patient_id,
+                bx_struct_roi,
+                bx_index,
+                bx_ref,
+                value_col_key='Dose grad (Gy/mm)',
+                patient_sp_output_figures_dir=patient_dir,
+                general_plot_name_string=" - dosimetry-gradient-kernel-regression",
+                num_rand_trials_to_show=3,
+                y_axis_label=r'Dose-gradient Magnitude $(\mathrm{Gy}\ \mathrm{mm}^{-1})$',
+                custom_fig_title="",
+                trial_annotation_style=random_trial_annotation_style,
+                axis_label_fontsize=16,
+                tick_labelsize=14,
+                show_x_direction_arrow=True,
+                x_direction_label="To biopsy needle tip / patient superior",
+                use_latex_labels=True,
+                show_title=False                     # <-- turn off title
+            )
+
 
     print("DONE!")
     print("--------------------------------------------------")
@@ -2657,7 +2773,10 @@ Index([                                               'Patient ID',
                 dvh_metrics_df=cohort_global_dosimetry_dvh_metrics_df,   # your table df
                 overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
                 # optional: constrain horizontal envelopes to common y-range across trials
-                limit_horizontal_to_common=False
+                limit_horizontal_to_common=False,
+                show_title=True,            
+                axis_label_fontsize=16,      # x/y label size
+                tick_label_fontsize=14,      # tick label size
             )
             # Final version
             production_plots.production_plot_cumulative_or_differential_DVH_kernel_quantile_regression_NEW_v4_5(
@@ -2690,7 +2809,10 @@ Index([                                               'Patient ID',
                 dvh_metrics_df=cohort_global_dosimetry_dvh_metrics_df,   # your table df
                 overlay_metrics_stats=('Nominal','Q05','Q25','Q50','Q75','Q95'),
                 # optional: constrain horizontal envelopes to common y-range across trials
-                limit_horizontal_to_common=False
+                limit_horizontal_to_common=False,
+                show_title=False,            # hide title entirely
+                axis_label_fontsize=16,      # x/y label size
+                tick_label_fontsize=14,      # tick label size
             )
 
             print('...done!')
@@ -2823,8 +2945,8 @@ Index([                                               'Patient ID',
                 axis_label_fontsize = 14,
                 cbar_tick_fontsize = 12,
                 cbar_label_fontsize = 14,
-                cbar_label_upper = "Mean of Signed Differences (Gy, Upper triangle)",
-                cbar_label_lower = "Mean of Signed Differences (Gy/mm, Lower triangle)",
+                cbar_label_upper=r"Mean of $M_{b,ij}^{D,(t)}$ ($\mathrm{Gy}$, Upper triangle)",
+                cbar_label_lower=r"Mean of $M_{b,ij}^{G,(t)}$ ($\mathrm{Gy}\,\mathrm{mm}^{-1}$, Lower triangle)",
                 # title & corner annotation
                 show_title = False,
                 show_annotation_box = False,
@@ -2854,12 +2976,12 @@ Index([                                               'Patient ID',
                 vmin_lower = None,
                 vmax_lower = None,
                 # typography
-                tick_label_fontsize = 12,
-                axis_label_fontsize = 14,
-                cbar_tick_fontsize = 12,
-                cbar_label_fontsize = 14,
-                cbar_label_upper = "Mean of Absolute Differences (Gy, Upper triangle)",
-                cbar_label_lower = "Mean of Absoulte Differences (Gy/mm, Lower triangle)",
+                tick_label_fontsize = 14,
+                axis_label_fontsize = 16,
+                cbar_tick_fontsize = 14,
+                cbar_label_fontsize = 16,
+                cbar_label_upper=r"Mean of $|M_{b,ij}^{D,(t)}|$ ($\mathrm{Gy}$, Upper triangle)",
+                cbar_label_lower=r"Mean of $|M_{b,ij}^{G,(t)}|$ ($\mathrm{Gy}\,\mathrm{mm}^{-1}$, Lower triangle)",
                 # title & corner annotation
                 show_title = False,
                 show_annotation_box = False,
@@ -2958,8 +3080,8 @@ Index([                                               'Patient ID',
             xlabel=None,
             ylabel=None,
             title_font_size=20,
-            axis_label_font_size=14,
-            tick_label_font_size=12,
+            axis_label_font_size=16,
+            tick_label_font_size=14,
             multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot,
             metric_family='dose',           # <-- add this
 
@@ -3057,8 +3179,8 @@ Index([                                               'Patient ID',
             xlabel=None,
             ylabel=None,
             title_font_size=20,
-            axis_label_font_size=14,
-            tick_label_font_size=12,
+            axis_label_font_size=16,
+            tick_label_font_size=14,
             multi_pairs=patient_id_and_bx_index_pairs_for_multi_boxplot,
             metric_family='grad',           # <-- add this
 
