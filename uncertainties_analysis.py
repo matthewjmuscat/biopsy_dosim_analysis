@@ -14,7 +14,7 @@ def compute_statistics_by_structure_type(df, columns, patient_uids=None):
     """
     # Validate input columns
     required_columns = [
-        "Patient UID", "Structure ID", "Structure type", "Structure dicom ref num",
+        "Patient UID", "Structure ID", "Structure type",
         "Structure index", "Frame of reference", "mu (X)", "mu (Y)", "mu (Z)",
         "sigma (X)", "sigma (Y)", "sigma (Z)", "Dilations mu (XY)", "Dilations mu (Z)",
         "Dilations sigma (XY)", "Dilations sigma (Z)", "Rotations mu (X)", "Rotations mu (Y)",

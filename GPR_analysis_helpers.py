@@ -65,7 +65,7 @@ def semivariogram_by_biopsy(all_df, voxel_size_mm=1.0, max_lag_voxels=None, use_
 
         # Metadata (handle mixed cases explicitly)
         meta = {}
-        for col in ['Simulated bool', 'Simulated type', 'Bx refnum', 'Bx ID']:
+        for col in ['Simulated bool', 'Simulated type', 'Bx ID']:
             if col in g.columns:
                 vals = g[col].dropna().unique()
                 if len(vals) == 1:
@@ -137,7 +137,7 @@ def compute_median_absdiff_curve(
         'mean_absdiff': mean_abs
     })
     # Copy metadata if present
-    meta_cols = ['Patient ID', 'Bx index', 'Bx refnum', 'Bx ID', 'Simulated bool', 'Simulated type']
+    meta_cols = ['Patient ID', 'Bx index', 'Bx ID', 'Simulated bool', 'Simulated type']
     for c in meta_cols:
         if c in df_one_biopsy.columns:
             vals = df_one_biopsy[c].dropna().unique()
@@ -211,7 +211,7 @@ def plot_variogram_for_biopsy(
     # Title
     if include_title_meta:
         meta_bits = [f"Patient {patient_id}", f"Biopsy {bx_index}"]
-        for c in ['Bx ID', 'Bx refnum', 'Simulated type', 'Simulated bool']:
+        for c in ['Bx ID', 'Simulated type', 'Simulated bool']:
             if c in dfb.columns:
                 vals = dfb[c].dropna().unique()
                 if len(vals) == 1:
@@ -301,7 +301,7 @@ def plot_variogram_from_df(
 
     if include_title_meta:
         bits = [f"Patient {patient_id}", f"Biopsy {bx_index}"]
-        for c in ['Bx ID', 'Bx refnum', 'Simulated type', 'Simulated bool']:
+        for c in ['Bx ID', 'Simulated type', 'Simulated bool']:
             if c in sv.columns:
                 vals = sv[c].dropna().unique()
                 if len(vals) == 1:

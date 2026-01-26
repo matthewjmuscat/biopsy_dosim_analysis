@@ -20,7 +20,7 @@ from scipy.stats import norm, truncnorm, lognorm, gamma, weibull_min, expon, par
 import os
 import matplotlib.patches as patches
 from matplotlib.lines import Line2D
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 from matplotlib.patches import Rectangle
@@ -451,7 +451,7 @@ def production_plot_axial_dose_distribution_quantile_regression_by_patient_matpl
             return y_kr, plotted_line
 
         # Quantile curves (unchanged)
-        for quantile in [0.05, 0.25, 0.75, 0.95]:
+        for quantile in [0.05, 0.25, 0.50, 0.75, 0.95]:
             q_df = df.groupby('Z (Bx frame)')[value_col_key].quantile(quantile).reset_index()
             kr = KernelReg(endog=q_df[value_col_key], exog=q_df['Z (Bx frame)'], var_type='c', bw=[1])
             y_kr, _ = kr.fit(x_range)
@@ -465,6 +465,9 @@ def production_plot_axial_dose_distribution_quantile_regression_by_patient_matpl
         plt.plot(x_range, y_regressions[0.25], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
         plt.plot(x_range, y_regressions[0.75], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
         plt.plot(x_range, y_regressions[0.95], linestyle=linestyle_quantiles, linewidth=line_width_quantiles, color='black')
+        
+        # Median line
+        q50_line, = plt.plot(x_range, y_regressions[0.50], linestyle='-', linewidth=2.0, color='black', label='Median (Q50)')
 
         # Nominal (trial 0)
         mc_trial_0 = df[df['MC trial num'] == 0]
@@ -580,18 +583,18 @@ def production_plot_axial_dose_distribution_quantile_regression_by_patient_matpl
         ax.set_ylabel(y_label_default, fontsize=axis_label_fontsize)
 
         # Legend (unchanged content)
-        legend_handles = [fill_1, fill_2, fill_3] + [nominal_line, max_density_line, mean_line]
+        legend_handles = [fill_1, fill_2, fill_3] + [q50_line, nominal_line, max_density_line, mean_line]
         quantile_labels = ['5th–25th Q', '25th–75th Q', '75th–95th Q']
-        main_labels = ['Nominal', 'Mode', 'Mean']
+        main_labels = ['Median (Q50)', 'Nominal', 'Mode', 'Mean']
         leg = ax.legend(
             legend_handles,
             quantile_labels + main_labels,
-            loc='upper left',                 # force inside
-            bbox_to_anchor=(0.02, 0.98),     # 2% from left, 98% high (inside)
+            loc='upper left',
+            bbox_to_anchor=(0.02, 0.98),
             borderaxespad=0.0,
             facecolor='white',
             framealpha=1.0,
-            prop={'size': 12}                # slightly smaller so it fits comfortably
+            prop={'size': 12}
         )
 
 
@@ -3409,6 +3412,426 @@ def histogram_and_fit(df, dists_to_try=None, bin_size=1, dose_col='Dose (Gy)', s
         plt.show()
 
 
+def histogram_and_fit_v2(
+    df,
+    dists_to_try=None,
+    bin_size=1,
+    dose_col='Dose (Gy)',
+    save_path=None,
+    custom_name=None,
+    xrange=None,
+    vertical_gridlines=True,
+    horizontal_gridlines=True,
+    # --- NEW options below ---
+    quantity_tex=None,                 # e.g. r"D_{b,v}^{(t)}" or r"G_{b,v}^{(t)}"
+    quantity_unit_tex=None,            # e.g. "Gy" or r"Gy mm$^{-1}$"
+    ylabel="Density",
+    title=None,
+    show_stats_box=True,
+    show_minor_ticks=False,
+    vertical_minor_gridlines=False,
+    horizontal_minor_gridlines=False,
+    legend_fontsize=11,
+    stats_box_fontsize=11,
+    param_precision=3,
+    stat_precision=1,
+    # NEW:
+    axis_label_fontsize=16,
+    tick_label_fontsize=14,
+):
+    """
+    Histograms the values of the specified column, fits multiple distributions,
+    and annotates the plot with fit statistics and parameters.
+
+    Selection rule:
+        - Among the candidate distributions, the "best" is chosen by
+          minimum AIC = 2*k - 2*logL (log-likelihood-based).
+        - KS statistic and p-value for the best family are still computed
+          and reported for descriptive purposes.
+
+    New arguments:
+        quantity_tex: LaTeX symbol for the x-variable (no $...$), e.g. r"D_{b,v}^{(t)}".
+        quantity_unit_tex: Unit text appended in parentheses, e.g. "Gy" or r"Gy mm$^{-1}$".
+        ylabel: y-axis label (default "Density").
+        title: optional custom title (None -> generic).
+        show_stats_box: toggle the statistics annotation box.
+        show_minor_ticks: turn minor ticks on for both axes.
+        vertical_minor_gridlines / horizontal_minor_gridlines:
+            draw minor grids along x / y.
+        legend_fontsize: fontsize for legend.
+        stats_box_fontsize: fontsize for stats box text.
+        param_precision: significant digits for fitted distribution parameters.
+        stat_precision: decimal places for mean/std/quantiles, etc.
+        axis_label_fontsize: fontsize for x/y axis labels.
+        tick_label_fontsize: fontsize for tick labels on both axes.
+
+    """
+    # Extract quantity values
+    doses = df[dose_col].dropna().values
+    num_trials_per_voxel_plus_nom = df['MC trial num'].max() + 1
+    num_nominal_voxels_in_cohort = len(df[df['MC trial num'] == 0])
+    num_rows_ie_num_total_points = len(doses)
+
+    # NEW: number of biopsies (unique Patient ID, Bx index combinations), if available
+    if {"Patient ID", "Bx index"}.issubset(df.columns):
+        num_biopsies = (
+            df.dropna(subset=["Patient ID", "Bx index"])
+              [["Patient ID", "Bx index"]]
+              .drop_duplicates()
+              .shape[0]
+        )
+    else:
+        num_biopsies = None
+
+    # --- distributions to try ---
+    distributions = {
+        'truncnorm': truncnorm,
+        'lognorm': lognorm,
+        'gamma': gamma,
+        'weibull_min': weibull_min,
+        'expon': expon,
+        'pareto': pareto,
+        'rice': rice,
+        'gengamma': gengamma,
+        'gennorm': gennorm,
+        'skewnorm': skewnorm,
+    }
+    if dists_to_try is not None:
+        distributions = {k: distributions[k] for k in dists_to_try if k in distributions}
+
+    fit_param_labels = {
+        'truncnorm': ['a', 'b', 'mean', 'std'],
+        #'lognorm':   ['shape (s)', 'loc', 'scale'],
+        "lognorm": [r"$\kappa$", r"$\xi$", r"$\beta$"],
+        'gamma':     ['shape (a)', 'loc', 'scale'],
+        'weibull_min': ['shape (c)', 'loc', 'scale'],
+        'expon':     ['loc', 'scale'],
+        'pareto':    ['b', 'loc', 'scale'],
+        'rice':      ['b', 'loc', 'scale'],
+        'gengamma':  ['a', 'c', 'loc', 'scale'],
+        'gennorm':   ['beta', 'loc', 'scale'],
+        'skewnorm':  ['a (skew)', 'loc', 'scale'],
+    }
+
+    def perform_fits(data, distributions):
+        """
+        Fit data to multiple distributions, compute log-likelihood and AIC,
+        as well as KS stat and p-value, and select the best by minimum AIC.
+        """
+        best_fit = None
+        best_AIC = float('inf')
+        best_dist_name = None
+        best_ks_stat = None
+        best_ks_p = None
+
+        fit_results = {}
+
+        for dist_name, dist_func in distributions.items():
+            print(f'Fitting: {dist_name}')
+            try:
+                if dist_name == 'truncnorm':
+                    # Use a data-driven truncnorm around the observed support
+                    mean_, std_ = np.mean(data), np.std(data)
+                    # Lower bound at 0, upper at +inf (or could clip by data range)
+                    a, b = (0 - mean_) / std_, (np.inf - mean_) / std_
+                    fit = (a, b, mean_, std_)
+                    frozen = truncnorm(*fit)
+                    # CDF and logpdf from the frozen distribution
+                    cdf_func = lambda x, frozen=frozen: frozen.cdf(x)
+                    logpdf_vals = frozen.logpdf(data)
+                else:
+                    # Generic SciPy fit
+                    fit = dist_func.fit(data)
+                    frozen = dist_func(*fit)
+                    cdf_func = lambda x, frozen=frozen: frozen.cdf(x)
+                    logpdf_vals = frozen.logpdf(data)
+
+                # Log-likelihood, ignoring any -inf / NaN contributions
+                logpdf_vals = np.asarray(logpdf_vals)
+                finite_mask = np.isfinite(logpdf_vals)
+                if not np.any(finite_mask):
+                    print(f"  Skipping {dist_name}: no finite logpdf values.")
+                    continue
+                logL = np.sum(logpdf_vals[finite_mask])
+
+                # Number of parameters
+                k_params = len(fit)
+                AIC = 2 * k_params - 2 * logL
+
+                # KS test (descriptive; uses full sample size)
+                ks_stat, ks_p = kstest(data, cdf_func)
+
+                fit_results[dist_name] = {
+                    "fit": fit,
+                    "logL": logL,
+                    "AIC": AIC,
+                    "ks_stat": ks_stat,
+                    "ks_p": ks_p,
+                }
+
+                # Select best by minimum AIC
+                if AIC < best_AIC:
+                    best_AIC = AIC
+                    best_fit = fit
+                    best_dist_name = dist_name
+                    best_ks_stat = ks_stat
+                    best_ks_p = ks_p
+
+            except Exception as e:
+                print(f"  Error fitting {dist_name}: {e}")
+                continue
+
+        return best_dist_name, best_fit, best_AIC, best_ks_stat, best_ks_p, fit_results
+
+    # --- Perform fits ---
+    best_dist, best_fit, best_AIC, best_stat, best_p, fit_results = perform_fits(doses, distributions)
+
+    if best_dist is None or best_fit is None:
+        raise RuntimeError("No distribution could be successfully fit to the data.")
+
+    # Format best fit parameters with labels
+    param_labels = fit_param_labels.get(best_dist, [f'param{i}' for i in range(len(best_fit))])
+    fit_param_str = ', '.join(
+        f'{label}={val:.{param_precision}g}'
+        for label, val in zip(param_labels, best_fit)
+    )
+
+    # --- Generate data for the best fit distribution ---
+    x_min = xrange[0] if xrange is not None else doses.min()
+    x_max = xrange[1] if xrange is not None else doses.max()
+    x = np.linspace(x_min, x_max, 1000)
+
+    if best_dist == 'truncnorm':
+        pdf = truncnorm.pdf(x, *best_fit)
+    else:
+        pdf = distributions[best_dist].pdf(x, *best_fit)
+
+    # --- Bin edges based on bin size ---
+    bin_edges = np.arange(start=x_min, stop=x_max + bin_size, step=bin_size)
+
+    # --- Plot setup ---
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Histogram
+    ax.hist(
+        doses,
+        bins=bin_edges,
+        density=True,
+        alpha=0.7,
+        color='C0',
+        edgecolor='white',
+        label='Histogram of values',
+    )
+
+    # Best-fit PDF (label includes AIC + KS)
+    # In this version the AIC is huge because N_samples is huge ~4 million for 27 biopsies so we dont include it in the annotation and dont report it, just use it to find the best fit
+    """
+    ax.plot(
+        x, pdf,
+        'r-',
+        linewidth=2.0,
+        label=(
+            f'Best fit (min AIC): {best_dist}\n'
+            f'AIC: {best_AIC:.1f}, KS: {best_stat:.2f}, p={best_p:.1e}\n'
+            f'{fit_param_str}'
+        ),
+    )
+    """
+    
+    ax.plot(
+        x, pdf,
+        'r-',
+        linewidth=2.0,
+        label=(
+            f'Best fit (AIC): {best_dist}\n'
+            f'KS: {best_stat:.2f}\n'
+            f'{fit_param_str}'
+        ),
+    )
+
+    # --- KDE mode computation ---
+    kde = gaussian_kde(doses)
+    xs = np.linspace(doses.min(), doses.max(), 1000)  # or pass kde_grid_size in
+    kde_pdf = kde(xs)
+    kde_mode = xs[np.argmax(kde_pdf)]
+
+
+
+    # --- Basic stats and quantiles (single computation used everywhere) ---
+    mean = np.mean(doses)
+    std = np.std(doses)
+    min_val = np.min(doses)
+    max_val = np.max(doses)
+
+    # argmax from PDF
+    argmax_x = x[np.argmax(pdf)]
+
+    quantile_probs = [5, 25, 50, 75, 95]
+    quantiles = np.percentile(doses, quantile_probs)
+
+    # For vertical lines & legend
+    quantile_labels_tex = [r"$Q_{5}$", r"$Q_{25}$", r"$Q_{50}$", r"$Q_{75}$", r"$Q_{95}$"]
+    quantile_colors = ['red', 'blue', 'black', 'blue', 'red']
+
+    # For the annotation box: one unit tag per group of stats
+    if quantity_unit_tex:
+        # e.g. " (Gy)" or " (Gy mm$^{-1}$)"
+        unit_group_suffix = f" ({quantity_unit_tex})"
+    else:
+        unit_group_suffix = ""
+
+
+
+    # --- Optional stats annotation box ---
+    if show_stats_box:
+        # Line 1: central tendency + range, with one unit tag at the end
+        line1 = (
+            r'$\mu, \sigma, \mathrm{mode}, \mathrm{min}, \mathrm{max}$'
+            f'{unit_group_suffix}: '
+            f'{mean:.{stat_precision}f}, '
+            f'{std:.{stat_precision}f}, '
+            #f'{argmax_x:.{stat_precision}f}, ' # swapped out for kde based mode to match csv file 
+            f'{kde_mode:.{stat_precision}f}, '
+            f'{min_val:.{stat_precision}f}, '
+            f'{max_val:.{stat_precision}f}'
+        )
+
+        # Line 2: quantiles, again with a single unit tag
+        line2 = (
+            r'$Q_{5}, Q_{25}, Q_{50}, Q_{75}, Q_{95}$'
+            f'{unit_group_suffix}: '
+            + ', '.join(f'{q:.{stat_precision}f}' for q in quantiles)
+        )
+
+        # Line 3: counts (dimensionless)
+        counts_parts = []
+        if num_biopsies is not None:
+            counts_parts.append(r'$N_{\mathrm{biopsies}}$: ' + f'{num_biopsies}')
+        counts_parts.append(r'$N_{\mathrm{trials/voxel}}$: ' + f'{num_trials_per_voxel_plus_nom}')
+        counts_parts.append(r'$N_{\mathrm{voxels}}$: ' + f'{num_nominal_voxels_in_cohort}')
+        counts_parts.append(r'$N_{\mathrm{data\ points}}$: ' + f'{num_rows_ie_num_total_points}')
+        line3 = ', '.join(counts_parts)
+
+        stats_text = line1 + "\n" + line2 + "\n" + line3
+
+        ax.text(
+            0.98, 0.98, stats_text,
+            transform=ax.transAxes,
+            fontsize=stats_box_fontsize,
+            verticalalignment='top',
+            horizontalalignment='right',
+            bbox=dict(boxstyle='round,pad=0.3',
+                      edgecolor='black',
+                      facecolor='white',
+                      alpha=0.9),
+        )
+
+
+    # --- Vertical quantile lines (colors + labels consistent with legend) ---
+    for q, color, label_tex in zip(quantiles, quantile_colors, quantile_labels_tex):
+        ax.axvline(
+            q, color=color, linestyle='--', linewidth=0.9,
+            label=label_tex
+        )
+
+    # --- Labels and title ---
+    if quantity_tex is not None:
+        # LaTeX-style axis label, e.g. "$D_{b,v}^{(t)}$ (Gy)"
+        xlabel = rf"${quantity_tex}$"
+        if quantity_unit_tex:
+            xlabel += f" ({quantity_unit_tex})"
+    else:
+        xlabel = dose_col  # fallback
+
+    # Axis labels with configurable fontsize
+    ax.set_xlabel(xlabel, fontsize=axis_label_fontsize)
+    ax.set_ylabel(ylabel, fontsize=axis_label_fontsize)
+
+    # Tick label font size
+    ax.tick_params(axis="both", which="both", labelsize=tick_label_fontsize)
+
+    # Title (leave fontsize tied to axis_label_fontsize, or change if you prefer)
+    if title is None:
+        pass
+    else:
+        ax.set_title(title, fontsize=axis_label_fontsize)
+
+
+    # x-range
+    if xrange is not None:
+        ax.set_xlim(xrange)
+
+    # Ticks & grids
+    if show_minor_ticks or vertical_minor_gridlines or horizontal_minor_gridlines:
+        ax.minorticks_on()
+
+    if vertical_gridlines:
+        ax.grid(axis='x', which='major', linestyle='--', linewidth=0.5, alpha=0.7)
+    if horizontal_gridlines:
+        ax.grid(axis='y', which='major', linestyle='--', linewidth=0.5, alpha=0.7)
+    if vertical_minor_gridlines:
+        ax.grid(axis='x', which='minor', linestyle=':', linewidth=0.5, alpha=0.7)
+    if horizontal_minor_gridlines:
+        ax.grid(axis='y', which='minor', linestyle=':', linewidth=0.5, alpha=0.7)
+
+    # Slightly heavier axes spines for print clarity
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.0)
+
+    # Legend
+    ax.legend(fontsize=legend_fontsize)
+
+    # Major ticks: outward, visible on all sides
+    ax.tick_params(
+        axis="both",
+        which="major",
+        direction="out",   # <-- outward toward the labels
+        length=6,
+        width=1.0,
+        bottom=True,
+        top=True,
+        left=True,
+        right=True,
+    )
+
+    # Minor ticks: also outward if enabled
+    if show_minor_ticks:
+        ax.tick_params(
+            axis="both",
+            which="minor",
+            direction="out",
+            length=3,
+            width=0.8,
+            bottom=True,
+            top=True,
+            left=True,
+            right=True,
+        )
+
+
+
+    fig.tight_layout()
+
+    # Save or show
+    if save_path:
+        if custom_name is None:
+            png_path = save_path.joinpath("all_voxels_dose_histogram_fit.png")
+            svg_path = save_path.joinpath("all_voxels_dose_histogram_fit.svg")
+        else:
+            png_path = save_path.joinpath(f"{custom_name}.png")
+            svg_path = save_path.joinpath(f"{custom_name}.svg")
+        fig.savefig(png_path, format='png', bbox_inches='tight', dpi=300)
+        fig.savefig(svg_path, format='svg', bbox_inches='tight')
+        print(f"Plot saved as PNG: {png_path}")
+        print(f"Plot saved as SVG: {svg_path}")
+        plt.close(fig)
+    else:
+        plt.show()
+        plt.close(fig)
+
+
+
+
 
 def plot_eff_size_heatmaps(eff_size_df, 
                            patient_id_col, 
@@ -3730,9 +4153,20 @@ def plot_diff_stats_heatmap_upper_lower(
         # title & corner annotation
         show_title: bool = True,
         show_annotation_box: bool = True,
-        # 🔹 new parameter
+        # per cell annotation fontsize
         cell_annot_fontsize: int = 8,
+        cell_value_decimals: int = 1,          # <--- NEW
+        y_axis_upper_tri_label = r"Voxel $i$",
+        x_axis_upper_tri_label = r"Voxel $j$",
+        y_axis_lower_tri_label = r"Voxel $j$",
+        x_axis_lower_tri_label = r"Voxel $i$",
+        color_bar_positions: str = "top_bottom",  # "left_right" or "top_bottom"
+        # NEW: colormap and padding
+        cmap: str = "coolwarm",
+        cbar_pad: float = 0.6,
+        cbar_label_pad: float = 8.0,
     ):
+
     """
     One heatmap per biopsy: upper triangle from `upper_df`, lower triangle from `lower_df` (mirrored).
     Cells display mean (± std if provided). **Independent** colorbars for upper/lower.
@@ -3839,6 +4273,7 @@ def plot_diff_stats_heatmap_upper_lower(
         annot = np.full((n, n), "", dtype=object)
         US = US_df.values if US_df is not None else None
         LS = LS_df.values if LS_df is not None else None
+        fmt = f"{{:.{int(cell_value_decimals)}f}}"
 
         for i in range(n):
             for j in range(n):
@@ -3847,21 +4282,37 @@ def plot_diff_stats_heatmap_upper_lower(
                     if not np.isfinite(m): 
                         continue
                     s = US[i, j] if US is not None else np.nan
-                    annot[i, j] = f"{m:.2f}" if not np.isfinite(s) else f"{m:.2f}\n±\n{s:.2f}"
+                    annot[i, j] = (
+                        fmt.format(m)
+                        if not np.isfinite(s)
+                        else f"{fmt.format(m)}\n±\n{fmt.format(s)}"
+                    )
                 elif i > j:
                     m = LM[j, i]
                     if not np.isfinite(m):
                         continue
                     s = LS[j, i] if LS is not None else np.nan
-                    annot[i, j] = f"{m:.2f}" if not np.isfinite(s) else f"{m:.2f}\n±\n{s:.2f}"
+                    annot[i, j] = (
+                        fmt.format(m)
+                        if not np.isfinite(s)
+                        else f"{fmt.format(m)}\n±\n{fmt.format(s)}"
+                    )
                 else:
-                    # diagonal: prefer upper else lower
                     if np.isfinite(UM[i, j]):
                         s = US[i, j] if US is not None else np.nan
-                        annot[i, j] = f"{UM[i, j]:.2f}" if not np.isfinite(s) else f"{UM[i, j]:.2f}\n±\n{s:.2f}"
+                        m = UM[i, j]
                     elif np.isfinite(LM[i, j]):
                         s = LS[i, j] if LS is not None else np.nan
-                        annot[i, j] = f"{LM[i, j]:.2f}" if not np.isfinite(s) else f"{LM[i, j]:.2f}\n±\n{s:.2f}"
+                        m = LM[i, j]
+                    else:
+                        continue
+
+                    annot[i, j] = (
+                        fmt.format(m)
+                        if not np.isfinite(s)
+                        else f"{fmt.format(m)}\n±\n{fmt.format(s)}"
+                    )
+
 
         # ===== Plot: two overlaid heatmaps + two independent colorbars =====
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -3869,7 +4320,7 @@ def plot_diff_stats_heatmap_upper_lower(
         # lower first
         hm_lower = sns.heatmap(
             lower_display,
-            cmap="coolwarm",
+            cmap=cmap,
             vmin=vmin_lower, vmax=vmax_lower,
             mask=~np.isfinite(lower_display),
             cbar=False,
@@ -3879,7 +4330,7 @@ def plot_diff_stats_heatmap_upper_lower(
         # upper second
         hm_upper = sns.heatmap(
             upper_display,
-            cmap="coolwarm",
+            cmap=cmap,
             vmin=vmin_upper, vmax=vmax_upper,
             mask=~np.isfinite(upper_display),
             cbar=False,
@@ -3888,8 +4339,8 @@ def plot_diff_stats_heatmap_upper_lower(
         )
 
         # manual annotations with contrasting color per triangle
-        cmap_up = plt.get_cmap("coolwarm")
-        cmap_lo = plt.get_cmap("coolwarm")
+        cmap_up = plt.get_cmap(cmap)
+        cmap_lo = plt.get_cmap(cmap)
         for i in range(n):
             for j in range(n):
                 txt = annot[i, j]
@@ -3920,8 +4371,8 @@ def plot_diff_stats_heatmap_upper_lower(
         ax.set_yticks(np.arange(n) + 0.5)
         ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
         ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
-        ax.set_xlabel("Voxel 1 (Lower triangle)", fontsize=axis_label_fontsize)
-        ax.set_ylabel("Voxel 2 (Lower triangle)", fontsize=axis_label_fontsize)
+        ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize)
+        ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize)
         ax.tick_params(axis="x", bottom=True, top=False, direction="out", length=4, width=1, color="black")
         ax.tick_params(axis="y", left=True, right=False, direction="out", length=4, width=1, color="black")
 
@@ -3929,35 +4380,84 @@ def plot_diff_stats_heatmap_upper_lower(
         top_ax = ax.secondary_xaxis('top')
         top_ax.set_xticks(ax.get_xticks())
         top_ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
-        top_ax.set_xlabel("Voxel 2 (Upper triangle)", fontsize=axis_label_fontsize)
+        top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize)
         top_ax.tick_params(axis="x", top=True, direction="out", length=4, width=1, color="black")
 
         right_ax = ax.secondary_yaxis('right')
         right_ax.set_yticks(ax.get_yticks())
         right_ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
-        right_ax.set_ylabel("Voxel 1 (Upper triangle)", fontsize=axis_label_fontsize)
+        right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize)
         right_ax.tick_params(axis="y", right=True, direction="out", length=4, width=1, color="black")
 
-        # Two independent colorbars (LEFT=lower, RIGHT=upper)
-        divider = make_axes_locatable(ax)
-        cax_left  = divider.append_axes("left",  size="4%", pad=0.8)
-        cax_right = divider.append_axes("right", size="4%", pad=0.8)
+        # independent colorbars (LEFT=lower, RIGHT=upper)
+        if color_bar_positions == "left_right":    
+            divider = make_axes_locatable(ax)
+            cax_left  = divider.append_axes("left",  size="4%", pad=cbar_pad)
+            cax_right = divider.append_axes("right", size="4%", pad=cbar_pad)
 
-        sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap="coolwarm")
-        sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap="coolwarm")
-        sm_lower.set_array([])
-        sm_upper.set_array([])
+            sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap=cmap)
+            sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap=cmap)
+            sm_lower.set_array([])
+            sm_upper.set_array([])
 
-        cbar_lower = plt.colorbar(sm_lower, cax=cax_left)
-        cbar_upper = plt.colorbar(sm_upper, cax=cax_right)
-        cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize)
-        cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize)
-        cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize)
-        cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize)
-        cax_left.yaxis.set_ticks_position('left')
-        cax_left.yaxis.set_label_position('left')
-        cax_right.yaxis.set_ticks_position('right')
-        cax_right.yaxis.set_label_position('right')
+            cbar_lower = plt.colorbar(sm_lower, cax=cax_left)
+            cbar_upper = plt.colorbar(sm_upper, cax=cax_right)
+            cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize)
+            cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize)
+            cbar_lower.set_label(
+                cbar_label_lower,
+                fontsize=cbar_label_fontsize,
+                labelpad=cbar_label_pad,
+            )
+            cbar_upper.set_label(
+                cbar_label_upper,
+                fontsize=cbar_label_fontsize,
+                labelpad=cbar_label_pad,
+            )
+
+            cax_left.yaxis.set_ticks_position('left')
+            cax_left.yaxis.set_label_position('left')
+            cax_right.yaxis.set_ticks_position('right')
+            cax_right.yaxis.set_label_position('right')
+        
+
+        # independent colorbars (BOTTOM=lower, TOP=upper)
+        if color_bar_positions == "top_bottom":
+            divider = make_axes_locatable(ax)
+            cax_bottom = divider.append_axes("bottom", size="4%", pad=cbar_pad)
+            cax_top    = divider.append_axes("top",    size="4%", pad=cbar_pad)
+
+            sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap=cmap)
+            sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap=cmap)
+            sm_lower.set_array([])
+            sm_upper.set_array([])
+
+            # lower triangle colorbar - below the matrix
+            cbar_lower = plt.colorbar(sm_lower, cax=cax_bottom, orientation="horizontal")
+            # upper triangle colorbar - above the matrix
+            cbar_upper = plt.colorbar(sm_upper, cax=cax_top,    orientation="horizontal")
+
+            # tick sizes
+            cbar_lower.ax.tick_params(axis="x", labelsize=cbar_tick_fontsize)
+            cbar_upper.ax.tick_params(axis="x", labelsize=cbar_tick_fontsize)
+
+            # labels
+            cbar_lower.set_label(
+                cbar_label_lower,
+                fontsize=cbar_label_fontsize,
+                labelpad=cbar_label_pad,
+            )
+            cbar_upper.set_label(
+                cbar_label_upper,
+                fontsize=cbar_label_fontsize,
+                labelpad=cbar_label_pad,
+            )
+
+
+            # put ticks and label on the top edge for the upper bar
+            cax_top.xaxis.set_ticks_position("top")
+            cax_top.xaxis.set_label_position("top")
+            # bottom bar keeps default bottom ticks and label
 
         # corner annotation
         if show_annotation_box and ann:
@@ -4428,6 +4928,7 @@ def plot_cohort_eff_size_heatmap_boxed_counts(
       aggregate_abs: Bool, use abs(effect size).
       vmin, vmax: Optional color limits for mean heatmap.
     """
+    plt.ioff()
 
     # 1) Build annotation text
     if annotation_info is None:
@@ -5440,6 +5941,477 @@ def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs(
 
 
 
+def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs_v2(
+    upper_df: pd.DataFrame,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+    lower_df: pd.DataFrame,             # EXPECTS cohort-pooled stats per (voxel1, voxel2)
+
+    # tell the function which columns to render in cells:
+    upper_mean_col: str = "mean_diff",
+    upper_std_col:  str | None = "std_diff",
+    lower_mean_col: str = "mean_diff",
+    lower_std_col:  str | None = "std_diff",
+
+    # which column to use for the "n=" boxes (per voxel pair)
+    n_col: str = "n_biopsies",
+
+    eff_size_type_upper: str = "Dose mean±std",
+    eff_size_type_lower: str = "Dose-Gradient mean±std",
+
+    save_path_base=None,
+    save_name_base=None,
+    annotation_info: dict | None = None,
+
+    # color range controls
+    vmin: float | None = None,
+    vmax: float | None = None,
+    vmin_upper: float | None = None,
+    vmax_upper: float | None = None,
+    vmin_lower: float | None = None,
+    vmax_lower: float | None = None,
+
+    # counts overlay
+    show_counts_boxes: bool = True,
+    counts_source: str = "lower",       # "lower" or "upper"
+
+    # typography
+    tick_label_fontsize: int = 9,
+    axis_label_fontsize: int = 11,
+    cbar_tick_fontsize: int = 9,
+    cbar_label_fontsize: int = 11,
+    cbar_label_upper: str = r"$\overline{M_{ij}^{D}}$ (Upper triangle)",
+    cbar_label_lower: str = r"$\overline{M_{ij}^{G}}$ (Lower triangle)",
+    # NEW:
+    cbar_pad: float = 0.6,        # distance between matrix and colorbar
+    cbar_label_pad: float = 8.0,  # distance between bar and its label
+
+    # title
+    show_title: bool = True,
+
+    # cell annotation fontsize (mean / mean±std)
+    cell_annot_fontsize: int = 8,
+    cell_value_decimals: int = 1,
+
+
+    # n= caption fontsize inside boxes
+    n_label_fontsize: int = 8,
+
+    # corner annotation box
+    show_annotation_box: bool = True,
+
+    # axis label semantics (match your patient-level defaults)
+    y_axis_upper_tri_label: str = r"Voxel $i$",
+    x_axis_upper_tri_label: str = r"Voxel $j$",
+    y_axis_lower_tri_label: str = r"Voxel $j$",
+    x_axis_lower_tri_label: str = r"Voxel $i$",
+
+    # rendering controls
+    cmap: str = "coolwarm",
+    cast_ticklabels_to_int: bool = True,
+    color_bar_positions: str = "top_bottom",  # "left_right" or "top_bottom"
+):
+    """
+    Dual-triangle cohort heatmap using cohort-pooled stats:
+      - Upper triangle from `upper_df` (direct)
+      - Lower triangle from `lower_df` (mirrored into lower half)
+      - Independent colorbars for upper/lower
+      - Optional per-pair "n=" overlay (kept from v1)
+      - Std on/off via upper_std_col/lower_std_col = None
+      - i/j axis-label semantics (upper vs lower can be labeled differently)
+    """
+    plt.ioff()
+
+    # ---------- helpers ----------
+    def get_contrasting_color(val, vmin_, vmax_, cmap_):
+        if val is None or not np.isfinite(val):
+            return "black"
+        denom = (vmax_ - vmin_) if (vmax_ is not None and vmin_ is not None) else 1.0
+        norm = (val - vmin_) / (denom + 1e-12)
+        r, g, b, _ = plt.get_cmap(cmap_)(norm)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "black" if luminance > 0.6 else "white"
+
+    def _ensure_cols(df, need, tag):
+        missing = [c for c in need if c not in df.columns]
+        if missing:
+            raise ValueError(f"{tag}: missing required columns {missing}")
+
+    def finite_vals(arr):
+        v = arr[np.isfinite(arr)]
+        return v if v.size else np.array([])
+
+    # ---------- validate inputs ----------
+    base_need = ["voxel1", "voxel2", upper_mean_col]
+    if upper_std_col is not None:
+        base_need.append(upper_std_col)
+    _ensure_cols(upper_df, base_need, "Upper")
+
+    base_need = ["voxel1", "voxel2", lower_mean_col]
+    if lower_std_col is not None:
+        base_need.append(lower_std_col)
+    _ensure_cols(lower_df, base_need, "Lower")
+
+    # ---------- minimal frames ----------
+    up_cols = ["voxel1", "voxel2", upper_mean_col] + ([upper_std_col] if upper_std_col else []) \
+              + ([n_col] if (show_counts_boxes and n_col in upper_df.columns) else [])
+    lo_cols = ["voxel1", "voxel2", lower_mean_col] + ([lower_std_col] if lower_std_col else []) \
+              + ([n_col] if (show_counts_boxes and n_col in lower_df.columns) else [])
+
+    up_stats = upper_df[up_cols].copy()
+    lo_stats = lower_df[lo_cols].copy()
+
+    up_stats = up_stats.rename(columns={upper_mean_col: "mean"})
+    lo_stats = lo_stats.rename(columns={lower_mean_col: "mean"})
+    if upper_std_col:
+        up_stats = up_stats.rename(columns={upper_std_col: "std"})
+    else:
+        up_stats["std"] = np.nan
+    if lower_std_col:
+        lo_stats = lo_stats.rename(columns={lower_std_col: "std"})
+    else:
+        lo_stats["std"] = np.nan
+
+    # ---------- unified voxel set ----------
+    voxels = sorted(
+        set(up_stats["voxel1"]).union(up_stats["voxel2"])
+        .union(lo_stats["voxel1"]).union(lo_stats["voxel2"])
+    )
+    n = len(voxels)
+    if n == 0:
+        return
+
+    # ---------- pivot to matrices ----------
+    def pivots(stats_df):
+        mean_mat = (stats_df.pivot(index="voxel1", columns="voxel2", values="mean")
+                    .reindex(index=voxels, columns=voxels))
+        std_mat  = (stats_df.pivot(index="voxel1", columns="voxel2", values="std")
+                    .reindex(index=voxels, columns=voxels))
+        return mean_mat, std_mat
+
+    up_mean, up_std = pivots(up_stats)
+    lo_mean, lo_std = pivots(lo_stats)
+
+    UM = up_mean.values
+    LM = lo_mean.values
+    UPS = up_std.values
+    LOS = lo_std.values
+
+    # ---------- counts (optional overlay) ----------
+    count_mat = None
+    if show_counts_boxes:
+        src = up_stats if counts_source == "upper" else lo_stats
+        if n_col in src.columns:
+            count_mat = (src.pivot(index="voxel1", columns="voxel2", values=n_col)
+                         .reindex(index=voxels, columns=voxels))
+            count_mat = count_mat.combine_first(count_mat.T)
+            if count_mat.values.size:
+                np.fill_diagonal(count_mat.values, 0)
+
+    # ---------- build display matrices (independent) ----------
+    upper_display = np.full((n, n), np.nan, dtype=float)
+    lower_display = np.full((n, n), np.nan, dtype=float)
+
+    for i in range(n):
+        for j in range(n):
+            if i < j:
+                upper_display[i, j] = UM[i, j]
+            elif i > j:
+                lower_display[i, j] = LM[j, i]  # mirror into lower
+            else:
+                # diagonal: prefer upper; else lower
+                if np.isfinite(UM[i, j]):
+                    upper_display[i, j] = UM[i, j]
+                elif np.isfinite(LM[i, j]):
+                    lower_display[i, j] = LM[i, j]
+
+    # ---------- resolve vmin/vmax per triangle ----------
+    if vmin_upper is None or vmax_upper is None:
+        up_vals = finite_vals(upper_display)
+    if vmin_lower is None or vmax_lower is None:
+        lo_vals = finite_vals(lower_display)
+
+    if vmin_upper is None:
+        vmin_upper = float(up_vals.min()) if up_vals.size else (vmin if vmin is not None else 0.0)
+    if vmax_upper is None:
+        vmax_upper = float(up_vals.max()) if up_vals.size else (vmax if vmax is not None else 1.0)
+    if vmin_lower is None:
+        vmin_lower = float(lo_vals.min()) if lo_vals.size else (vmin if vmin is not None else 0.0)
+    if vmax_lower is None:
+        vmax_lower = float(lo_vals.max()) if lo_vals.size else (vmax if vmax is not None else 1.0)
+
+    # ---------- annotation strings (mean ± std OR mean-only) ----------
+    annot = np.full((n, n), "", dtype=object)
+
+    # small helper for formatting with configurable decimals
+    fmt = f"{{:.{int(cell_value_decimals)}f}}"
+
+    for i in range(n):
+        for j in range(n):
+            if i < j:
+                m = UM[i, j]
+                if not np.isfinite(m):
+                    continue
+                s = UPS[i, j]
+                if not np.isfinite(s):
+                    annot[i, j] = fmt.format(m)
+                else:
+                    annot[i, j] = f"{fmt.format(m)}\n±\n{fmt.format(s)}"
+
+            elif i > j:
+                m = LM[j, i]
+                if not np.isfinite(m):
+                    continue
+                s = LOS[j, i]
+                if not np.isfinite(s):
+                    annot[i, j] = fmt.format(m)
+                else:
+                    annot[i, j] = f"{fmt.format(m)}\n±\n{fmt.format(s)}"
+
+            else:
+                # diagonal: prefer upper; else lower
+                if np.isfinite(UM[i, j]):
+                    m = UM[i, j]
+                    s = UPS[i, j]
+                elif np.isfinite(LM[i, j]):
+                    m = LM[i, j]
+                    s = LOS[i, j]
+                else:
+                    continue
+
+                if not np.isfinite(s):
+                    annot[i, j] = fmt.format(m)
+                else:
+                    annot[i, j] = f"{fmt.format(m)}\n±\n{fmt.format(s)}"
+
+
+    # ---------- plot ----------
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    sns.heatmap(
+        lower_display, cmap=cmap,
+        vmin=vmin_lower, vmax=vmax_lower,
+        mask=~np.isfinite(lower_display),
+        cbar=False, linewidths=0.3, linecolor="white",
+        square=True, ax=ax,
+    )
+    sns.heatmap(
+        upper_display, cmap=cmap,
+        vmin=vmin_upper, vmax=vmax_upper,
+        mask=~np.isfinite(upper_display),
+        cbar=False, linewidths=0.3, linecolor="white",
+        square=True, ax=ax,
+    )
+
+    # manual annotations (contrast by triangle; diagonal chooses upper if present)
+    for i in range(n):
+        for j in range(n):
+            txt = annot[i, j]
+            if not txt:
+                continue
+
+            if i < j or (i == j and np.isfinite(upper_display[i, j])):
+                color = get_contrasting_color(upper_display[i, j], vmin_upper, vmax_upper, cmap)
+            else:
+                color = get_contrasting_color(lower_display[i, j], vmin_lower, vmax_lower, cmap)
+
+            ax.text(
+                j + 0.5, i + 0.5, txt,
+                ha="center", va="center",
+                fontsize=cell_annot_fontsize,
+                color=color
+            )
+
+    if show_title:
+        ax.set_title(f"Upper: {eff_size_type_upper}   |   Lower: {eff_size_type_lower}")
+
+    # tick labels
+    if cast_ticklabels_to_int:
+        try:
+            ticklabs = [int(v) for v in voxels]
+        except Exception:
+            ticklabs = voxels
+    else:
+        ticklabs = voxels
+
+    ax.set_xticks(np.arange(n) + 0.5)
+    ax.set_yticks(np.arange(n) + 0.5)
+    ax.set_xticklabels(ticklabs, fontsize=tick_label_fontsize)
+    ax.set_yticklabels(ticklabs, fontsize=tick_label_fontsize)
+
+    # Lower triangle semantics on bottom/left
+    ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize)
+    ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize)
+    ax.tick_params(axis="x", bottom=True, top=False, direction="out", length=4, width=1, color="black")
+    ax.tick_params(axis="y", left=True, right=False, direction="out", length=4, width=1, color="black")
+
+    # Upper triangle semantics on top/right
+    top_ax = ax.secondary_xaxis('top')
+    top_ax.set_xticks(ax.get_xticks())
+    top_ax.set_xticklabels(ticklabs, fontsize=tick_label_fontsize)
+    top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize)
+    top_ax.tick_params(axis="x", top=True, direction="out", length=4, width=1, color="black")
+
+    right_ax = ax.secondary_yaxis('right')
+    right_ax.set_yticks(ax.get_yticks())
+    right_ax.set_yticklabels(ticklabs, fontsize=tick_label_fontsize)
+    right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize)
+    right_ax.tick_params(axis="y", right=True, direction="out", length=4, width=1, color="black")
+
+
+    # independent colorbars (LEFT=lower, RIGHT=upper)
+    if color_bar_positions == "left_right":    
+        divider = make_axes_locatable(ax)
+        cax_left  = divider.append_axes("left",  size="4%", pad=cbar_pad)
+        cax_right = divider.append_axes("right", size="4%", pad=cbar_pad)
+
+        sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap=cmap)
+        sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap=cmap)
+        sm_lower.set_array([])
+        sm_upper.set_array([])
+
+        cbar_lower = plt.colorbar(sm_lower, cax=cax_left)
+        cbar_upper = plt.colorbar(sm_upper, cax=cax_right)
+        cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize)
+        cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize)
+        cbar_lower.set_label(
+            cbar_label_lower,
+            fontsize=cbar_label_fontsize,
+            labelpad=cbar_label_pad,
+        )
+        cbar_upper.set_label(
+            cbar_label_upper,
+            fontsize=cbar_label_fontsize,
+            labelpad=cbar_label_pad,
+        )
+
+        cax_left.yaxis.set_ticks_position('left')
+        cax_left.yaxis.set_label_position('left')
+        cax_right.yaxis.set_ticks_position('right')
+        cax_right.yaxis.set_label_position('right')
+    
+
+    # independent colorbars (BOTTOM=lower, TOP=upper)
+    if color_bar_positions == "top_bottom":
+        divider = make_axes_locatable(ax)
+        cax_bottom = divider.append_axes("bottom", size="4%", pad=cbar_pad)
+        cax_top    = divider.append_axes("top",    size="4%", pad=cbar_pad)
+
+        sm_lower = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_lower, vmax=vmax_lower), cmap=cmap)
+        sm_upper = ScalarMappable(norm=mpl.colors.Normalize(vmin=vmin_upper, vmax=vmax_upper), cmap=cmap)
+        sm_lower.set_array([])
+        sm_upper.set_array([])
+
+        # lower triangle colorbar - below the matrix
+        cbar_lower = plt.colorbar(sm_lower, cax=cax_bottom, orientation="horizontal")
+        # upper triangle colorbar - above the matrix
+        cbar_upper = plt.colorbar(sm_upper, cax=cax_top,    orientation="horizontal")
+
+        # tick sizes
+        cbar_lower.ax.tick_params(axis="x", labelsize=cbar_tick_fontsize)
+        cbar_upper.ax.tick_params(axis="x", labelsize=cbar_tick_fontsize)
+
+        # labels
+        cbar_lower.set_label(
+            cbar_label_lower,
+            fontsize=cbar_label_fontsize,
+            labelpad=cbar_label_pad,
+        )
+        cbar_upper.set_label(
+            cbar_label_upper,
+            fontsize=cbar_label_fontsize,
+            labelpad=cbar_label_pad,
+        )
+
+
+        # put ticks and label on the top edge for the upper bar
+        cax_top.xaxis.set_ticks_position("top")
+        cax_top.xaxis.set_label_position("top")
+        # bottom bar keeps default bottom ticks and label
+
+
+    # ---------- counts overlay (kept) ----------
+    if show_counts_boxes and count_mat is not None:
+        mask_lt = np.tril(np.ones((n, n), dtype=bool), k=-1)
+        vals_lt = count_mat.values.copy()
+        vals_lt[~mask_lt] = np.nan
+        unique_counts = np.unique(vals_lt[~np.isnan(vals_lt)])
+
+        for c in unique_counts:
+            region = (count_mat.values == c) & mask_lt
+            coords = np.argwhere(region)
+            if coords.size == 0:
+                continue
+
+            i_min, j_min = coords.min(axis=0)
+            i_max, j_max = coords.max(axis=0)
+
+            ax.hlines(y=i_max + 1, xmin=j_min, xmax=j_max + 2,
+                      colors="black", linewidth=1.5, zorder=6)
+            ax.vlines(x=j_max + 2, ymin=0, ymax=i_max + 1,
+                      colors="black", linewidth=1.5, zorder=6)
+
+            k_in = min(max(min(i_max, n - 1), j_min), min(j_max, n - 1))
+            k = min(k_in + 1, n - 1)
+
+            inset = 0.06
+            rect = Rectangle(
+                (k + inset, k + inset),
+                1 - 2*inset, 1 - 2*inset,
+                facecolor="white",
+                edgecolor="white",
+                zorder=4,
+            )
+            ax.add_patch(rect)
+
+            ax.text(
+                k + 0.5, k + 0.5, f"{int(c)}",
+                ha="center", va="center",
+                fontsize=n_label_fontsize, color="black", zorder=7,
+                clip_on=False, transform=ax.transData
+            )
+
+    # corner annotation (optional)
+    if show_annotation_box and annotation_info:
+        text = "\n".join(f"{k}: {v}" for k, v in annotation_info.items())
+        ax.text(
+            0.02, 0.02, text,
+            transform=ax.transAxes, fontsize=10,
+            va="bottom", ha="left",
+            bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", facecolor="white", alpha=0.9)
+        )
+
+    plt.tight_layout()
+
+    # save/show
+    if save_path_base:
+        os.makedirs(save_path_base, exist_ok=True)
+        base = os.path.join(save_path_base, f"cohort_dualtri_{save_name_base or 'dose_upper__dosegrad_lower'}_v2")
+        plt.savefig(base + ".png", bbox_inches="tight", dpi=300)
+        plt.savefig(base + ".svg", bbox_inches="tight")
+        print(f"Saved dual-triangle cohort heatmap to {base}.png/.svg")
+        plt.close(fig)
+    else:
+        plt.show()
+        plt.close(fig)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -6091,8 +7063,399 @@ def plot_dose_vs_length_with_summary_mutlibox(
 
 
 
+def plot_dose_vs_length_with_summary_cohort_v2(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    save_dir: str,
+    file_name: str,
+    title: str = None,
+    figsize=(10, 6),
+    dpi=300,
+
+    violin_or_box: str = "box",         # "box" or "violin"
+    show_points: bool = False,          # optional raw points overlay
+
+    # global trend lines across the entire cohort (pooled)
+    trend_lines: tuple[str, ...] = ("mean",),  # ("mean",), ("median",), or both
+    errorbar_lineplot_mean: str | None = None,    # e.g. "ci" or None
+    errorbar_lineplot_median: str | None = None,  # e.g. "ci" or None
+
+    # NEW: family of mean curves for each (Patient ID, Bx index)
+    show_pair_mean_curves: bool = False,
+    pair_cols: tuple[str, str] = ("Patient ID", "Bx index"),
+    pairs_filter: list[tuple] | None = None,      # optional list of (Patient ID, Bx index)
+    pair_mean_estimator: str = "mean",            # "mean" or "median" for the per-pair curve
+    pair_line_alpha: float = 0.25,
+    pair_line_width: float = 1.2,
+    pair_line_palette: str = "tab10",
+    pair_line_outline: bool = False,              # NEW: turn off the “white stroke” pop
+    show_pair_legend: bool = False,
+    max_legend_pairs: int = 12,
+
+    # counts
+    annotate_counts: bool = True,
+    annotation_box: bool = False,       # external box only
+
+    # y-limits
+    y_trim: bool = False,
+    y_min_quantile: float = 0.05,
+    y_max_quantile: float = 0.95,
+    y_min_fixed: float | None = None,
+    y_max_fixed: float | None = None,
+
+    # labeling / typography
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    metric_family: str | None = None,   # "dose" or "grad"
+    y_tick_decimals: int | None = 1,
+
+    title_font_size: int = 20,
+    axis_label_font_size: int = 16,
+    tick_label_font_size: int = 14,
+
+    # absolute label control (auto if None)
+    y_is_abs: bool | None = None,
+
+    # NEW: box/violin styling
+    box_color: str = "lightgray",
+    box_alpha: float = 0.4,
+
+    # NEW: y-limit handling for family curves
+    include_pair_curves_in_ylim: bool = True,
+    pair_curves_ylim_quantile: float = 1.0,   # 1.0 = include max; try 0.995 to ignore extreme outliers
+    ylim_top_pad: float = 0.05,              # 5% headroom (you already effectively do this)
+
+):
+    import os
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import matplotlib.patheffects as pe
+    from matplotlib.ticker import StrMethodFormatter
+
+    plt.ioff()
+    os.makedirs(save_dir, exist_ok=True)
+
+    df = df.copy()
+
+    # ---- Decide dose vs grad ----
+    if metric_family in ("dose", "grad"):
+        is_grad = (metric_family == "grad")
+    else:
+        is_grad = ("grad" in (y_col or "").lower()) or ("gamma" in (y_col or "").lower())
+
+    # ---- Decide abs label ----
+    if y_is_abs is None:
+        y_is_abs = ("abs" in (y_col or "").lower()) or ("absolute" in (y_col or "").lower())
+
+    # ---- x ordering: enforce ordered categorical (fixes the ℓk=2 shift) ----
+    # We plot x as strings everywhere (boxes + lines) so seaborn/matplotlib share the same coordinate system.
+    x_vals = df[x_col].dropna().unique()
+    try:
+        x_order_int = sorted([int(v) for v in x_vals])
+        x_order = [str(v) for v in x_order_int]
+        df[x_col] = df[x_col].astype(int).astype(str)
+    except Exception:
+        # fallback categorical
+        x_order = sorted([str(v) for v in x_vals])
+        x_order_int = None
+        df[x_col] = df[x_col].astype(str)
+
+    df[x_col] = pd.Categorical(df[x_col], categories=x_order, ordered=True)
+
+    # ---- Figure/Axes ----
+    plt.figure(figsize=figsize)
+    ax = plt.gca()
+    ax.set_axisbelow(True)
+
+    # ---- Paper-consistent LaTeX axis labels ----
+    x_label_latex = r'$\ell_k$ (mm)'
+
+    if is_grad:
+        base = r'\mathcal{S}_{\mathrm{cohort}}^{G}(\ell_k)'
+        units = r'\mathrm{(Gy\,mm^{-1})}'
+    else:
+        base = r'\mathcal{S}_{\mathrm{cohort}}^{D}(\ell_k)'
+        units = r'\mathrm{(Gy)}'
+
+    # this effectively does nothing for now because we dont look at the non-absolute differences 
+    if y_is_abs:
+        y_label_latex = rf'${base}\ {units}$'
+    else:
+        y_label_latex = rf'${base}\ {units}$'
+
+    ax.set_xlabel(xlabel if xlabel else x_label_latex, fontsize=axis_label_font_size)
+    ax.set_ylabel(ylabel if ylabel else y_label_latex, fontsize=axis_label_font_size)
+
+    # y tick formatting
+    if y_tick_decimals is not None:
+        fmt = f'{{x:.{int(y_tick_decimals)}f}}'
+        ax.yaxis.set_major_formatter(StrMethodFormatter(fmt))
+        ax.get_yaxis().get_offset_text().set_visible(False)
+
+    ax.tick_params(axis="both", which="both", labelsize=tick_label_font_size)
+
+    # ---- y-limits ----
+    if y_min_fixed is not None:
+        y_min = y_min_fixed
+    elif y_trim:
+        y_min = df[y_col].quantile(y_min_quantile)
+    else:
+        y_min = df[y_col].min()
+
+    if y_max_fixed is not None:
+        y_max = y_max_fixed
+    elif y_trim:
+        max_qs = [
+            df.loc[df[x_col] == xv, y_col].quantile(y_max_quantile)
+            for xv in x_order
+            if (df[x_col] == xv).any()
+        ]
+        y_max = max(max_qs) if max_qs else df[y_col].quantile(y_max_quantile)
+    else:
+        y_max = df[y_col].max()
+
+    # ---- base plot (cohort pooled boxes/violins) ----
+    if violin_or_box == "violin":
+        vp = sns.violinplot(
+            data=df, x=x_col, y=y_col,
+            order=x_order,
+            inner=None, color=box_color,
+            ax=ax, linewidth=0.8
+        )
+        # violin bodies are in collections
+        for c in vp.collections:
+            c.set_alpha(box_alpha)
 
 
+
+    elif violin_or_box == "box":
+        bp = sns.boxplot(
+            data=df, x=x_col, y=y_col,
+            order=x_order,
+            ax=ax,
+            showfliers=False,
+
+            # thicker outlines for the box, whiskers, caps
+            linewidth=1.3,
+            boxprops=dict(
+                facecolor=box_color,
+                edgecolor="black",
+                linewidth=1.3,
+            ),
+            whiskerprops=dict(
+                color="black",
+                linewidth=1.3,
+            ),
+            capprops=dict(
+                color="black",
+                linewidth=1.3,
+            ),
+
+            # really emphasize the median line
+            medianprops=dict(
+                color="black",
+                linewidth=2.0,
+            ),
+        )
+
+        # keep your alpha control on the fill
+        for patch in bp.artists:
+            patch.set_alpha(box_alpha)
+
+
+    else:
+        raise ValueError("`violin_or_box` must be either 'violin' or 'box'")
+
+    # ---- optional points (behind lines) ----
+    if show_points:
+        sns.stripplot(
+            data=df, x=x_col, y=y_col,
+            order=x_order,
+            jitter=0.25, size=3, alpha=0.25, color="black",
+            linewidth=0.0, ax=ax, zorder=2
+        )
+
+    # ---- global cohort trend line(s) ----
+    # keep this prominent (black with white stroke)
+    global_line_kws = dict(
+        zorder=10, linewidth=2.8,
+        path_effects=[pe.Stroke(linewidth=4.5, foreground="white"), pe.Normal()]
+    )
+
+    if trend_lines:
+        if "mean" in trend_lines:
+            sns.lineplot(
+                data=df, x=x_col, y=y_col,
+                estimator="mean", errorbar=errorbar_lineplot_mean,
+                color="black", label=None,
+                ax=ax, sort=False, **global_line_kws
+            )
+        if "median" in trend_lines:
+            sns.lineplot(
+                data=df, x=x_col, y=y_col,
+                estimator="median", errorbar=errorbar_lineplot_median,
+                color="dimgray", label=None,
+                ax=ax, sort=False, **global_line_kws
+            )
+
+    # ---- per-(Patient ID, Bx index) mean curves (optional) ----
+    if show_pair_mean_curves:
+        pid_col, bxi_col = pair_cols
+        if pid_col not in df.columns or bxi_col not in df.columns:
+            raise ValueError(f"pair_cols {pair_cols} not found in df columns")
+
+        df_pairs = df.copy()
+        if pairs_filter is not None:
+            df_pairs = df_pairs[df_pairs[[pid_col, bxi_col]].apply(tuple, axis=1).isin(pairs_filter)]
+
+        df_pairs["pair_id"] = df_pairs[pid_col].astype(str) + "-" + df_pairs[bxi_col].astype(str)
+
+        agg_func = "mean" if pair_mean_estimator == "mean" else "median"
+        pair_curve = (
+            df_pairs.groupby(["pair_id", x_col], dropna=False, observed=False)[y_col]
+            .agg(agg_func)
+            .reset_index()
+        )
+
+        if include_pair_curves_in_ylim and not pair_curve.empty:
+            # robust control via quantile (1.0 uses max)
+            pair_ymax = float(pair_curve[y_col].quantile(pair_curves_ylim_quantile))
+            if np.isfinite(pair_ymax):
+                y_max = max(y_max, pair_ymax)
+
+        pair_ids = pair_curve["pair_id"].unique().tolist()
+        if pair_ids:
+            colors = sns.color_palette(pair_line_palette, n_colors=len(pair_ids))
+
+            # optional outline for pair curves (default off)
+            pair_pe = (
+                [pe.Stroke(linewidth=pair_line_width + 1.2, foreground="white"), pe.Normal()]
+                if pair_line_outline else
+                None
+            )
+
+            for idx, pair in enumerate(pair_ids):
+                sub = pair_curve[pair_curve["pair_id"] == pair].copy()
+                # ensure same ordered categorical x
+                sub[x_col] = pd.Categorical(sub[x_col].astype(str), categories=x_order, ordered=True)
+                sub = sub.sort_values(x_col)
+
+                ax.plot(
+                    sub[x_col].values,
+                    sub[y_col].values,
+                    color=colors[idx],
+                    alpha=pair_line_alpha,
+                    linewidth=pair_line_width,
+                    zorder=9,
+                    path_effects=pair_pe,
+                    label=pair if show_pair_legend else None
+                )
+
+            if show_pair_legend:
+                handles, labels = ax.get_legend_handles_labels()
+                if len(labels) > max_legend_pairs:
+                    handles = handles[:max_legend_pairs]
+                    labels = labels[:max_legend_pairs]
+                    labels[-1] = labels[-1] + " …"
+                ax.legend(handles, labels, loc="upper right", fontsize=max(tick_label_font_size - 2, 8))
+
+    """
+    # ---- counts / annotation box ----
+    if annotate_counts:
+        counts = df.groupby([x_col], dropna=False, observed=False)[y_col].count()
+
+        if annotation_box:
+            ann_text = "\n".join([f"{xv}: n={int(n)}" for xv, n in counts.items()])
+            ax.annotate(
+                ann_text, xy=(1.02, 0.5), xycoords="axes fraction",
+                va="center", ha="left", fontsize=tick_label_font_size,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7)
+            )
+    """
+    # ---- counts / annotation box ----
+    if annotate_counts:
+        # Biopsy counts per ℓ_k
+        counts_bx = (
+            df.dropna(subset=[x_col, "Patient ID", "Bx index"])
+              .groupby(x_col, dropna=False, observed=False)[["Patient ID", "Bx index"]]
+              .apply(lambda g: g.drop_duplicates().shape[0])
+        )
+
+        # Total sample counts per ℓ_k (rows per box)
+        counts_rows = df.groupby(x_col, dropna=False, observed=False)[y_col].count()
+
+        if annotation_box:
+            # side-box behaviour
+            ann_text = "\n".join(
+                [rf"{xv}: $N_p={int(n)}$" for xv, n in counts_rows.items()]
+            )
+            ax.annotate(
+                ann_text, xy=(1.02, 0.5), xycoords="axes fraction",
+                va="center", ha="left", fontsize=tick_label_font_size,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7)
+            )
+        else:
+            # text directly under each ℓ_k tick, rotated and on two lines
+            x_positions = {cat: i for i, cat in enumerate(x_order)}
+            trans = ax.get_xaxis_transform()
+            y_text = -0.16   # a bit lower so it clears the tick labels
+
+            for xv in x_order:
+                cat = str(xv)
+                if cat not in x_positions:
+                    continue
+
+                x_idx = x_positions[cat]
+                n_bx = int(counts_bx.get(xv, 0))
+                n_rows = int(counts_rows.get(xv, 0))
+
+                label_text = rf"$N_b={n_bx}$" + ", " + rf"$N_p={n_rows}$"
+
+                ax.text(
+                    x_idx,
+                    y_text,
+                    label_text,
+                    transform=trans,
+                    ha="right",
+                    va="top",
+                    fontsize=max(tick_label_font_size - 4, 8),
+                    rotation=35,
+                    rotation_mode="anchor",
+                    clip_on=False,
+                )
+
+
+
+
+
+    # ---- title / limits / grid ----
+    if title:
+        ax.set_title(title, fontsize=title_font_size)
+
+    y_span = (y_max - y_min) if np.isfinite(y_max - y_min) else 1.0
+    ax.set_ylim(y_min - 0.05 * y_span, y_max * (1.0 + ylim_top_pad))
+
+    ax.grid(True)
+
+    # display integer tick labels if we have them
+    if x_order_int is not None:
+        ax.set_xticks(np.arange(len(x_order)))
+        ax.set_xticklabels(x_order_int)
+
+
+    plt.tight_layout()
+
+    # ---- save ----
+    png_path = os.path.join(save_dir, f"{file_name}.png")
+    svg_path = os.path.join(save_dir, f"{file_name}.svg")
+    plt.savefig(png_path, dpi=dpi)
+    plt.savefig(svg_path)
+    plt.close()
+
+    print(f"Plot saved as:\n - {png_path}\n - {svg_path}")
 
 
 
@@ -7528,8 +8891,8 @@ def plot_biopsy_voxel_trial_boxplots_dual(
     # labels
     is_grad = 'grad' in metric.lower()
     if label_style == 'math':
-        core_signed = r"$\Delta^G_{b,v,i}$" if is_grad else r"$\Delta_{b,v,i}$"
-        core_abs    = r"$|\Delta^G_{b,v,i}|$" if is_grad else r"$|\Delta_{b,v,i}|$"
+        core_signed = r"$\Delta^G_{b,v,t}$" if is_grad else r"$\Delta_{b,v,t}$"
+        core_abs    = r"$|\Delta^G_{b,v,t}|$" if is_grad else r"$|\Delta_{b,v,t}|$"
         unit = r"$(\mathrm{Gy/mm})$" if is_grad else r"$(\mathrm{Gy})$"
         ylab = f"{core_signed} / {core_abs} {unit}"
     else:
@@ -7680,10 +9043,10 @@ def plot_dual_boxplots_by_voxel_for_biopsies(
         # Proper mathtext units: Gy mm^{-1} for gradient
         if 'grad' in metric.lower():
             unit = r"$\mathrm{Gy}\ \mathrm{mm}^{-1}$"
-            return r"$\Delta^G_{b,v,i}$ / $|\Delta^G_{b,v,i}|$ " + unit if label_style == 'math' else "Δ/|Δ| (Gy mm^-1)"
+            return r"$\Delta^G_{b,v,t}$ / $|\Delta^G_{b,v,t}|$ " + unit if label_style == 'math' else "Δ/|Δ| (Gy mm^-1)"
         else:
             unit = r"$\mathrm{Gy}$"
-            return r"$\Delta_{b,v,i}$ / $|\Delta_{b,v,i}|$ " + unit if label_style == 'math' else "Δ/|Δ| (Gy)"
+            return r"$\Delta_{b,v,t}$ / $|\Delta_{b,v,t}|$ " + unit if label_style == 'math' else "Δ/|Δ| (Gy)"
 
 
     # ---------------- collect data ----------------
@@ -8010,9 +9373,9 @@ def plot_biopsy_voxel_dualboxes(
             # Dose grad unit in LaTeX: Gy mm^{-1}
             unit = r"$\mathrm{Gy}$" if 'grad' not in metric.lower() else r"$\mathrm{Gy}\ \mathrm{mm}^{-1}$"
             if 'grad' in metric.lower():
-                return r"$\Delta^G_{b,v,i}\ /\ |\Delta^G_{b,v,i}|$" + f" {unit}"
+                return r"$\Delta^G_{b,v,t}\ /\ |\Delta^G_{b,v,t}|$" + f" {unit}"
             else:
-                return r"$\Delta_{b,v,i}\ /\ |\Delta_{b,v,i}|$" + f" {unit}"
+                return r"$\Delta_{b,v,t}\ /\ |\Delta_{b,v,t}|$" + f" {unit}"
         else:
             return "Δ / |Δ| (Gy mm^-1)" if 'grad' in metric.lower() else "Δ / |Δ| (Gy)"
 
@@ -8362,9 +9725,9 @@ def plot_voxel_dualboxes_by_biopsy_lanes(
         is_grad = 'grad' in metric.lower()
         unit = r"(Gy mm$^{-1}$)" if is_grad else r"(Gy)"
         if is_grad:
-            left, right = r"$\Delta G_{b,v,i}$", r"$|\Delta G_{b,v,i}|$"
+            left, right = r"$\Delta G_{b,v,t}$", r"$|\Delta G_{b,v,t}|$"
         else:
-            left, right = r"$\Delta D_{b,v,i}$", r"$|\Delta D_{b,v,i}|$"
+            left, right = r"$\Delta D_{b,v,t}$", r"$|\Delta D_{b,v,t}|$"
         if mode == 'and':
             return f"{left} and {right}  {unit}"
         elif mode == 'comma':
@@ -9460,15 +10823,15 @@ def _y_label_for(y_col: str, label_style: str, j_symbol: str, idx_sub: tuple[str
     is_logabs = (y_col == "log1p|Delta|")
 
     if label_style != "latex":
-        if is_abs:     return f"|Delta|^{j_symbol}_{{{b},{v}}}"
-        if is_logabs:  return f"log(1+|Delta|)^{j_symbol}_{{{b},{v}}}"
-        return f"Delta^{j_symbol}_{{{b},{v}}}"
+        if is_abs:     return f"|Delta D|^{j_symbol}_{{{b},{v}}}"
+        if is_logabs:  return f"log(1+|Delta D|)^{j_symbol}_{{{b},{v}}}"
+        return f"Delta D^{j_symbol}_{{{b},{v}}}"
 
     if is_abs:
-        return rf"$|\Delta|^{{{j_symbol}}}_{{{b},{v}}}$"
+        return rf"$|\Delta D|^{{{j_symbol}}}_{{{b},{v}}}$"
     if is_logabs:
-        return rf"$\log(1+|\Delta|)^{{{j_symbol}}}_{{{b},{v}}}$"
-    return rf"$\Delta^{{{j_symbol}}}_{{{b},{v}}}$"
+        return rf"$\log(1+|\Delta D|)^{{{j_symbol}}}_{{{b},{v}}}$"
+    return rf"$\Delta D^{{{j_symbol}}}_{{{b},{v}}}$"
 
 def _legend_label_for(kind: str, y_col: str, label_style: str, idx_sub: tuple[str,str]) -> str:
     """
@@ -9922,3 +11285,3670 @@ def plot_signed_delta_vs_gradient_pkg_batch(
         label_style=label_style, idx_sub=idx_sub, j_symbol=j_symbol, grad_stat_tex=grad_stat_tex,
     )
     return per_svgs + [svg_c], per_pngs + [png_c], stats_csv_c
+
+
+
+def production_plot_path1_threshold_qa_summary(
+    df: pd.DataFrame,
+    metric_col: str = "metric",
+    threshold_col: str = "threshold",
+    qa_class_col: str = "qa_class",
+    p_pass_col: str = "p_pass",
+    n_trials_col: str = "n_trials",
+    figsize=(8, 8),
+    dpi: int = 300,
+    seaborn_style: str = "whitegrid",
+    seaborn_context: str = "paper",
+    font_scale: float = 1.2,
+    metric_order=None,
+    qa_class_order=None,
+    save_dir: Path | str | None = None,
+    file_name: str = "Fig_path1_threshold_qa_summary.png",
+    fig=None,
+    axes=None,
+    prob_pass_low_cut: float = 0.05,
+    prob_pass_high_cut: float = 0.95,
+    show_title: bool = True,
+    annotate_percents: bool = True,
+    percent_fmt: str = "{:.0f}%",
+    min_count_inside: int = 2,
+    min_frac_inside: float = 0.08,
+    # NOTE: keeping the name, but now means "legend above and wide"
+    legend_outside: bool = True,
+):
+    """
+    Path-1 QA overview figure.
+    - DVH metric labels use mathtext (e.g., D_{2%}, V_{150%})
+    - stacked bar order can put Confident pass on top
+    - legend can be wide + above the plot, with QA definitions
+    """
+    plt.ioff()
+    required_cols = {metric_col, threshold_col, qa_class_col, p_pass_col, n_trials_col}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Input df is missing required columns: {sorted(missing)}")
+
+    import matplotlib as mpl
+    from matplotlib.patches import Patch
+
+    with mpl.rc_context(
+        {
+            "text.usetex": False,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+            "axes.unicode_minus": True,
+        }
+    ):
+        df_plot = df.copy()
+
+        def _norm_qa(c):
+            c_str = str(c).strip().lower()
+            if "confident" in c_str and "pass" in c_str:
+                return "Confident pass"
+            if "confident" in c_str and "fail" in c_str:
+                return "Confident fail"
+            if "border" in c_str:
+                return "Borderline"
+            return str(c)
+
+        df_plot["_qa_class_plot"] = df_plot[qa_class_col].map(_norm_qa)
+
+        # --- DVH math label helpers ---
+        def _metric_math(m: str) -> str:
+            s = str(m)
+            if s.startswith("D_") and "%" in s:
+                sub = s.split("D_")[1].split("%")[0].strip()
+                return rf"$D_{{{sub}\%}}$"
+            if s.startswith("V_") and "%" in s:
+                sub = s.split("V_")[1].split("%")[0].strip()
+                return rf"$V_{{{sub}\%}}$"
+            return rf"$\mathrm{{{s}}}$"
+
+        def _metric_is_percent(m: str) -> bool:
+            s = str(m)
+            return s.startswith("V_") and "%" in s
+
+        def _thr_str(thr) -> str:
+            return f"{int(thr)}" if isinstance(thr, (int, np.integer)) else f"{thr:g}"
+
+        def _make_criterion(row) -> str:
+            m = row[metric_col]
+            t = _thr_str(row[threshold_col])
+            mm = _metric_math(m)
+            if _metric_is_percent(m):
+                return rf"{mm}$\ \geq\ {t}\%$"
+            else:
+                return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
+
+        df_plot["criterion_pretty"] = df_plot.apply(_make_criterion, axis=1)
+
+        if metric_order is None:
+            metric_order = ["D_2% (Gy)", "D_50% (Gy)", "D_98% (Gy)", "V_150% (%)"]
+            metric_order = [m for m in metric_order if m in df_plot[metric_col].unique()]
+
+        criterion_order: list[str] = []
+        for m in metric_order:
+            sub = df_plot[df_plot[metric_col] == m]
+            if not sub.empty:
+                criterion_order.append(_make_criterion(sub.iloc[0]))
+        if not criterion_order:
+            criterion_order = list(df_plot["criterion_pretty"].unique())
+
+        if qa_class_order is None:
+            # keep this order for legend ordering (pass first)
+            qa_class_order = ["Confident pass", "Borderline", "Confident fail"]
+            qa_class_order = [c for c in qa_class_order if c in df_plot["_qa_class_plot"].unique()]
+            for c in sorted(df_plot["_qa_class_plot"].unique()):
+                if c not in qa_class_order:
+                    qa_class_order.append(c)
+
+        # IMPORTANT: stack order (bottom -> top). We want Confident pass on TOP.
+        # So draw it last.
+        stack_order = [c for c in ["Confident fail", "Borderline", "Confident pass"] if c in qa_class_order]
+        # include any unexpected classes at the bottom by default
+        for c in qa_class_order:
+            if c not in stack_order:
+                stack_order.insert(0, c)
+
+        qa_palette = {
+            "Confident pass": "#66c2a5",
+            "Borderline": "#fc8d62",
+            "Confident fail": "#8da0cb",
+        }
+
+        # legend labels with definitions
+        hi = float(prob_pass_high_cut)
+        lo = float(prob_pass_low_cut)
+        legend_label = {
+            "Confident pass": rf"Confident pass ($p_{{b,r}}\geq {hi:.2f}$)",
+            "Borderline":     rf"Borderline ($ {lo:.2f}<p_{{b,r}}<{hi:.2f}$)",
+            "Confident fail": rf"Confident fail ($p_{{b,r}}\leq {lo:.2f}$)",
+        }
+
+        with sns.axes_style(seaborn_style), sns.plotting_context(seaborn_context, font_scale=font_scale):
+            if fig is None or axes is None:
+                fig, axes = plt.subplots(
+                    2, 1, figsize=figsize, dpi=dpi, sharex=False,
+                    gridspec_kw={"height_ratios": [1, 1.2]},
+                )
+            ax_bar, ax_box = axes
+
+            counts = (
+                df_plot.groupby(["criterion_pretty", "_qa_class_plot"])
+                .size()
+                .unstack("_qa_class_plot")
+                .reindex(index=criterion_order)
+                .fillna(0)
+            )
+
+            # ensure all columns exist
+            for c in qa_class_order:
+                if c not in counts.columns:
+                    counts[c] = 0
+            counts = counts[qa_class_order]
+            totals = counts.sum(axis=1).to_numpy()
+
+            default_palette = sns.color_palette("Set2", n_colors=len(qa_class_order))
+            class_colors = {cls: qa_palette.get(cls, default_palette[i]) for i, cls in enumerate(qa_class_order)}
+
+            bottoms = np.zeros(len(counts))
+            x = np.arange(len(counts.index))
+
+            # ---- stacked bar (using stack_order) ----
+            for cls in stack_order:
+                vals = counts[cls].values
+                bars = ax_bar.bar(
+                    x, vals, bottom=bottoms,
+                    color=class_colors.get(cls, "0.7"),
+                    edgecolor="black",
+                    linewidth=0.8,
+                    label=cls,  # (we will build our own legend handles)
+                )
+
+                if annotate_percents:
+                    for xi, (rect, v, btm, tot) in enumerate(zip(bars, vals, bottoms, totals)):
+                        if tot <= 0 or v <= 0:
+                            continue
+                        pct = 100.0 * float(v) / float(tot)
+                        txt = percent_fmt.format(pct) + f", {v:.0f}"
+
+                        y_mid = float(btm) + float(v) / 2.0
+                        x_mid = rect.get_x() + rect.get_width() / 2.0
+                        inside_ok = (int(v) >= int(min_count_inside)) and ((v / tot) >= float(min_frac_inside))
+
+                        if inside_ok:
+                            ax_bar.text(
+                                x_mid, y_mid, txt,
+                                ha="center", va="center",
+                                fontsize="small", color="black", zorder=20
+                            )
+                        else:
+                            # spread outside labels a bit
+                            is_bottom = (cls == stack_order[0])
+                            is_top = (cls == stack_order[-1])
+                            dx = (-0.18 if is_bottom else (0.18 if is_top else 0.0))
+                            dy = 0.6 + 0.25 * (xi % 2)
+                            ax_bar.annotate(
+                                txt,
+                                xy=(x_mid, y_mid),
+                                xytext=(x_mid + dx, float(btm) + float(v) + dy),
+                                ha="center", va="bottom",
+                                fontsize="small",
+                                bbox=dict(
+                                    boxstyle="round,pad=0.15",
+                                    facecolor="white",
+                                    edgecolor="black",
+                                    alpha=0.9,
+                                ),
+                                arrowprops=dict(arrowstyle="-", lw=0.8, color="black"),
+                                zorder=30,
+                            )
+
+                bottoms = bottoms + vals
+
+            ax_bar.set_ylabel("Number of biopsies")
+
+            # multi-line labels: criterion on line 1, n_b on line 2
+            xticklabels = [
+                f"{crit}\n$n_b={int(t)}$"
+                for crit, t in zip(counts.index, totals)
+            ]
+
+            ax_bar.set_xticks(x)
+            ax_bar.set_xticklabels(xticklabels, rotation=0)
+
+
+
+            if show_title:
+                ax_bar.set_title("Path-1 per-biopsy threshold QA classification", fontsize="medium")
+
+            ymax = max(1.0, float(totals.max()) * 1.15)
+            ax_bar.set_ylim(0, ymax)
+
+            # ---- Legend: wide + above ----
+            # Build handles in desired legend order (pass, borderline, fail)
+            handles = []
+            labels = []
+            for cls in ["Confident pass", "Borderline", "Confident fail"]:
+                if cls in qa_class_order:
+                    handles.append(Patch(facecolor=class_colors.get(cls, "0.7"), edgecolor="black"))
+                    labels.append(legend_label.get(cls, cls))
+            # add any unexpected classes
+            for cls in qa_class_order:
+                if cls not in ("Confident pass", "Borderline", "Confident fail"):
+                    handles.append(Patch(facecolor=class_colors.get(cls, "0.7"), edgecolor="black"))
+                    labels.append(cls)
+
+            if legend_outside and handles:
+                leg = fig.legend(
+                    handles, labels,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 0.99),   # <-- was 1.02
+                    ncol=min(len(labels), 3),
+                    frameon=True,
+                    framealpha=0.95,
+                    fontsize="small",
+                    borderaxespad=0.2,
+                )
+
+                leg.get_frame().set_facecolor("white")
+                leg.get_frame().set_edgecolor("black")
+
+            # ---- Bottom panel: box + jitter ----
+            df_plot["criterion_pretty"] = pd.Categorical(
+                df_plot["criterion_pretty"], categories=criterion_order, ordered=True
+            )
+
+            sns.boxplot(
+                data=df_plot, x="criterion_pretty", y=p_pass_col, ax=ax_box,
+                whis=(5, 95), width=0.6, fliersize=0,
+                color="white", linewidth=0.8,
+            )
+
+            sns.stripplot(
+                data=df_plot, x="criterion_pretty", y=p_pass_col,
+                hue="_qa_class_plot",
+                hue_order=[c for c in ["Confident pass", "Borderline", "Confident fail"] if c in qa_class_order],
+                dodge=False, jitter=True, size=4, alpha=0.8,
+                ax=ax_box, palette=class_colors, zorder=10,
+            )
+
+            ax_box.axhline(prob_pass_high_cut, linestyle="--", linewidth=0.8, color="black")
+            ax_box.axhline(prob_pass_low_cut, linestyle="--", linewidth=0.8, color="black")
+
+            ax_box.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+            ax_box.set_xlabel("Threshold criterion")
+            ax_box.set_ylim(-0.05, 1.05)
+            ax_box.tick_params(axis="x", labelrotation=0)
+
+            # Use the same multi-line labels (criterion + n_b) on the boxplot
+            ax_box.set_xticks(np.arange(len(xticklabels)))
+            ax_box.set_xticklabels(xticklabels, rotation=0)
+
+
+
+            if ax_box.get_legend() is not None:
+                ax_box.get_legend().remove()
+
+            ax_bar.text(-0.05, 1.02, "A", transform=ax_bar.transAxes,
+                        fontsize="large", fontweight="bold", va="bottom")
+            ax_box.text(-0.05, 1.02, "B", transform=ax_box.transAxes,
+                        fontsize="large", fontweight="bold", va="bottom")
+
+            # layout: leave room for top legend
+            if legend_outside:
+                fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+            else:
+                fig.tight_layout()
+
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                fig.savefig(save_dir / file_name, dpi=dpi, bbox_inches="tight")
+
+        return fig, (ax_bar, ax_box)
+
+
+
+def production_plot_path1_threshold_qa_summary_v2(
+    df: pd.DataFrame,
+    metric_col: str = "metric",
+    threshold_col: str = "threshold",
+    qa_class_col: str = "qa_class",
+    p_pass_col: str = "p_pass",
+    n_trials_col: str = "n_trials",
+    figsize=(8, 8),
+    dpi: int = 300,
+    seaborn_style: str = "ticks",   # STYLE: slightly more minimal than whitegrid
+    seaborn_context: str = "paper",
+    font_scale: float = 1.2,
+    metric_order=None,
+    qa_class_order=None,
+    save_dir: Path | str | None = None,
+    file_name: str = "Fig_path1_threshold_qa_summary.png",
+    fig=None,
+    axes=None,
+    prob_pass_low_cut: float = 0.05,
+    prob_pass_high_cut: float = 0.95,
+    show_title: bool = True,
+    annotate_percents: bool = True,
+    percent_fmt: str = "{:.0f}%",
+    min_count_inside: int = 2,
+    min_frac_inside: float = 0.08,
+    legend_outside: bool = True,
+):
+    """
+    Path-1 QA overview figure with a more minimalist, paper-style aesthetic.
+    """
+    plt.ioff()
+    required_cols = {metric_col, threshold_col, qa_class_col, p_pass_col, n_trials_col}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Input df is missing required columns: {sorted(missing)}")
+
+    import matplotlib as mpl
+    from matplotlib.patches import Patch
+
+    with mpl.rc_context(
+        {
+            "text.usetex": False,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+            "axes.unicode_minus": True,
+        }
+    ):
+        df_plot = df.copy()
+
+        def _norm_qa(c):
+            c_str = str(c).strip().lower()
+            if "confident" in c_str and "pass" in c_str:
+                return "Confident pass"
+            if "confident" in c_str and "fail" in c_str:
+                return "Confident fail"
+            if "border" in c_str:
+                return "Borderline"
+            return str(c)
+
+        df_plot["_qa_class_plot"] = df_plot[qa_class_col].map(_norm_qa)
+
+        # --- DVH math label helpers ---
+        def _metric_math(m: str) -> str:
+            s = str(m)
+            if s.startswith("D_") and "%" in s:
+                sub = s.split("D_")[1].split("%")[0].strip()
+                return rf"$D_{{{sub}\%}}$"
+            if s.startswith("V_") and "%" in s:
+                sub = s.split("V_")[1].split("%")[0].strip()
+                return rf"$V_{{{sub}\%}}$"
+            return rf"$\mathrm{{{s}}}$"
+
+        def _metric_is_percent(m: str) -> bool:
+            s = str(m)
+            return s.startswith("V_") and "%" in s
+
+        def _thr_str(thr) -> str:
+            return f"{int(thr)}" if isinstance(thr, (int, np.integer)) else f"{thr:g}"
+
+        def _make_criterion(row) -> str:
+            m = row[metric_col]
+            t = _thr_str(row[threshold_col])
+            mm = _metric_math(m)
+            if _metric_is_percent(m):
+                return rf"{mm}$\ \geq\ {t}\%$"
+            else:
+                return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
+
+        df_plot["criterion_pretty"] = df_plot.apply(_make_criterion, axis=1)
+
+        if metric_order is None:
+            metric_order = ["D_2% (Gy)", "D_50% (Gy)", "D_98% (Gy)", "V_150% (%)"]
+            metric_order = [m for m in metric_order if m in df_plot[metric_col].unique()]
+
+        criterion_order: list[str] = []
+        for m in metric_order:
+            sub = df_plot[df_plot[metric_col] == m]
+            if not sub.empty:
+                criterion_order.append(_make_criterion(sub.iloc[0]))
+        if not criterion_order:
+            criterion_order = list(df_plot["criterion_pretty"].unique())
+
+        if qa_class_order is None:
+            qa_class_order = ["Confident pass", "Borderline", "Confident fail"]
+            qa_class_order = [c for c in qa_class_order if c in df_plot["_qa_class_plot"].unique()]
+            for c in sorted(df_plot["_qa_class_plot"].unique()):
+                if c not in qa_class_order:
+                    qa_class_order.append(c)
+
+        # bottom -> top
+        stack_order = [c for c in ["Confident fail", "Borderline", "Confident pass"] if c in qa_class_order]
+        for c in qa_class_order:
+            if c not in stack_order:
+                stack_order.insert(0, c)
+
+        # STYLE: slightly more muted palette (still 3 distinct hues)
+        qa_palette = {
+            "Confident pass": "#4f9685",   # muted teal
+            "Borderline":     "#d29168",   # muted orange
+            "Confident fail": "#6a78a5",   # muted blue
+        }
+
+        hi = float(prob_pass_high_cut)
+        lo = float(prob_pass_low_cut)
+        legend_label = {
+            "Confident pass": rf"Confident pass ($p_{{b,r}}\geq {hi:.2f}$)",
+            "Borderline":     rf"Borderline ($ {lo:.2f}<p_{{b,r}}<{hi:.2f}$)",
+            "Confident fail": rf"Confident fail ($p_{{b,r}}\leq {lo:.2f}$)",
+        }
+
+        with sns.axes_style(seaborn_style), sns.plotting_context(seaborn_context, font_scale=font_scale):
+            if fig is None or axes is None:
+                fig, axes = plt.subplots(
+                    2, 1, figsize=figsize, dpi=dpi, sharex=False,
+                    gridspec_kw={"height_ratios": [1, 1.2]},
+                )
+            ax_bar, ax_box = axes
+
+            counts = (
+                df_plot.groupby(["criterion_pretty", "_qa_class_plot"])
+                .size()
+                .unstack("_qa_class_plot")
+                .reindex(index=criterion_order)
+                .fillna(0)
+            )
+
+            for c in qa_class_order:
+                if c not in counts.columns:
+                    counts[c] = 0
+            counts = counts[qa_class_order]
+            totals = counts.sum(axis=1).to_numpy()
+
+            default_palette = sns.color_palette("Set2", n_colors=len(qa_class_order))
+            class_colors = {cls: qa_palette.get(cls, default_palette[i]) for i, cls in enumerate(qa_class_order)}
+
+            bottoms = np.zeros(len(counts))
+            x = np.arange(len(counts.index))
+
+            # STYLE: slightly narrower bars, light edges
+            bar_width = 0.6
+
+            # subtle grid
+            ax_bar.set_axisbelow(True)
+            #ax_bar.yaxis.grid(True, linestyle=":", linewidth=0.5, color="0.8")
+            ax_bar.xaxis.grid(False)
+
+            # ---- stacked bar ----
+            for cls in stack_order:
+                vals = counts[cls].values
+                bars = ax_bar.bar(
+                    x,
+                    vals,
+                    width=bar_width,
+                    bottom=bottoms,
+                    color=class_colors.get(cls, "0.7"),
+                    edgecolor="0.7",         # STYLE: light grey, not black
+                    linewidth=0.5,
+                    label=cls,
+                )
+
+                if annotate_percents:
+                    for xi, (rect, v, btm, tot) in enumerate(zip(bars, vals, bottoms, totals)):
+                        if tot <= 0 or v <= 0:
+                            continue
+                        pct = 100.0 * float(v) / float(tot)
+                        txt = percent_fmt.format(pct) + f", {v:.0f}"
+
+                        y_mid = float(btm) + float(v) / 2.0
+                        x_mid = rect.get_x() + rect.get_width() / 2.0
+                        inside_ok = (int(v) >= int(min_count_inside)) and ((v / tot) >= float(min_frac_inside))
+
+                        if inside_ok:
+                            ax_bar.text(
+                                x_mid,
+                                y_mid,
+                                txt,
+                                ha="center",
+                                va="center",
+                                fontsize="x-small",   # STYLE
+                                color="black",
+                                zorder=20,
+                            )
+                        else:
+                            # STYLE: lighter, cleaner annotation box
+                            is_bottom = (cls == stack_order[0])
+                            is_top = (cls == stack_order[-1])
+                            dx = (-0.18 if is_bottom else (0.18 if is_top else 0.0))
+                            dy = 0.4 + 0.2 * (xi % 2)
+                            ax_bar.annotate(
+                                txt,
+                                xy=(x_mid, y_mid),
+                                xytext=(x_mid + dx, float(btm) + float(v) + dy),
+                                ha="center",
+                                va="bottom",
+                                fontsize="x-small",
+                                bbox=dict(
+                                    boxstyle="round,pad=0.15",
+                                    facecolor="white",
+                                    edgecolor="0.7",
+                                    linewidth=0.5,
+                                    alpha=0.9,
+                                ),
+                                arrowprops=dict(
+                                    arrowstyle="-",
+                                    lw=0.5,
+                                    color="0.5",
+                                ),
+                                zorder=30,
+                            )
+
+                bottoms = bottoms + vals
+
+            ax_bar.set_ylabel("Number of biopsies")
+
+            xticklabels = [
+                f"{crit}\n$n_b={int(t)}$"
+                for crit, t in zip(counts.index, totals)
+            ]
+
+            ax_bar.set_xticks(x)
+            ax_bar.set_xticklabels(xticklabels, rotation=0)
+
+            # STYLE: slightly smaller title and less bold
+            if show_title:
+                ax_bar.set_title(
+                    "Per-biopsy threshold QA classification",
+                    fontsize="medium",
+                    fontweight="normal",
+                )
+
+            ymax = max(1.0, float(totals.max()) * 1.15)
+            ax_bar.set_ylim(0, ymax)
+
+            # clean spines
+            for spine in ["top", "right"]:
+                ax_bar.spines[spine].set_visible(False)
+
+            # ---- Legend ----
+            handles = []
+            labels = []
+            for cls in ["Confident pass", "Borderline", "Confident fail"]:
+                if cls in qa_class_order:
+                    handles.append(Patch(facecolor=class_colors.get(cls, "0.7"), edgecolor="0.5", linewidth=0.5))
+                    labels.append(legend_label.get(cls, cls))
+            for cls in qa_class_order:
+                if cls not in ("Confident pass", "Borderline", "Confident fail"):
+                    handles.append(Patch(facecolor=class_colors.get(cls, "0.7"), edgecolor="0.5", linewidth=0.5))
+                    labels.append(cls)
+
+            if legend_outside and handles:
+                leg = fig.legend(
+                    handles,
+                    labels,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 0.99),
+                    ncol=min(len(labels), 3),
+                    frameon=False,          # STYLE: frameless legend
+                    fontsize="small",
+                    borderaxespad=0.2,
+                )
+
+            # STYLE: subtle grid
+            ax_bar.yaxis.grid(False)
+
+
+            # ---- Bottom panel: box + jitter ----
+            df_plot["criterion_pretty"] = pd.Categorical(
+                df_plot["criterion_pretty"], categories=criterion_order, ordered=True
+            )
+
+            sns.boxplot(
+                data=df_plot,
+                x="criterion_pretty",
+                y=p_pass_col,
+                ax=ax_box,
+                whis=(5, 95),
+                width=0.6,
+                fliersize=0,
+                color="white",
+                linewidth=0.8,
+            )
+
+            sns.stripplot(
+                data=df_plot,
+                x="criterion_pretty",
+                y=p_pass_col,
+                hue="_qa_class_plot",
+                hue_order=[c for c in ["Confident pass", "Borderline", "Confident fail"] if c in qa_class_order],
+                dodge=False,
+                jitter=True,
+                size=4,
+                alpha=0.8,
+                ax=ax_box,
+                palette=class_colors,
+                zorder=10,
+            )
+
+            ax_box.axhline(prob_pass_high_cut, linestyle="--", linewidth=0.8, color="black")
+            ax_box.axhline(prob_pass_low_cut, linestyle="--", linewidth=0.8, color="black")
+
+            ax_box.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+            ax_box.set_xlabel("Threshold criterion")
+            ax_box.set_ylim(-0.05, 1.05)
+            ax_box.tick_params(axis="x", labelrotation=0)
+
+            ax_box.set_xticks(np.arange(len(xticklabels)))
+            ax_box.set_xticklabels(xticklabels, rotation=0)
+
+            # keep, but make subtle on box panel
+            ax_box.set_axisbelow(True)
+            ax_box.yaxis.grid(True, linestyle=":", linewidth=0.4, color="0.9")
+
+            if ax_box.get_legend() is not None:
+                ax_box.get_legend().remove()
+
+            for spine in ["top", "right"]:
+                ax_box.spines[spine].set_visible(False)
+
+            ax_bar.text(-0.05, 1.02, "A", transform=ax_bar.transAxes,
+                        fontsize="large", fontweight="bold", va="bottom")
+            ax_box.text(-0.05, 1.02, "B", transform=ax_box.transAxes,
+                        fontsize="large", fontweight="bold", va="bottom")
+
+            if legend_outside:
+                fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+            else:
+                fig.tight_layout()
+
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                fig.savefig(save_dir / file_name, dpi=dpi, bbox_inches="tight")
+
+        return fig, (ax_bar, ax_box)
+
+
+def production_plot_path1_p_pass_vs_margin_by_metric(
+    df: pd.DataFrame,
+    metric_col: str = "metric",
+    threshold_col: str = "threshold",
+    margin_col: str = "distance_from_threshold_nominal",
+    p_pass_col: str = "p_pass",
+    n_trials_col: str = "n_trials",
+    qa_class_col: str = "qa_class",
+    figsize=(10, 8),
+    dpi: int = 300,
+    seaborn_style: str = "whitegrid",
+    seaborn_context: str = "paper",
+    font_scale: float = 1.1,
+    metric_order=None,
+    save_dir: Path | str | None = None,
+    file_name: str = "Fig_path1_p_pass_vs_margin_by_metric.png",
+    add_logistic_fit: bool = True,
+    logistic_min_points: int = 6,
+    fig=None,
+    axes=None,
+    prob_pass_low_cut: float = 0.05,
+    prob_pass_high_cut: float = 0.95,
+    show_panel_titles: bool = True,
+    include_rule_in_xlabel: bool = True,   # <--- NEW
+    annotate_fit_stats: bool = False,
+    # supports: "n", "mcfadden_r2", "aic", "wrmse", "brier"
+    fit_stats: tuple[str, ...] = ("n", "mcfadden_r2"),
+    fit_stats_loc: tuple[float, float] = (0.70, 0.45),  # fallback if auto fails
+    show_required_margin_line: bool = False,
+    required_prob: float = 0.95,
+    required_line_kwargs: dict | None = None,
+    # NEW: precomputed logistic coefficients / scores
+    coef_df: pd.DataFrame | None = None,
+    coef_metric_col: str | None = None,
+    coef_threshold_col: str | None = None,
+):
+    """
+    Path-1 QA figure: p_{b,r} versus nominal margin δ_{b,r} per metric.
+
+    If `coef_df` is provided, the logistic curve, GOF metrics, and required
+    margin δ̂_p are all read from that table (no re-fitting in this function).
+
+    Otherwise, the function falls back to fitting a 1D logistic model
+    internally (previous behaviour).
+    """
+    plt.ioff()
+    required_cols = {metric_col, threshold_col, margin_col, p_pass_col, n_trials_col}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Input df is missing required columns: {sorted(missing)}")
+
+    import matplotlib as mpl
+    with mpl.rc_context(
+        {
+            "text.usetex": False,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+            "axes.unicode_minus": True,
+        }
+    ):
+        df_plot = df.copy()
+
+        def _norm_qa(c):
+            c_str = str(c).strip().lower()
+            if "confident" in c_str and "pass" in c_str:
+                return "Confident pass"
+            if "confident" in c_str and "fail" in c_str:
+                return "Confident fail"
+            if "border" in c_str:
+                return "Borderline"
+            return str(c)
+
+        if qa_class_col in df_plot.columns:
+            df_plot["_qa_class_plot"] = df_plot[qa_class_col].map(_norm_qa)
+        else:
+            df_plot["_qa_class_plot"] = "NA"
+
+        # --- DVH label / axis helpers ---
+        def _metric_math(m: str) -> str:
+            s = str(m)
+            if s.startswith("D_") and "%" in s:
+                sub = s.split("D_")[1].split("%")[0].strip()
+                return rf"$D_{{{sub}\%}}$"
+            if s.startswith("V_") and "%" in s:
+                sub = s.split("V_")[1].split("%")[0].strip()
+                return rf"$V_{{{sub}\%}}$"
+            return rf"$\mathrm{{{s}}}$"
+
+        def _metric_is_percent(m: str) -> bool:
+            s = str(m)
+            return s.startswith("V_") and "%" in s
+
+        def _thr_str(thr) -> str:
+            return f"{int(thr)}" if isinstance(thr, (int, np.integer)) else f"{thr:g}"
+
+        def _make_criterion(row) -> str:
+            m = row[metric_col]
+            t = _thr_str(row[threshold_col])
+            mm = _metric_math(m)
+            if _metric_is_percent(m):
+                return rf"{mm}$\ \geq\ {t}\%$"
+            return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
+
+        """
+        def _make_x_label(row) -> str:
+            m = row[metric_col]
+            t = _thr_str(row[threshold_col])
+            mm = _metric_math(m)
+            if _metric_is_percent(m):
+                return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t}%)"
+            return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t} Gy)"
+        """
+
+        def _make_x_label(row, rule_index: int, include_rule: bool = True) -> str:
+            """
+            Build x-axis label for a given metric/threshold row.
+
+            Example (with include_rule=True, rule_index=1):
+            "Nominal margin δ_{b,1} (r = 1 : D_{2%} ≥ 32 Gy)"
+            """
+            # main symbol δ_{b,1}
+            rule_sym = rf"\delta_{{b,{rule_index}}}"
+            label = rf"Nominal margin ${rule_sym}$"
+
+            if include_rule:
+                # existing criterion, e.g. "$D_{2\%}$\ \geq\ 32\,\mathrm{Gy}"
+                crit = _make_criterion(row)
+
+                # strip outer $ so we can embed it into one math block
+                crit_inner = crit.strip("$")
+
+                # one math environment: r = 1 : <criterion>
+                label += rf" ($r = {rule_index}: {crit_inner}$)"
+
+            return label
+
+
+
+        def _x_units_suffix(metric_name: str) -> str:
+            return "%" if _metric_is_percent(metric_name) else " Gy"
+
+        if metric_order is None:
+            metric_order = ["D_2% (Gy)", "D_50% (Gy)", "D_98% (Gy)", "V_150% (%)"]
+            metric_order = [m for m in metric_order if m in df_plot[metric_col].unique()]
+
+        n_metrics = len(metric_order)
+        nrows = 2 if n_metrics > 2 else 1
+        ncols = 2 if n_metrics > 1 else 1
+
+        qa_palette = {
+            "Confident pass": "#66c2a5",
+            "Borderline": "#fc8d62",
+            "Confident fail": "#8da0cb",
+        }
+
+        # --- optional statsmodels fallback (only if coef_df is None) ---
+        try:
+            import statsmodels.api as sm  # type: ignore
+        except Exception:
+            sm = None
+            add_logistic_fit_local = coef_df is not None
+        else:
+            add_logistic_fit_local = add_logistic_fit or (coef_df is not None)
+
+        def _fit_logit_1d(sub: pd.DataFrame):
+            if coef_df is not None:
+                return None, False
+            if sm is None or len(sub) < logistic_min_points:
+                return None, False
+            try:
+                X = sub[[margin_col]].to_numpy()
+                y = np.clip(sub[p_pass_col].to_numpy(), 1e-4, 1 - 1e-4)
+                w = sub[n_trials_col].to_numpy()
+                X_design = sm.add_constant(X, has_constant="add")
+                model = sm.GLM(y, X_design, family=sm.families.Binomial(), freq_weights=w)
+                res = model.fit()
+
+                X0 = np.ones((len(y), 1))
+                model0 = sm.GLM(y, X0, family=sm.families.Binomial(), freq_weights=w)
+                res0 = model0.fit()
+                return (res, res0), True
+            except Exception:
+                return None, False
+
+        def _required_margin_from_fit(res, p: float) -> float | None:
+            try:
+                p = float(p)
+                if not (0.0 < p < 1.0):
+                    return None
+                b0 = float(res.params[0])
+                b1 = float(res.params[1])
+                if abs(b1) < 1e-12:
+                    return None
+                logit = np.log(p / (1.0 - p))
+                return (logit - b0) / b1
+            except Exception:
+                return None
+
+        def _weighted_scores_from_fit(sub: pd.DataFrame, res):
+            try:
+                x = sub[margin_col].to_numpy(dtype=float)
+                y = sub[p_pass_col].to_numpy(dtype=float)
+                w = sub[n_trials_col].to_numpy(dtype=float)
+
+                ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(w) & (w > 0)
+                x, y, w = x[ok], y[ok], w[ok]
+                if x.size == 0:
+                    return None, None
+
+                Xd = sm.add_constant(x, has_constant="add")
+                yhat = np.asarray(res.predict(Xd), dtype=float)
+
+                e2 = (y - yhat) ** 2
+                wsum = float(np.sum(w))
+                if wsum <= 0:
+                    return None, None
+
+                wbrier = float(np.sum(w * e2) / wsum)
+                wrmse = float(np.sqrt(wbrier))
+                return wrmse, wbrier
+            except Exception:
+                return None, None
+
+        # --- annotation text builders ---
+        def _format_panel_box_from_coef(row_coef: pd.Series, metric_name: str, x_req: float | None) -> str:
+            parts: list[str] = []
+            for k in fit_stats:
+                kk = k.lower()
+
+                if kk in ("n", "n_pts", "npoints", "n_biopsies"):
+                    n_b = row_coef.get("n_biopsies", np.nan)
+                    if np.isfinite(n_b):
+                        parts.append(f"N={int(n_b):d}")
+
+                elif kk == "aic":
+                    aic = row_coef.get("aic", np.nan)
+                    if np.isfinite(aic):
+                        parts.append(f"AIC={aic:.1f}")
+
+                elif kk in ("mcfadden_r2", "mcfadden", "pseudo_r2", "r2"):
+                    r2 = row_coef.get("mcfadden_r2", np.nan)
+                    if np.isfinite(r2):
+                        parts.append(rf"$R^2_{{McF}}$={r2:.2f}")
+
+                elif kk in ("wrmse", "w_rmse", "rmse_w"):
+                    wrmse = row_coef.get("rmse_prob_w", np.nan)
+                    if np.isfinite(wrmse):
+                        parts.append("wRMSE=" + f"{wrmse:.3f}")
+
+                elif kk in ("brier", "wbrier", "w_brier"):
+                    wbrier = row_coef.get("brier_w", np.nan)
+                    if np.isfinite(wbrier):
+                        parts.append("wBrier=" + f"{wbrier:.3f}")
+
+            if show_required_margin_line and (x_req is not None) and np.isfinite(x_req):
+                suffix = _x_units_suffix(metric_name)
+                parts.append(rf"$\hat{{\delta}}_{{{required_prob:.2f}}}$={x_req:.1f}{suffix}")
+
+            return "\n".join(parts)
+
+        def _format_panel_box_from_fit(
+            *, sub: pd.DataFrame, res, res0, metric_name: str, x_req: float | None
+        ) -> str:
+            parts: list[str] = []
+
+            for k in fit_stats:
+                kk = k.lower()
+
+                if kk in ("n", "n_pts", "npoints"):
+                    parts.append(f"N={len(sub):d}")
+
+                elif kk == "aic":
+                    try:
+                        parts.append(f"AIC={res.aic:.1f}")
+                    except Exception:
+                        pass
+
+                elif kk in ("mcfadden_r2", "mcfadden", "pseudo_r2", "r2"):
+                    try:
+                        llf = float(res.llf)
+                        llnull = float(res0.llf)
+                        r2 = np.nan if llnull == 0 else (1.0 - (llf / llnull))
+                        parts.append(rf"$R^2_{{McF}}$={r2:.2f}")
+                    except Exception:
+                        pass
+
+                elif kk in ("wrmse", "w_rmse", "rmse_w"):
+                    wrmse, _ = _weighted_scores_from_fit(sub, res)
+                    if wrmse is not None and np.isfinite(wrmse):
+                        parts.append("wRMSE=" + f"{wrmse:.3f}")
+
+                elif kk in ("brier", "wbrier", "w_brier"):
+                    _, wbrier = _weighted_scores_from_fit(sub, res)
+                    if wbrier is not None and np.isfinite(wbrier):
+                        parts.append("wBrier=" + f"{wbrier:.3f}")
+
+            if show_required_margin_line and (x_req is not None) and np.isfinite(x_req):
+                suffix = _x_units_suffix(metric_name)
+                parts.append(rf"$\hat{{\delta}}_{{{required_prob:.2f}}}$={x_req:.1f}{suffix}")
+
+            return "\n".join(parts)
+
+        def _choose_fitbox_loc(xvals: np.ndarray, yvals: np.ndarray, txt: str) -> tuple[float, float]:
+            try:
+                xvals = np.asarray(xvals, float)
+                yvals = np.asarray(yvals, float)
+                ok = np.isfinite(xvals) & np.isfinite(yvals)
+                xvals, yvals = xvals[ok], yvals[ok]
+                if xvals.size == 0:
+                    return fit_stats_loc
+
+                xmin, xmax = float(np.min(xvals)), float(np.max(xvals))
+                if xmax <= xmin:
+                    return fit_stats_loc
+
+                ymin, ymax = -0.05, 1.05
+                xN = (xvals - xmin) / (xmax - xmin)
+                yN = (yvals - ymin) / (ymax - ymin)
+                yN = np.clip(yN, 0.0, 1.0)
+
+                n_lines = txt.count("\n") + 1
+                box_w = 0.34
+                box_h = min(0.12 + 0.05 * n_lines, 0.42)
+
+                candidates = [
+                    (0.68, 0.45),
+                    (0.68, 0.08),
+                    (0.68, 0.70),
+                    (0.02, 0.70),
+                    (0.02, 0.45),
+                    (0.02, 0.08),
+                ]
+
+                best = None
+                best_score = 1e18
+                for xa, ya in candidates:
+                    xb = min(xa + box_w, 0.99)
+                    yb = min(ya + box_h, 0.99)
+                    inside = (xN >= xa) & (xN <= xb) & (yN >= ya) & (yN <= yb)
+                    score = float(np.sum(inside))
+                    tie = -xa
+                    if (score < best_score) or (score == best_score and (best is None or tie < -best[0])):
+                        best = (xa, ya)
+                        best_score = score
+
+                return best if best is not None else fit_stats_loc
+            except Exception:
+                return fit_stats_loc
+
+        # map coef_df column names for metric / threshold if supplied
+        if coef_df is not None:
+            coef_df = coef_df.copy()
+            if coef_metric_col is None:
+                coef_metric_col = metric_col
+            if coef_threshold_col is None:
+                coef_threshold_col = threshold_col
+
+        with sns.axes_style(seaborn_style), sns.plotting_context(seaborn_context, font_scale=font_scale):
+            if fig is None or axes is None:
+                fig, axes = plt.subplots(
+                    nrows, ncols,
+                    figsize=figsize, dpi=dpi,
+                    sharex=False, sharey=True,
+                )
+
+            axes_flat = axes.flatten() if isinstance(axes, np.ndarray) else np.array([axes])
+
+            qa_classes = sorted(df_plot["_qa_class_plot"].unique())
+            if len(qa_classes) == 1 and qa_classes[0] == "NA":
+                qa_classes = []
+                class_colors = {}
+            else:
+                preferred = ["Confident pass", "Borderline", "Confident fail"]
+                qa_classes = [c for c in preferred if c in qa_classes] + [
+                    c for c in qa_classes if c not in preferred
+                ]
+                default_palette = sns.color_palette("Set2", n_colors=len(qa_classes))
+                class_colors = {
+                    cls: qa_palette.get(cls, default_palette[i]) for i, cls in enumerate(qa_classes)
+                }
+
+            letters = "ABCD"
+            for i, metric_name in enumerate(metric_order):
+                if i >= len(axes_flat):
+                    break
+                ax = axes_flat[i]
+
+                sub = df_plot[df_plot[metric_col] == metric_name].copy()
+                if sub.empty:
+                    ax.set_visible(False)
+                    continue
+
+                # scatter
+                if qa_classes:
+                    for cls in ["Confident pass", "Borderline", "Confident fail"]:
+                        sub_cls = sub[sub["_qa_class_plot"] == cls]
+                        if sub_cls.empty:
+                            continue
+                        ax.scatter(
+                            sub_cls[margin_col], sub_cls[p_pass_col],
+                            label=cls,
+                            s=45,
+                            alpha=0.90 if cls != "Borderline" else 0.75,
+                            edgecolor="black",
+                            linewidth=0.5,
+                            color=class_colors.get(cls, "0.6"),
+                            zorder=5,
+                        )
+                else:
+                    ax.scatter(
+                        sub[margin_col], sub[p_pass_col],
+                        s=45, alpha=0.8,
+                        edgecolor="black", linewidth=0.5,
+                        color="0.6", zorder=5
+                    )
+
+                ax.axhline(prob_pass_high_cut, linestyle="--", linewidth=0.9, color="gray", zorder=1)
+                ax.axhline(prob_pass_low_cut,  linestyle="--", linewidth=0.9, color="gray", zorder=1)
+                ax.axvline(0.0, linestyle=":", linewidth=0.9, color="black", zorder=1)
+
+                x_req = None
+
+                # --- logistic curve + annotation from precomputed coef_df (preferred) ---
+                if coef_df is not None:
+                    thr_val = sub[threshold_col].iloc[0]
+                    mask = coef_df[coef_metric_col] == metric_name
+                    if coef_threshold_col in coef_df.columns:
+                        mask &= coef_df[coef_threshold_col] == thr_val
+                    row_matches = coef_df[mask]
+                    if not row_matches.empty:
+                        row_coef = row_matches.iloc[0]
+
+                        x_min, x_max = sub[margin_col].min(), sub[margin_col].max()
+                        x_grid = np.linspace(x_min - 1.0, x_max + 1.0, 250)
+
+                        b0 = float(row_coef.get("b_const", np.nan))
+                        b1 = float(row_coef.get(f"b_{margin_col}", np.nan))
+                        if np.isfinite(b0) and np.isfinite(b1):
+                            eta = b0 + b1 * x_grid
+                            y_pred = 1.0 / (1.0 + np.exp(-eta))
+                            ax.plot(
+                                x_grid, y_pred,
+                                linewidth=1.6, color="black",
+                                label="Logistic fit", zorder=10,
+                            )
+
+                        if show_required_margin_line:
+                            col_req = f"margin_at_p{int(round(required_prob * 100))}"
+                            if col_req in row_coef and np.isfinite(row_coef[col_req]):
+                                x_req = float(row_coef[col_req])
+                                kwargs = dict(color="black", linestyle="--", linewidth=1.2, alpha=0.9)
+                                if required_line_kwargs:
+                                    kwargs.update(required_line_kwargs)
+                                ax.axvline(x_req, **kwargs)
+
+                        if annotate_fit_stats or (show_required_margin_line and x_req is not None):
+                            txt = _format_panel_box_from_coef(row_coef=row_coef,
+                                                              metric_name=metric_name,
+                                                              x_req=x_req)
+                            if txt:
+                                xa, ya = _choose_fitbox_loc(
+                                    sub[margin_col].to_numpy(),
+                                    sub[p_pass_col].to_numpy(),
+                                    txt,
+                                )
+                                ax.text(
+                                    xa, ya, txt,
+                                    transform=ax.transAxes,
+                                    ha="left", va="bottom",
+                                    fontsize="small",
+                                    bbox=dict(
+                                        boxstyle="round,pad=0.2",
+                                        facecolor="white",
+                                        edgecolor="black",
+                                        alpha=0.9,
+                                    ),
+                                    zorder=20,
+                                )
+
+                # --- fallback: refit logistic inside plotting function (legacy mode) ---
+                elif add_logistic_fit_local:
+                    fit_pair, ok = _fit_logit_1d(sub)
+                    if ok and fit_pair is not None:
+                        res, res0 = fit_pair
+
+                        x_grid = np.linspace(sub[margin_col].min() - 1.0,
+                                             sub[margin_col].max() + 1.0, 250)
+                        X_grid = sm.add_constant(x_grid, has_constant="add")
+                        y_pred = res.predict(X_grid)
+                        ax.plot(
+                            x_grid, y_pred,
+                            linewidth=1.6, color="black",
+                            label="Logistic fit", zorder=10,
+                        )
+
+                        if show_required_margin_line:
+                            x_req = _required_margin_from_fit(res, required_prob)
+                            if x_req is not None and np.isfinite(x_req):
+                                kwargs = dict(color="black", linestyle="--",
+                                              linewidth=1.2, alpha=0.9)
+                                if required_line_kwargs:
+                                    kwargs.update(required_line_kwargs)
+                                ax.axvline(x_req, **kwargs)
+
+                        if annotate_fit_stats or (show_required_margin_line and x_req is not None):
+                            txt = _format_panel_box_from_fit(
+                                sub=sub, res=res, res0=res0,
+                                metric_name=metric_name, x_req=x_req,
+                            )
+                            if txt:
+                                xa, ya = _choose_fitbox_loc(
+                                    sub[margin_col].to_numpy(),
+                                    sub[p_pass_col].to_numpy(),
+                                    txt,
+                                )
+                                ax.text(
+                                    xa, ya, txt,
+                                    transform=ax.transAxes,
+                                    ha="left", va="bottom",
+                                    fontsize="small",
+                                    bbox=dict(
+                                        boxstyle="round,pad=0.2",
+                                        facecolor="white",
+                                        edgecolor="black",
+                                        alpha=0.9,
+                                    ),
+                                    zorder=20,
+                                )
+
+                if show_panel_titles:
+                    ax.set_title(_make_criterion(sub.iloc[0]), fontsize="medium")
+
+                # i goes 0,1,2,... so rule index is i+1
+                ax.set_xlabel(
+                    _make_x_label(
+                        sub.iloc[0],
+                        rule_index=i + 1,
+                        include_rule=include_rule_in_xlabel,
+                    )
+                )
+
+                ax.tick_params(axis="x", labelbottom=True)
+
+                if i < len(letters):
+                    ax.text(
+                        0.02, 0.98, letters[i],
+                        transform=ax.transAxes,
+                        fontsize="large", fontweight="bold",
+                        va="top", ha="left",
+                    )
+
+                if (i % ncols) == 0:
+                    ax.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+                else:
+                    ax.set_ylabel("")
+
+                ax.set_ylim(-0.05, 1.05)
+
+            # global legend
+            handles, labels = [], []
+            for ax in axes_flat:
+                if ax.get_visible():
+                    h, lab = ax.get_legend_handles_labels()
+                    if h:
+                        handles, labels = h, lab
+                        break
+            if handles:
+                leg = fig.legend(
+                    handles, labels,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 1.02),
+                    ncol=min(len(labels), 4),
+                    frameon=True, framealpha=0.95,
+                    fontsize="small",
+                )
+                leg.get_frame().set_facecolor("white")
+                leg.get_frame().set_edgecolor("black")
+
+            fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                fig.savefig(save_dir / file_name, dpi=dpi, bbox_inches="tight")
+
+        return fig, axes
+
+
+
+
+
+def production_plot_path1_logit_margin_plus_grad_families(
+    pred_df: pd.DataFrame,
+    coef_df: pd.DataFrame,
+    metric_col: str = "metric",
+    threshold_col: str = "threshold",
+    label_col: str = "label",
+    margin_col: str = "distance_from_threshold_nominal",
+    grad_col: str = "nominal_core_mean_grad_gy_per_mm",
+    p_pass_col: str = "p_pass",
+    qa_class_col: str = "qa_class",
+    figsize: tuple[float, float] = (10, 8),
+    dpi: int = 300,
+    seaborn_style: str = "whitegrid",
+    seaborn_context: str = "paper",
+    font_scale: float = 1.1,
+    metric_order: Sequence[str] | None = None,
+    save_dir: Path | str | None = None,
+    file_name: str = "Fig_Path1_logit_margin_plus_grad_families.png",
+    n_grad_levels: int = 4,
+    grad_levels: Sequence[float] | None = None,
+    grad_quantiles: Sequence[float] | None = None,
+    prob_pass_cutoffs: tuple[float, float] = (0.05, 0.95),
+    n_margin_grid: int = 200,
+    scatter_size: float = 45.0,
+    scatter_alpha: float = 0.9,
+    panel_letter_start: str = "A",
+    # panel fit / comparison stats
+    annotate_fit_stats: bool = False,
+    fit_stats: Sequence[str] = (
+        "n",
+        "mcfadden_r2",
+        "aic",
+        "wrmse",
+        "brier",
+        "delta_aic",
+        "delta_rmse",
+        "lr_pvalue",
+    ),
+    fit_stats_loc: tuple[float, float] = (0.02, 0.05),
+    comparison_df: pd.DataFrame | None = None,
+    comparison_label_col: str = "label",
+    # NEW: overlay margin-only (1D) model
+    overlay_1d_model: bool = False,
+    coef1_df: pd.DataFrame | None = None,
+    coef1_label_col: str = "label",
+    overlay_1d_kwargs: dict | None = None,
+    
+):
+    """
+    Path-1 QA figure: 2-predictor logit fit (margin + gradient) for each threshold.
+
+    For each threshold label, we:
+      * show scatter of (margin, p_{b,r}) coloured by QA class
+      * overlay a family of logistic curves for several fixed nominal gradients
+      * optionally overlay the 1D margin-only logistic curve
+      * optionally annotate a small box with model / comparative fit metrics.
+
+    Notes
+    -----
+    - All GOF / scoring metrics are for the SINGLE 2-predictor model per threshold.
+      They do not depend on gradient slice.
+    - If `comparison_df` is provided (1D vs 2D comparison), delta-metrics and the
+      LR p-value can be included in the annotation box by listing them in fit_stats.
+    - If `overlay_1d_model=True` and `coef1_df` is supplied, the margin-only fit
+      (with coefficients from coef1_df) is drawn as a single line in each panel.
+    """
+
+    plt.ioff()
+
+    required_pred = {metric_col, threshold_col, label_col, margin_col, grad_col, p_pass_col}
+    missing_pred = required_pred - set(pred_df.columns)
+    if missing_pred:
+        raise ValueError(f"pred_df is missing required columns: {sorted(missing_pred)}")
+
+    required_coef = {label_col, "b_const", f"b_{margin_col}", f"b_{grad_col}"}
+    missing_coef = required_coef - set(coef_df.columns)
+    if missing_coef:
+        raise ValueError(f"coef_df is missing required columns: {sorted(missing_coef)}")
+
+    import matplotlib as mpl
+    from matplotlib.lines import Line2D
+
+    with mpl.rc_context(
+        {
+            "text.usetex": False,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+            "axes.unicode_minus": True,
+        }
+    ):
+        df_plot = pred_df.copy()
+        coef_plot = coef_df.copy()
+
+        # --- QA class normalisation ---
+        def _norm_qa(c):
+            c_str = str(c).strip().lower()
+            if "confident" in c_str and "pass" in c_str:
+                return "Confident pass"
+            if "confident" in c_str and "fail" in c_str:
+                return "Confident fail"
+            if "border" in c_str:
+                return "Borderline"
+            return str(c)
+
+        if qa_class_col in df_plot.columns:
+            df_plot["_qa_class_plot"] = df_plot[qa_class_col].map(_norm_qa)
+        else:
+            df_plot["_qa_class_plot"] = "NA"
+
+        qa_class_order = ["Confident pass", "Borderline", "Confident fail"]
+        qa_palette = {
+            "Confident pass": "#66c2a5",
+            "Borderline": "#fc8d62",
+            "Confident fail": "#8da0cb",
+            "NA": "0.6",
+        }
+
+        # --- DVH label helpers ---
+        def _metric_math(m: str) -> str:
+            s = str(m)
+            if s.startswith("D_") and "%" in s:
+                sub = s.split("D_")[1].split("%")[0].strip()
+                return rf"$D_{{{sub}\%}}$"
+            if s.startswith("V_") and "%" in s:
+                sub = s.split("V_")[1].split("%")[0].strip()
+                return rf"$V_{{{sub}\%}}$"
+            return rf"$\mathrm{{{s}}}$"
+
+        def _metric_is_percent(m: str) -> bool:
+            s = str(m)
+            return s.startswith("V_") and "%" in s
+
+        def _thr_str(thr) -> str:
+            if isinstance(thr, (int, np.integer)):
+                return f"{int(thr)}"
+            if isinstance(thr, float):
+                return f"{thr:g}"
+            try:
+                return f"{float(thr):g}"
+            except Exception:
+                return str(thr)
+
+        def _make_title(metric_name: str, thr) -> str:
+            mm = _metric_math(metric_name)
+            t = _thr_str(thr)
+            if _metric_is_percent(metric_name):
+                return rf"{mm}$\ \geq\ {t}\%$"
+            return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
+
+        def _make_xlabel(metric_name: str, thr) -> str:
+            """
+            X-axis: nominal margin for this DVH metric vs its threshold.
+            Keep math only for δ and the DVH metric; write units as plain text.
+            """
+            mm = _metric_math(metric_name)   # e.g. "$D_{2\\%}$"
+            t = _thr_str(thr)
+            if _metric_is_percent(metric_name):
+                # '%' in normal text is fine because text.usetex=False
+                return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t}%)"
+            # dose threshold in Gy as plain text
+            return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t} Gy)"
+
+
+        def _choose_fitbox_loc(xvals: np.ndarray, yvals: np.ndarray, txt: str) -> tuple[float, float]:
+            """Pick a box location (axes coords) that roughly avoids points."""
+            try:
+                xvals = np.asarray(xvals, float)
+                yvals = np.asarray(yvals, float)
+                m = np.isfinite(xvals) & np.isfinite(yvals)
+                xvals = xvals[m]
+                yvals = yvals[m]
+                if xvals.size == 0 or yvals.size == 0:
+                    return fit_stats_loc
+
+                xmin, xmax = float(xvals.min()), float(xvals.max())
+                ymin, ymax = -0.05, 1.05  # fixed y-limits in this figure
+                if xmax <= xmin:
+                    return fit_stats_loc
+
+                xN = (xvals - xmin) / (xmax - xmin)
+                yN = (yvals - ymin) / (ymax - ymin)
+                yN = np.clip(yN, 0.0, 1.0)
+
+                n_lines = txt.count("\n") + 1
+                box_w = 0.32
+                box_h = min(0.13 + 0.05 * n_lines, 0.40)
+
+                candidates = [
+                    (0.66, 0.55),
+                    (0.66, 0.10),
+                    (0.02, 0.55),
+                    (0.02, 0.10),
+                ]
+
+                best = fit_stats_loc
+                best_score = 1e9
+                for xa, ya in candidates:
+                    xb = min(xa + box_w, 0.99)
+                    yb = min(ya + box_h, 0.99)
+                    inside = (xN >= xa) & (xN <= xb) & (yN >= ya) & (yN <= yb)
+                    score = int(inside.sum())
+                    if score < best_score:
+                        best_score = score
+                        best = (xa, ya)
+                return best
+            except Exception:
+                return fit_stats_loc
+
+        def _format_panel_box_text(lbl: str) -> str:
+            """Build text for the fit-metrics box for a given label."""
+            parts: list[str] = []
+
+            row2 = coef_plot.loc[coef_plot[label_col] == lbl]
+            row2 = row2.iloc[0] if not row2.empty else None
+
+            row_cmp = None
+            if comparison_df is not None:
+                sub = comparison_df.loc[comparison_df[comparison_label_col] == lbl]
+                if not sub.empty:
+                    row_cmp = sub.iloc[0]
+
+            for key in fit_stats:
+                kk = str(key).lower()
+                if kk in ("n", "n_biopsies", "npts", "n_points"):
+                    if row2 is not None and "n_biopsies" in row2:
+                        try:
+                            parts.append(f"N={int(row2['n_biopsies'])}")
+                        except Exception:
+                            pass
+                elif kk == "aic":
+                    if row2 is not None and "aic" in row2:
+                        try:
+                            parts.append(f"AIC={float(row2['aic']):.1f}")
+                        except Exception:
+                            pass
+                elif kk in ("mcfadden_r2", "mcfadden", "pseudo_r2", "r2"):
+                    if row2 is not None and "mcfadden_r2" in row2:
+                        try:
+                            parts.append(r"$R^2_{McF}$=" + f"{float(row2['mcfadden_r2']):.2f}")
+                        except Exception:
+                            pass
+                elif kk in ("wrmse", "rmse_prob_w", "rmse"):
+                    if row2 is not None and "rmse_prob_w" in row2:
+                        try:
+                            parts.append(f"wRMSE={float(row2['rmse_prob_w']):.3f}")
+                        except Exception:
+                            pass
+                elif kk in ("brier", "brier_w", "wbrier"):
+                    if row2 is not None and "brier_w" in row2:
+                        try:
+                            parts.append(f"wBrier={float(row2['brier_w']):.3f}")
+                        except Exception:
+                            pass
+                elif kk == "delta_aic":
+                    if row_cmp is not None and "delta_aic" in row_cmp:
+                        try:
+                            parts.append(r"$\Delta\mathrm{AIC}$=" + f"{float(row_cmp['delta_aic']):+.1f}")
+                        except Exception:
+                            pass
+                elif kk in ("delta_mcfadden_r2", "delta_r2"):
+                    if row_cmp is not None and "delta_mcfadden_r2" in row_cmp:
+                        try:
+                            parts.append(
+                                r"$\Delta R^2_{McF}$=" + f"{float(row_cmp['delta_mcfadden_r2']):+.2f}"
+                            )
+                        except Exception:
+                            pass
+                elif kk in ("delta_rmse", "delta_rmse_prob_w"):
+                    if row_cmp is not None and "delta_rmse_prob_w" in row_cmp:
+                        try:
+                            parts.append(
+                                r"$\Delta$wRMSE=" + f"{float(row_cmp['delta_rmse_prob_w']):+.3f}"
+                            )
+                        except Exception:
+                            pass
+                elif kk in ("delta_brier", "delta_brier_w"):
+                    if row_cmp is not None and "delta_brier_w" in row_cmp:
+                        try:
+                            parts.append(
+                                r"$\Delta$wBrier=" + f"{float(row_cmp['delta_brier_w']):+.3f}"
+                            )
+                        except Exception:
+                            pass
+                elif kk in ("lr", "lr_stat", "lrchi2"):
+                    if row_cmp is not None and "lr_stat" in row_cmp:
+                        try:
+                            parts.append(r"LR $\chi^2$=" + f"{float(row_cmp['lr_stat']):.1f}")
+                        except Exception:
+                            pass
+                elif kk in ("lr_p", "lr_pvalue", "p_lr"):
+                    if row_cmp is not None and "lr_pvalue" in row_cmp:
+                        try:
+                            parts.append(f"LR p={float(row_cmp['lr_pvalue']):.3f}")
+                        except Exception:
+                            pass
+
+            return "\n".join(parts)
+
+        # Panel ordering by label; optionally enforce metric order
+        label_table = (
+            df_plot[[metric_col, threshold_col, label_col]]
+            .drop_duplicates()
+            .sort_values(by=[metric_col, threshold_col])
+        )
+        label_order = label_table[label_col].tolist()
+
+        if metric_order is not None:
+            metric_rank = {m: i for i, m in enumerate(metric_order)}
+            label_table["_metric_rank"] = label_table[metric_col].map(
+                lambda m: metric_rank.get(m, len(metric_rank))
+            )
+            label_table = label_table.sort_values(by=["_metric_rank", threshold_col])
+            label_order = label_table[label_col].tolist()
+
+        low_cut, high_cut = prob_pass_cutoffs
+
+        # global gradient levels (so legend is consistent)
+        if grad_levels is None:
+            g_all = df_plot[grad_col].dropna().to_numpy()
+            if g_all.size == 0:
+                grad_levels = [0.0]
+            else:
+                if grad_quantiles is None:
+                    grad_quantiles = np.linspace(0.15, 0.85, n_grad_levels)
+                grad_levels = np.quantile(g_all, np.asarray(grad_quantiles, dtype=float)).tolist()
+        grad_levels = [float(g) for g in np.asarray(grad_levels, dtype=float)]
+        grad_colors = sns.color_palette("viridis", n_colors=len(grad_levels))
+
+        n_panels = len(label_order)
+        if n_panels <= 2:
+            n_rows, n_cols = 1, n_panels
+        elif n_panels <= 4:
+            n_rows, n_cols = 2, 2
+        else:
+            n_cols = 3
+            n_rows = int(np.ceil(n_panels / n_cols))
+
+        with sns.axes_style(seaborn_style), sns.plotting_context(
+            seaborn_context, font_scale=font_scale
+        ):
+            fig, axes = plt.subplots(
+                n_rows,
+                n_cols,
+                figsize=figsize,
+                dpi=dpi,
+                sharex=False,
+                sharey=True,
+            )
+            axes_flat = axes.ravel() if isinstance(axes, np.ndarray) else np.array([axes])
+
+            panel_letters = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            letter_offset = ord(panel_letter_start.upper()) - ord("A")
+
+            for idx, lbl in enumerate(label_order):
+                if idx >= len(axes_flat):
+                    break
+                ax = axes_flat[idx]
+
+                sub = df_plot[df_plot[label_col] == lbl].copy()
+                if sub.empty:
+                    ax.set_visible(False)
+                    continue
+
+                metric_name = sub[metric_col].iloc[0]
+                thr = sub[threshold_col].iloc[0]
+
+                m_min = float(sub[margin_col].min())
+                m_max = float(sub[margin_col].max())
+                if not np.isfinite(m_min) or not np.isfinite(m_max):
+                    x_grid = np.linspace(-2.0, 2.0, n_margin_grid)
+                else:
+                    span = max(m_max - m_min, 1e-3)
+                    pad = 0.05 * span
+                    x_grid = np.linspace(m_min - pad, m_max + pad, n_margin_grid)
+
+                c_row = coef_plot.loc[coef_plot[label_col] == lbl]
+                if c_row.empty:
+                    raise ValueError(f"No coefficient row found for label={lbl!r}")
+                c_row = c_row.iloc[0]
+                b0 = float(c_row["b_const"])
+                b_delta = float(c_row[f"b_{margin_col}"])
+                b_grad = float(c_row[f"b_{grad_col}"])
+
+                # scatter
+                for cls in qa_class_order:
+                    sub_cls = sub[sub["_qa_class_plot"] == cls]
+                    if sub_cls.empty:
+                        continue
+                    ax.scatter(
+                        sub_cls[margin_col],
+                        sub_cls[p_pass_col],
+                        s=scatter_size,
+                        alpha=scatter_alpha if cls != "Borderline" else scatter_alpha * 0.8,
+                        edgecolor="black",
+                        linewidth=0.4,
+                        color=qa_palette.get(cls, "0.6"),
+                        zorder=3,
+                    )
+
+                # logistic families (fixed gradients)
+                for g_val, color in zip(grad_levels, grad_colors):
+                    eta = b0 + b_delta * x_grid + b_grad * float(g_val)
+                    p_grid = 1.0 / (1.0 + np.exp(-eta))
+                    ax.plot(x_grid, p_grid, color=color, linewidth=2.0, alpha=0.95, zorder=4)
+
+                # optional overlay of margin-only fit (1D model)
+                if overlay_1d_model and coef1_df is not None:
+                    c1 = coef1_df.loc[coef1_df[coef1_label_col] == lbl]
+                    if (not c1.empty) and ("b_const" in c1.columns) and (f"b_{margin_col}" in c1.columns):
+                        c1 = c1.iloc[0]
+                        b0_1d = float(c1["b_const"])
+                        b_delta_1d = float(c1[f"b_{margin_col}"])
+                        eta_1d = b0_1d + b_delta_1d * x_grid
+                        p_1d = 1.0 / (1.0 + np.exp(-eta_1d))
+
+                        line_kwargs = {
+                            "color": "black",
+                            "linestyle": "--",
+                            "linewidth": 2.0,
+                            "alpha": 0.9,
+                            "zorder": 5,
+                        }
+                        if overlay_1d_kwargs is not None:
+                            line_kwargs.update(overlay_1d_kwargs)
+                        ax.plot(x_grid, p_1d, **line_kwargs)
+
+                ax.axhline(high_cut, linestyle="--", linewidth=0.9, color="black", zorder=1)
+                ax.axhline(low_cut, linestyle="--", linewidth=0.9, color="black", zorder=1)
+                ax.axvline(0.0, linestyle=":", linewidth=0.9, color="black", zorder=1)
+
+                ax.set_title(_make_title(metric_name, thr), fontsize="medium")
+                ax.set_xlabel(_make_xlabel(metric_name, thr))
+                if (idx % n_cols) == 0:
+                    ax.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+                else:
+                    ax.set_ylabel("")
+
+                ax.set_ylim(-0.05, 1.05)
+
+                # panel letter
+                letter_idx = idx + letter_offset
+                if 0 <= letter_idx < len(panel_letters):
+                    ax.text(
+                        0.02,
+                        0.98,
+                        panel_letters[letter_idx],
+                        transform=ax.transAxes,
+                        fontsize="large",
+                        fontweight="bold",
+                        va="top",
+                        ha="left",
+                    )
+
+                # optional fit-metrics box
+                if annotate_fit_stats:
+                    txt = _format_panel_box_text(lbl)
+                    if txt:
+                        xa, ya = _choose_fitbox_loc(
+                            sub[margin_col].to_numpy(), sub[p_pass_col].to_numpy(), txt
+                        )
+                        ax.text(
+                            xa,
+                            ya,
+                            txt,
+                            transform=ax.transAxes,
+                            ha="left",
+                            va="bottom",
+                            fontsize="small",
+                            bbox=dict(
+                                boxstyle="round,pad=0.25",
+                                facecolor="white",
+                                edgecolor="black",
+                                alpha=0.9,
+                            ),
+                            zorder=15,
+                        )
+
+            # hide unused axes
+            for j in range(n_panels, len(axes_flat)):
+                axes_flat[j].set_visible(False)
+
+            # legends: QA classes (markers) + gradient families (lines) + optional 1D overlay
+            qa_handles = []
+            for cls in qa_class_order:
+                if cls not in df_plot["_qa_class_plot"].unique():
+                    continue
+                qa_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        linestyle="None",
+                        markersize=7,
+                        markerfacecolor=qa_palette.get(cls, "0.6"),
+                        markeredgecolor="black",
+                        label=cls,
+                    )
+                )
+
+            grad_handles = [
+                Line2D(
+                    [0],
+                    [0],
+                    color=col,
+                    lw=2.0,
+                    label=rf"$\bar{{g}} = {g:.2f}\ \mathrm{{Gy/mm}}$",
+                )
+                for g, col in zip(grad_levels, grad_colors)
+            ]
+
+            overlay_handle = None
+            if overlay_1d_model:
+                line_kwargs = {"color": "black", "linestyle": "--", "linewidth": 2.0}
+                if overlay_1d_kwargs is not None:
+                    line_kwargs.update(overlay_1d_kwargs)
+                overlay_handle = Line2D(
+                    [0],
+                    [0],
+                    color=line_kwargs.get("color", "black"),
+                    lw=line_kwargs.get("linewidth", 2.0),
+                    linestyle=line_kwargs.get("linestyle", "--"),
+                    label="Margin-only logit fit",
+                )
+
+            handles = qa_handles + grad_handles
+            if overlay_handle is not None:
+                handles.append(overlay_handle)
+
+            if handles:
+                leg = fig.legend(
+                    handles=handles,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 1.02),
+                    ncol=min(len(handles), 4),
+                    frameon=True,
+                    framealpha=0.95,
+                    fontsize="small",
+                    title=r"QA class, gradient families, and margin-only fit",
+                    title_fontsize="small",
+                )
+                leg.get_frame().set_facecolor("white")
+                leg.get_frame().set_edgecolor("black")
+
+            fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.95])
+
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                fig.savefig(Path(save_dir) / file_name, dpi=dpi, bbox_inches="tight")
+
+        return fig, axes
+
+
+def production_plot_path1_logit_margin_plus_grad_families_generalized(
+    pred_df: pd.DataFrame,
+    coef_df: pd.DataFrame,
+    metric_col: str = "metric",
+    threshold_col: str = "threshold",
+    label_col: str = "label",
+    margin_col: str = "distance_from_threshold_nominal",
+    grad_col: str = "nominal_core_mean_grad_gy_per_mm",
+    p_pass_col: str = "p_pass",
+    qa_class_col: str = "qa_class",
+    figsize: tuple[float, float] = (10, 8),
+    dpi: int = 300,
+    seaborn_style: str = "whitegrid",
+    seaborn_context: str = "paper",
+    font_scale: float = 1.1,
+    metric_order: Sequence[str] | None = None,
+    save_dir: Path | str | None = None,
+    file_name: str = "Fig_Path1_logit_margin_plus_grad_families.png",
+    n_grad_levels: int = 4,
+    grad_levels: Sequence[float] | None = None,
+    grad_quantiles: Sequence[float] | None = None,
+    prob_pass_cutoffs: tuple[float, float] = (0.05, 0.95),
+    n_margin_grid: int = 200,
+    scatter_size: float = 45.0,
+    scatter_alpha: float = 0.9,
+    panel_letter_start: str = "A",
+    include_rule_in_xlabel: bool = True,   # <<< NEW
+    # panel fit / comparison stats
+    annotate_fit_stats: bool = False,
+    fit_stats: Sequence[str] = (
+        "n",
+        "mcfadden_r2",
+        "aic",
+        "wrmse",
+        "brier",
+        "delta_aic",
+        "delta_rmse",
+        "lr_pvalue",
+    ),
+    fit_stats_loc: tuple[float, float] = (0.02, 0.05),
+    comparison_df: pd.DataFrame | None = None,
+    comparison_label_col: str = "label",
+    # overlay margin-only (1D) model
+    overlay_1d_model: bool = False,
+    coef1_df: pd.DataFrame | None = None,
+    coef1_label_col: str = "label",
+    overlay_1d_kwargs: dict | None = None,
+    # Optional: per-panel control of which secondary predictor to use
+    per_label_secondary: dict[str, str] | None = None,
+    # Optional: per-panel legend formatting for secondary predictor levels
+    per_label_grad_label_template: dict[str, str] | None = None,
+    per_label_legend_title: dict[str, str] | None = None,
+    # NEW: per-panel units & annotation for the secondary predictor
+    per_label_secondary_unit: dict[str, str] | None = None,
+    per_label_secondary_annotation: dict[str, str] | None = None,
+    # NEW: manual override for stats-box location, per label
+    # values can be: "top-left", "top-right", "bottom-left", "bottom-right"
+    per_label_stats_box_corner: dict[str, str] | None = None,
+    per_label_stats_box_xy: dict[str, tuple[float, float]] | None = None,
+
+):
+    """
+    Generalised Path-1 QA figure: 2-predictor logit fit (margin + secondary)
+    for each threshold, with *identical styling* to
+    `production_plot_path1_logit_margin_plus_grad_families`, but allowing
+    a different secondary predictor in each panel.
+
+    Expected inputs
+    ---------------
+    pred_df :
+        Concatenation of prediction tables from `fit_path1_logit_per_threshold`
+        for all candidate secondary predictors. In the 2D-scan pipeline this is
+        `pred2_all_df`, which includes:
+          - metric_col, threshold_col, label_col
+          - margin_col
+          - p_pass_col, n_pass, n_trials, qa_class_col
+          - one column per candidate secondary predictor, e.g.
+                nominal_core_mean_grad_gy_per_mm,
+                nominal_core_mean_dose_gy,
+                rectum_nn_dist_mm, ...
+          - a column "secondary_predictor" indicating which predictor was used
+            in that particular 2D model block.
+
+    coef_df :
+        Concatenation of coefficient tables from `fit_path1_logit_per_threshold`
+        for all candidate secondary predictors (`coef2_all_df`), with columns:
+          - metric_col, threshold_col, label_col
+          - "secondary_predictor"
+          - b_const, b_<margin_col>, b_<secondary_predictor>, ...
+          - goodness-of-fit metrics (aic, mcfadden_r2, brier_w, rmse_prob_w, ...)
+
+    comparison_df :
+        Optional table containing 1D vs 2D comparison metrics. If it has a
+        column "secondary_predictor" (e.g. `best_per_rule`), we will use that
+        to infer the best secondary predictor per label *unless* an explicit
+        `per_label_secondary` mapping is supplied.
+    """
+    import matplotlib as mpl
+    from matplotlib.lines import Line2D
+
+    plt.ioff()
+
+    # --- basic column checks on predictions ---
+    required_pred = {metric_col, threshold_col, label_col, margin_col, p_pass_col}
+    missing_pred = required_pred - set(pred_df.columns)
+    if missing_pred:
+        raise ValueError(f"pred_df is missing required columns: {sorted(missing_pred)}")
+
+    # We only require grad_col if the user does NOT supply any per-label mapping
+    if per_label_secondary is None and grad_col not in pred_df.columns:
+        raise ValueError(
+            "grad_col is not present in pred_df and no per_label_secondary "
+            "mapping was provided."
+        )
+
+    # --- basic column checks on coefficients ---
+    required_coef = {label_col, "b_const", f"b_{margin_col}"}
+    missing_coef = required_coef - set(coef_df.columns)
+    if missing_coef:
+        raise ValueError(f"coef_df is missing required columns: {sorted(missing_coef)}")
+
+    # --- infer per-label secondary predictor from comparison_df if available ---
+    label_to_secondary: dict[str, str] = {}
+
+    # Start from explicit user mapping, if provided
+    if per_label_secondary:
+        label_to_secondary.update(per_label_secondary)
+
+    # If the caller passed a comparison_df with a secondary_predictor column,
+    # use that as the default mapping for any labels not already in the dict.
+    if comparison_df is not None and "secondary_predictor" in comparison_df.columns:
+        best_map = (
+            comparison_df[[comparison_label_col, "secondary_predictor"]]
+            .dropna(subset=["secondary_predictor"])
+            .drop_duplicates(subset=[comparison_label_col])
+        )
+        for _, row in best_map.iterrows():
+            lbl = str(row[comparison_label_col])
+            sec = str(row["secondary_predictor"])
+            if lbl not in label_to_secondary:
+                label_to_secondary[lbl] = sec
+
+    # If we still have no mapping at all, we fall back to a single global grad_col
+    # (the original behaviour: one predictor for all panels).
+    use_per_label = bool(label_to_secondary)
+
+    # convenience: presence of secondary_predictor tag columns
+    has_sec_tag_pred = "secondary_predictor" in pred_df.columns
+    has_sec_tag_coef = "secondary_predictor" in coef_df.columns
+
+    with mpl.rc_context(
+        {
+            "text.usetex": False,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+            "axes.unicode_minus": True,
+        }
+    ):
+        df_plot = pred_df.copy()
+        coef_plot = coef_df.copy()
+
+        # --- QA class normalisation ---
+        def _norm_qa(c):
+            c_str = str(c).strip().lower()
+            if "confident" in c_str and "pass" in c_str:
+                return "Confident pass"
+            if "confident" in c_str and "fail" in c_str:
+                return "Confident fail"
+            if "border" in c_str:
+                return "Borderline"
+            return str(c)
+
+        if qa_class_col in df_plot.columns:
+            df_plot["_qa_class_plot"] = df_plot[qa_class_col].map(_norm_qa)
+        else:
+            df_plot["_qa_class_plot"] = "NA"
+
+        qa_class_order = ["Confident pass", "Borderline", "Confident fail"]
+        qa_palette = {
+            "Confident pass": "#66c2a5",
+            "Borderline": "#fc8d62",
+            "Confident fail": "#8da0cb",
+            "NA": "0.6",
+        }
+
+        # --- DVH label helpers (unchanged from original) ---
+        """
+        def _metric_math(m: str) -> str:
+            s = str(m)
+            if s.startswith("D_") and "%" in s:
+                sub = s.split("D_")[1].split("%")[0].strip()
+                return rf"$D_{{{sub}\%}}$"
+            if s.startswith("V_") and "%" in s:
+                sub = s.split("V_")[1].split("%")[0].strip()
+                return rf"$V_{{{sub}\%}}$"
+            return rf"$\mathrm{{{s}}}$"
+
+        def _metric_is_percent(m: str) -> bool:
+            s = str(m)
+            return s.startswith("V_") and "%" in s
+
+        def _thr_str(thr) -> str:
+            if isinstance(thr, (int, np.integer)):
+                return f"{int(thr)}"
+            if isinstance(thr, float):
+                return f"{thr:g}"
+            try:
+                return f"{float(thr):g}"
+            except Exception:
+                return str(thr)
+
+        def _make_title(metric_name: str, thr) -> str:
+            mm = _metric_math(metric_name)
+            t = _thr_str(thr)
+            if _metric_is_percent(metric_name):
+                return rf"{mm}$\ \geq\ {t}\%$"
+            return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
+
+        def _make_xlabel(metric_name: str, thr) -> str:
+            mm = _metric_math(metric_name)
+            t = _thr_str(thr)
+            if _metric_is_percent(metric_name):
+                return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t}%)"
+            return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t} Gy)"
+        """
+
+                # --- DVH label helpers ---
+        def _metric_math(m: str) -> str:
+            s = str(m)
+            if s.startswith("D_") and "%" in s:
+                sub = s.split("D_")[1].split("%")[0].strip()
+                return rf"$D_{{{sub}\%}}$"
+            if s.startswith("V_") and "%" in s:
+                sub = s.split("V_")[1].split("%")[0].strip()
+                return rf"$V_{{{sub}\%}}$"
+            return rf"$\mathrm{{{s}}}$"
+
+        def _metric_is_percent(m: str) -> bool:
+            s = str(m)
+            return s.startswith("V_") and "%" in s
+
+        def _thr_str(thr) -> str:
+            if isinstance(thr, (int, np.integer)):
+                return f"{int(thr)}"
+            if isinstance(thr, float):
+                return f"{thr:g}"
+            try:
+                return f"{float(thr):g}"
+            except Exception:
+                return str(thr)
+
+        def _make_criterion(metric_name: str, thr) -> str:
+            """
+            Criterion text, e.g. '$D_{2\\%}$\\ \\geq\\ 32\\,\\mathrm{Gy}$'
+            """
+            mm = _metric_math(metric_name)
+            t = _thr_str(thr)
+            if _metric_is_percent(metric_name):
+                return rf"{mm}$\ \geq\ {t}\%$"
+            return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
+
+        def _make_title(metric_name: str, thr) -> str:
+            # Panel title is just the criterion
+            return _make_criterion(metric_name, thr)
+
+        def _make_xlabel(
+            metric_name: str,
+            thr,
+            rule_index: int,
+            include_rule: bool = True,
+            is_percent: bool | None = None,
+        ) -> str:
+            """
+            X label, e.g.
+              'Nominal dose margin δ_{b,1} (Gy; r = 1 : D_{2%} ≥ 32 Gy)'
+            """
+            # Decide units for the margin
+            if is_percent is None:
+                is_percent = _metric_is_percent(metric_name)
+
+            unit_text = "%" if is_percent else "Gy"
+
+            # main symbol δ_{b,1}
+            rule_sym = rf"\delta_{{b,{rule_index}}}"
+            # keep δ in math, units as plain text
+            label = rf"Nominal dose margin ${rule_sym}$ ({unit_text})"
+
+            if include_rule:
+                # Use the same criterion text as the title
+                crit = _make_criterion(metric_name, thr)
+                # strip outer $ so we embed it in one math block
+                crit_inner = crit.strip("$")
+                label += rf" ($r = {rule_index}: {crit_inner}$)"
+
+            return label
+
+
+
+        # --- helper to place fit-metrics box (unchanged) ---
+        def _choose_fitbox_loc(xvals: np.ndarray, yvals: np.ndarray, txt: str) -> tuple[float, float]:
+            try:
+                xvals = np.asarray(xvals, float)
+                yvals = np.asarray(yvals, float)
+                m = np.isfinite(xvals) & np.isfinite(yvals)
+                xvals = xvals[m]
+                yvals = yvals[m]
+                if xvals.size == 0 or yvals.size == 0:
+                    return fit_stats_loc
+
+                xmin, xmax = float(xvals.min()), float(xvals.max())
+                ymin, ymax = -0.05, 1.05
+                if xmax <= xmin:
+                    return fit_stats_loc
+
+                xN = (xvals - xmin) / (xmax - xmin)
+                yN = (yvals - ymin) / (ymax - ymin)
+                yN = np.clip(yN, 0.0, 1.0)
+
+                n_lines = txt.count("\n") + 1
+                box_w = 0.32
+                box_h = min(0.13 + 0.05 * n_lines, 0.40)
+
+                candidates = [
+                    (0.66, 0.55),
+                    (0.66, 0.10),
+                    (0.02, 0.55),
+                    (0.02, 0.10),
+                ]
+
+                best = fit_stats_loc
+                best_score = 1e9
+                for xa, ya in candidates:
+                    xb = min(xa + box_w, 0.99)
+                    yb = min(ya + box_h, 0.99)
+                    inside = (xN >= xa) & (xN <= xb) & (yN >= ya) & (yN <= yb)
+                    score = int(inside.sum())
+                    if score < best_score:
+                        best_score = score
+                        best = (xa, ya)
+                return best
+            except Exception:
+                return fit_stats_loc
+
+        # --- fit-metrics text box (now respects chosen secondary predictor) ---
+        def _format_panel_box_text(lbl: str) -> str:
+            parts: list[str] = []
+
+            sec = label_to_secondary.get(lbl) if use_per_label else None
+
+            # Coefficients row (from coef_plot)
+            row2 = coef_plot.loc[coef_plot[label_col] == lbl]
+            if sec is not None and has_sec_tag_coef and not row2.empty:
+                row2 = row2.loc[row2["secondary_predictor"] == sec]
+            row2 = row2.iloc[0] if not row2.empty else None
+
+            # Comparison metrics row (from comparison_df)
+            row_cmp = None
+            if comparison_df is not None:
+                sub = comparison_df.loc[comparison_df[comparison_label_col] == lbl]
+                if sec is not None and "secondary_predictor" in comparison_df.columns and not sub.empty:
+                    sub = sub.loc[sub["secondary_predictor"] == sec]
+                if not sub.empty:
+                    row_cmp = sub.iloc[0]
+
+            for key in fit_stats:
+                kk = str(key).lower()
+                if kk in ("n", "n_biopsies", "npts", "n_points"):
+                    if row2 is not None and "n_biopsies" in row2:
+                        try:
+                            parts.append(f"N={int(row2['n_biopsies'])}")
+                        except Exception:
+                            pass
+                elif kk == "aic":
+                    if row2 is not None and "aic" in row2:
+                        try:
+                            parts.append(f"AIC={float(row2['aic']):.1f}")
+                        except Exception:
+                            pass
+                elif kk in ("mcfadden_r2", "mcfadden", "pseudo_r2", "r2"):
+                    if row2 is not None and "mcfadden_r2" in row2:
+                        try:
+                            parts.append(r"$R^2_{McF}$=" + f"{float(row2['mcfadden_r2']):.2f}")
+                        except Exception:
+                            pass
+                elif kk in ("wrmse", "rmse_prob_w", "rmse"):
+                    if row2 is not None and "rmse_prob_w" in row2:
+                        try:
+                            parts.append(f"wRMSE={float(row2['rmse_prob_w']):.3f}")
+                        except Exception:
+                            pass
+                elif kk in ("brier", "brier_w", "wbrier"):
+                    if row2 is not None and "brier_w" in row2:
+                        try:
+                            parts.append(f"wBrier={float(row2['brier_w']):.3f}")
+                        except Exception:
+                            pass
+                elif kk == "delta_aic":
+                    if row_cmp is not None and "delta_aic" in row_cmp:
+                        try:
+                            parts.append(r"$\Delta\mathrm{AIC}$=" + f"{float(row_cmp['delta_aic']):+.1f}")
+                        except Exception:
+                            pass
+                elif kk in ("delta_mcfadden_r2", "delta_r2"):
+                    if row_cmp is not None and "delta_mcfadden_r2" in row_cmp:
+                        try:
+                            parts.append(
+                                r"$\Delta R^2_{McF}$=" + f"{float(row_cmp['delta_mcfadden_r2']):+.2f}"
+                            )
+                        except Exception:
+                            pass
+                elif kk in ("delta_rmse", "delta_rmse_prob_w"):
+                    if row_cmp is not None and "delta_rmse_prob_w" in row_cmp:
+                        try:
+                            parts.append(
+                                r"$\Delta$wRMSE=" + f"{float(row_cmp['delta_rmse_prob_w']):+.3f}"
+                            )
+                        except Exception:
+                            pass
+                elif kk in ("delta_brier", "delta_brier_w"):
+                    if row_cmp is not None and "delta_brier_w" in row_cmp:
+                        try:
+                            parts.append(
+                                r"$\Delta$wBrier=" + f"{float(row_cmp['delta_brier_w']):+.3f}"
+                            )
+                        except Exception:
+                            pass
+                elif kk in ("lr", "lr_stat", "lrchi2"):
+                    if row_cmp is not None and "lr_stat" in row_cmp:
+                        try:
+                            parts.append(r"LR $\chi^2$=" + f"{float(row_cmp['lr_stat']):.1f}")
+                        except Exception:
+                            pass
+                elif kk in ("lr_p", "lr_pvalue", "p_lr"):
+                    if row_cmp is not None and "lr_pvalue" in row_cmp:
+                        try:
+                            parts.append(f"LR p={float(row_cmp['lr_pvalue']):.3f}")
+                        except Exception:
+                            pass
+
+            return "\n".join(parts)
+
+        # --- Panel ordering by label; optionally enforce metric order (unchanged) ---
+        label_table = (
+            df_plot[[metric_col, threshold_col, label_col]]
+            .drop_duplicates()
+            .sort_values(by=[metric_col, threshold_col])
+        )
+        label_order = label_table[label_col].tolist()
+
+        if metric_order is not None:
+            metric_rank = {m: i for i, m in enumerate(metric_order)}
+            label_table["_metric_rank"] = label_table[metric_col].map(
+                lambda m: metric_rank.get(m, len(metric_rank))
+            )
+            label_table = label_table.sort_values(by=["_metric_rank", threshold_col])
+            label_order = label_table[label_col].tolist()
+
+        low_cut, high_cut = prob_pass_cutoffs
+
+        # --- colours for secondary predictor families ---
+        # We only use grad_levels to determine how many families (and thus colours)
+        # if the user supplied them explicitly.
+        if grad_levels is not None:
+            n_levels = len(grad_levels)
+        else:
+            n_levels = n_grad_levels
+
+        grad_colors = sns.color_palette("viridis", n_colors=n_levels)
+
+        n_panels = len(label_order)
+        if n_panels <= 2:
+            n_rows, n_cols = 1, n_panels
+        elif n_panels <= 4:
+            n_rows, n_cols = 2, 2
+        else:
+            n_cols = 3
+            n_rows = int(np.ceil(n_panels / n_cols))
+
+        with sns.axes_style(seaborn_style), sns.plotting_context(
+            seaborn_context, font_scale=font_scale
+        ):
+            fig, axes = plt.subplots(
+                n_rows,
+                n_cols,
+                figsize=figsize,
+                dpi=dpi,
+                sharex=False,
+                sharey=True,
+            )
+            axes_flat = axes.ravel() if isinstance(axes, np.ndarray) else np.array([axes])
+
+            panel_letters = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            letter_offset = ord(panel_letter_start.upper()) - ord("A")
+
+            # Global legend handles: QA class markers (+ optional 1D overlay).
+            qa_handles_for_global: list[Line2D] = []
+            qa_present_global = set(df_plot["_qa_class_plot"].unique())
+            for cls in qa_class_order:
+                if cls not in qa_present_global:
+                    continue
+                qa_handles_for_global.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        linestyle="None",
+                        markersize=7,
+                        markerfacecolor=qa_palette.get(cls, "0.6"),
+                        markeredgecolor="black",
+                        label=cls,
+                    )
+                )
+
+            overlay_handle_global = None
+            if overlay_1d_model:
+                line_kwargs = {"color": "black", "linestyle": "--", "linewidth": 2.0}
+                if overlay_1d_kwargs is not None:
+                    line_kwargs.update(overlay_1d_kwargs)
+                overlay_handle_global = Line2D(
+                    [0],
+                    [0],
+                    color=line_kwargs.get("color", "black"),
+                    lw=line_kwargs.get("linewidth", 2.0),
+                    linestyle=line_kwargs.get("linestyle", "--"),
+                    label="Margin-only logit fit",
+                )
+
+            # --- main panel loop ---
+            for idx, lbl in enumerate(label_order):
+                if idx >= len(axes_flat):
+                    break
+                ax = axes_flat[idx]
+
+                sub = df_plot[df_plot[label_col] == lbl].copy()
+                if sub.empty:
+                    ax.set_visible(False)
+                    continue
+
+                metric_name = sub[metric_col].iloc[0]
+                thr = sub[threshold_col].iloc[0]
+
+                # Which secondary predictor does this panel use?
+                if use_per_label and lbl in label_to_secondary:
+                    this_grad_col = label_to_secondary[lbl]
+                else:
+                    this_grad_col = grad_col
+
+                if this_grad_col not in sub.columns:
+                    raise ValueError(
+                        f"Secondary predictor column {this_grad_col!r} not found in pred_df for label={lbl!r}"
+                    )
+
+                # --- determine unit string for this panel ---
+                if per_label_secondary_unit is not None and lbl in per_label_secondary_unit:
+                    unit_str = per_label_secondary_unit[lbl]  # e.g. r"\mathrm{Gy/mm}"
+                else:
+                    unit_str = ""
+
+
+                # x-grid in margin space
+                m_min = float(sub[margin_col].min())
+                m_max = float(sub[margin_col].max())
+                if not np.isfinite(m_min) or not np.isfinite(m_max):
+                    x_grid = np.linspace(-2.0, 2.0, n_margin_grid)
+                else:
+                    span = max(m_max - m_min, 1e-3)
+                    pad = 0.05 * span
+                    x_grid = np.linspace(m_min - pad, m_max + pad, n_margin_grid)
+
+                # coefficients row for this panel
+                c_row = coef_plot.loc[coef_plot[label_col] == lbl].copy()
+                if use_per_label and has_sec_tag_coef:
+                    c_row = c_row.loc[c_row["secondary_predictor"] == this_grad_col]
+
+                if c_row.empty:
+                    raise ValueError(
+                        f"No coefficient row found for label={lbl!r} and secondary predictor={this_grad_col!r}"
+                    )
+                c_row = c_row.iloc[0]
+
+                b0 = float(c_row["b_const"])
+                b_delta = float(c_row[f"b_{margin_col}"])
+
+                coef_grad_colname = f"b_{this_grad_col}"
+                if coef_grad_colname not in c_row.index:
+                    raise ValueError(
+                        f"coef_df is missing coefficient column {coef_grad_colname!r} "
+                        f"for label={lbl!r}. Available columns: {list(c_row.index)}"
+                    )
+                b_grad = float(c_row[coef_grad_colname])
+
+                # scatter of empirical Monte Carlo pass probabilities
+                for cls in qa_class_order:
+                    sub_cls = sub[sub["_qa_class_plot"] == cls]
+                    if sub_cls.empty:
+                        continue
+                    ax.scatter(
+                        sub_cls[margin_col],
+                        sub_cls[p_pass_col],
+                        s=scatter_size,
+                        alpha=scatter_alpha if cls != "Borderline" else scatter_alpha * 0.8,
+                        edgecolor="black",
+                        linewidth=0.4,
+                        color=qa_palette.get(cls, "0.6"),
+                        zorder=3,
+                    )
+
+                # panel-specific secondary predictor values (for family curves)
+                sec_vals = sub[this_grad_col].dropna().to_numpy()
+                if sec_vals.size == 0:
+                    sec_levels = np.zeros(n_levels, dtype=float)
+                else:
+                    if grad_quantiles is None:
+                        q = np.linspace(0.15, 0.85, n_levels)
+                    else:
+                        q = np.asarray(grad_quantiles, dtype=float)
+                    sec_levels = np.quantile(sec_vals, q).astype(float)
+
+                # Build panel-specific legend handles for secondary levels
+                grad_handles_panel: list[Line2D] = []
+
+                # Choose legend label template for this panel
+                if per_label_grad_label_template is not None and lbl in per_label_grad_label_template:
+                    # user-specified template; can use {value} and optional {unit}
+                    panel_grad_template = per_label_grad_label_template[lbl]
+                else:
+                    # sensible defaults
+                    if this_grad_col == "nominal_core_mean_grad_gy_per_mm":
+                        if not unit_str:
+                            unit_str = r"\mathrm{Gy/mm}"
+                        panel_grad_template = r"$\bar{{g}} = {value:.2f}\ {unit}$"
+                    else:
+                        if unit_str:
+                            panel_grad_template = f"{this_grad_col} = " + "{value:.2f} {unit}"
+                        else:
+                            panel_grad_template = f"{this_grad_col} = " + "{value:.2f}"
+
+
+                # logistic families
+                for color, sec_val in zip(grad_colors, sec_levels):
+                    eta = b0 + b_delta * x_grid + b_grad * float(sec_val)
+                    p_grid = 1.0 / (1.0 + np.exp(-eta))
+                    ax.plot(x_grid, p_grid, color=color, linewidth=2.0, alpha=0.95, zorder=4)
+
+                    grad_handles_panel.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            color=color,
+                            lw=2.0,
+                            label=panel_grad_template.format(value=sec_val, unit=unit_str),
+                        )
+                    )
+
+
+                # optional overlay of 1D margin-only model
+                if overlay_1d_model and coef1_df is not None:
+                    c1 = coef1_df.loc[coef1_df[coef1_label_col] == lbl]
+                    if (not c1.empty) and ("b_const" in c1.columns) and (f"b_{margin_col}" in c1.columns):
+                        c1 = c1.iloc[0]
+                        b0_1d = float(c1["b_const"])
+                        b_delta_1d = float(c1[f"b_{margin_col}"])
+                        eta_1d = b0_1d * np.ones_like(x_grid) + b_delta_1d * x_grid
+                        p_1d = 1.0 / (1.0 + np.exp(-eta_1d))
+
+                        line_kwargs = {
+                            "color": "black",
+                            "linestyle": "--",
+                            "linewidth": 2.0,
+                            "alpha": 0.9,
+                            "zorder": 5,
+                        }
+                        if overlay_1d_kwargs is not None:
+                            line_kwargs.update(overlay_1d_kwargs)
+                        ax.plot(x_grid, p_1d, **line_kwargs)
+
+                ax.axhline(high_cut, linestyle="--", linewidth=0.9, color="black", zorder=1)
+                ax.axhline(low_cut, linestyle="--", linewidth=0.9, color="black", zorder=1)
+                ax.axvline(0.0, linestyle=":", linewidth=0.9, color="black", zorder=1)
+
+                # Build 1–2 line title: rule + optional secondary predictor annotation
+                title_str = _make_criterion(metric_name, thr)  # same as before, e.g. "$D_{2\%} \ge 32\,\mathrm{Gy}$"
+
+                if per_label_secondary_annotation is not None and lbl in per_label_secondary_annotation:
+                    # second line: arbitrary LaTeX / text you pass in the dict
+                    sec_annot = per_label_secondary_annotation[lbl]
+                    title_str = title_str + "\n" + sec_annot
+
+                ax.set_title(title_str, fontsize="medium", pad=8)
+
+                # Is this rule a percent-type margin? (e.g. V150 ≥ 50%)
+                is_percent = ("%" in str(lbl)) or _metric_is_percent(metric_name)
+
+                ax.set_xlabel(
+                    _make_xlabel(
+                        metric_name,
+                        thr,
+                        rule_index=idx + 1,
+                        include_rule=include_rule_in_xlabel,
+                        is_percent=is_percent,
+                    )
+                )
+
+                if (idx % n_cols) == 0:
+                    ax.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+                else:
+                    ax.set_ylabel("")
+
+
+                ax.set_ylim(-0.05, 1.05)
+
+                # panel letter
+                letter_idx = idx + letter_offset
+                if 0 <= letter_idx < len(panel_letters):
+                    ax.text(
+                        0.02,
+                        0.98,
+                        panel_letters[letter_idx],
+                        transform=ax.transAxes,
+                        fontsize="large",
+                        fontweight="bold",
+                        va="top",
+                        ha="left",
+                    )
+
+                                # per-panel secondary legend (if per_label_* used)
+                leg_panel = None
+                if per_label_secondary is not None or per_label_grad_label_template is not None:
+                    if per_label_legend_title is not None and lbl in per_label_legend_title:
+                        panel_legend_title = per_label_legend_title[lbl]
+                    else:
+                        panel_legend_title = "Secondary predictor levels"
+
+                    leg_panel = ax.legend(
+                        handles=grad_handles_panel,
+                        loc="lower right",
+                        fontsize="x-small",
+                        title=panel_legend_title,
+                        title_fontsize="x-small",
+                        frameon=True,
+                        framealpha=0.95,
+                    )
+                    leg_panel.get_frame().set_facecolor("white")
+                    leg_panel.get_frame().set_edgecolor("black")
+
+                if annotate_fit_stats:
+                    txt = _format_panel_box_text(lbl)
+                    if txt:
+                        # 1) explicit per-panel coordinates win
+                        if per_label_stats_box_xy is not None and lbl in per_label_stats_box_xy:
+                            xa, ya = per_label_stats_box_xy[lbl]
+
+                        # 2) otherwise, named corner override (top-left, top-right, etc.)
+                        elif per_label_stats_box_corner is not None and lbl in per_label_stats_box_corner:
+                            corner = per_label_stats_box_corner[lbl]
+                            if corner == "top-left":
+                                xa, ya = 0.02, 0.68
+                            elif corner == "top-right":
+                                xa, ya = 0.66, 0.68
+                            elif corner == "bottom-left":
+                                xa, ya = 0.02, 0.08
+                            elif corner == "bottom-right":
+                                xa, ya = 0.66, 0.08
+                            else:
+                                # unknown string → fall back to automatic
+                                xa, ya = _choose_fitbox_loc(
+                                    sub[margin_col].to_numpy(),
+                                    sub[p_pass_col].to_numpy(),
+                                    txt,
+                                )
+
+                        # 3) otherwise, existing behaviour (glued to legend if present,
+                        #    else automatic placement)
+                        elif leg_panel is not None:
+                            try:
+                                fig.canvas.draw()
+                                bbox = leg_panel.get_window_extent()
+                                bbox_ax = bbox.transformed(ax.transAxes.inverted())
+                                box_w = 0.32
+                                pad = 0.02
+                                xa = max(bbox_ax.x0 - box_w - pad, 0.02)
+                                ya = bbox_ax.y0
+                            except Exception:
+                                xa, ya = _choose_fitbox_loc(
+                                    sub[margin_col].to_numpy(),
+                                    sub[p_pass_col].to_numpy(),
+                                    txt,
+                                )
+                        else:
+                            xa, ya = _choose_fitbox_loc(
+                                sub[margin_col].to_numpy(),
+                                sub[p_pass_col].to_numpy(),
+                                txt,
+                            )
+
+                        ax.text(
+                            xa,
+                            ya,
+                            txt,
+                            transform=ax.transAxes,
+                            ha="left",
+                            va="bottom",
+                            fontsize="small",
+                            bbox=dict(
+                                boxstyle="round,pad=0.25",
+                                facecolor="white",
+                                edgecolor="black",
+                                alpha=0.9,
+                            ),
+                            zorder=15,
+                        )
+
+
+
+
+            # hide unused axes
+            for j in range(n_panels, len(axes_flat)):
+                axes_flat[j].set_visible(False)
+
+            # --- Global legend: QA classes (+ optional 1D overlay) ---
+            handles_global = qa_handles_for_global.copy()
+            if overlay_handle_global is not None:
+                handles_global.append(overlay_handle_global)
+
+            if handles_global:
+                leg_global = fig.legend(
+                    handles=handles_global,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 1.02),
+                    ncol=min(len(handles_global), 4),
+                    frameon=True,
+                    framealpha=0.95,
+                    fontsize="small",
+                    title=r"QA class and margin-only fit",
+                    title_fontsize="small",
+                )
+                leg_global.get_frame().set_facecolor("white")
+                leg_global.get_frame().set_edgecolor("black")
+
+            fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.95])
+
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                fig.savefig(Path(save_dir) / file_name, dpi=dpi, bbox_inches="tight")
+
+        return fig, axes
+
+
+
+
+
+
+
+def _build_sextant_order(df: pd.DataFrame):
+    """Return ordered list of sextant keys + plain labels."""
+    def to_key(row):
+        lr = row['Bx voxel prostate sextant (LR)']
+        ap = row['Bx voxel prostate sextant (AP)']
+        si = row['Bx voxel prostate sextant (SI)']
+        lr_order = {'Left': 0, 'Right': 1}
+        ap_order = {'Anterior': 0, 'Posterior': 1}
+        si_order = {'Base (Superior)': 0, 'Mid': 1, 'Apex (Inferior)': 2}
+        return (
+            lr_order.get(lr, 99),
+            ap_order.get(ap, 99),
+            si_order.get(si, 99),
+        )
+
+    sub = (
+        df[
+            [
+                'Bx voxel prostate sextant (LR)',
+                'Bx voxel prostate sextant (AP)',
+                'Bx voxel prostate sextant (SI)',
+            ]
+        ]
+        .drop_duplicates()
+        .copy()
+    )
+    sub['__order_key'] = sub.apply(to_key, axis=1)
+    sub = sub.sort_values('__order_key')
+
+    keys = []
+    labels = []
+    for _, row in sub.iterrows():
+        lr = row['Bx voxel prostate sextant (LR)']
+        ap = row['Bx voxel prostate sextant (AP)']
+        si = row['Bx voxel prostate sextant (SI)']
+
+        lr_short = 'L' if lr == 'Left' else 'R'
+        ap_short = 'Ant' if ap == 'Anterior' else 'Post'
+        si_short = {
+            'Base (Superior)': 'Base',
+            'Mid': 'Mid',
+            'Apex (Inferior)': 'Apex',
+        }[si]
+
+        keys.append((lr, ap, si))
+        labels.append(f"{lr_short}-{ap_short}-{si_short}")
+
+    return keys, labels
+
+
+def plot_sextant_dose_bias_panels(
+    sextant_mc_dose_grad: pd.DataFrame,
+    sextant_mc_deltas: pd.DataFrame,
+    sextant_nominal_deltas: pd.DataFrame,
+    output_dir,
+    fig_scale: float = 1.0,
+    dpi: int = 300,
+    show: bool = False,
+    fig_name: str = "Fig_sextant_dose_bias_by_double_sextant",
+    # font controls
+    title_fontsize: float = 14,
+    cell_fontsize: float = 8,
+    ytick_fontsize: float = 10,
+    cbar_label_fontsize: float = 11,
+    cbar_tick_fontsize: float = 9,
+) -> None:
+    """
+    6-panel heatmap summary by prostate double sextant (3×2 layout).
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    keys, base_labels = _build_sextant_order(sextant_mc_dose_grad)
+
+    # n_vox per sextant (if present)
+    if "n_voxels" in sextant_mc_dose_grad.columns:
+        nvox_map = {
+            (
+                row["Bx voxel prostate sextant (LR)"],
+                row["Bx voxel prostate sextant (AP)"],
+                row["Bx voxel prostate sextant (SI)"],
+            ): int(row["n_voxels"])
+            for _, row in sextant_mc_dose_grad.iterrows()
+        }
+
+        row_labels = [
+            rf"{lbl} ($n_{{\mathrm{{vox}}}}={nvox_map.get(k, 0):d}$)"
+            for lbl, k in zip(base_labels, keys)
+        ]
+    else:
+        row_labels = base_labels
+
+    def _extract(df, median_col, q05_col=None, q95_col=None):
+        """Return (median, q05, q95) as (N,1) arrays in sextant order."""
+        med, q05, q95 = [], [], []
+        for lr, ap, si in keys:
+            row = df[
+                (df["Bx voxel prostate sextant (LR)"] == lr)
+                & (df["Bx voxel prostate sextant (AP)"] == ap)
+                & (df["Bx voxel prostate sextant (SI)"] == si)
+            ]
+            if row.empty:
+                med.append(np.nan)
+                q05.append(np.nan)
+                q95.append(np.nan)
+            else:
+                r = row.iloc[0]
+                med.append(float(r[median_col]))
+                if q05_col is not None:
+                    q05.append(float(r[q05_col]))
+                    q95.append(float(r[q95_col]))
+        med = np.asarray(med)[:, None]
+        q05 = np.asarray(q05)[:, None] if q05_col is not None else None
+        q95 = np.asarray(q95)[:, None] if q95_col is not None else None
+        return med, q05, q95
+
+    # --- panel data (same as before) ---
+    dose_med, dose_q05, dose_q95 = _extract(
+        sextant_mc_dose_grad,
+        "Dose (Gy) median",
+        "Dose (Gy) q05",
+        "Dose (Gy) q95",
+    )
+
+    grad_med, grad_q05, grad_q95 = _extract(
+        sextant_mc_dose_grad,
+        "Dose grad (Gy/mm) median",
+        "Dose grad (Gy/mm) q05",
+        "Dose grad (Gy/mm) q95",
+    )
+
+    trial_abs_med, trial_abs_q05, trial_abs_q95 = _extract(
+        sextant_mc_deltas,
+        "Dose (Gy) abs deltas abs_nominal_minus_trial median",
+        "Dose (Gy) abs deltas abs_nominal_minus_trial q05",
+        "Dose (Gy) abs deltas abs_nominal_minus_trial q95",
+    )
+
+    bias_q50_med, bias_q50_q05, bias_q50_q95 = _extract(
+        sextant_nominal_deltas,
+        "Dose (Gy) deltas nominal_minus_q50 median",
+        "Dose (Gy) deltas nominal_minus_q50 q05",
+        "Dose (Gy) deltas nominal_minus_q50 q95",
+    )
+
+    bias_mean_med, bias_mean_q05, bias_mean_q95 = _extract(
+        sextant_nominal_deltas,
+        "Dose (Gy) deltas nominal_minus_mean median",
+        "Dose (Gy) deltas nominal_minus_mean q05",
+        "Dose (Gy) deltas nominal_minus_mean q95",
+    )
+
+    bias_mode_med, bias_mode_q05, bias_mode_q95 = _extract(
+        sextant_nominal_deltas,
+        "Dose (Gy) deltas nominal_minus_mode median",
+        "Dose (Gy) deltas nominal_minus_mode q05",
+        "Dose (Gy) deltas nominal_minus_mode q95",
+    )
+
+    data_mats = [
+        dose_med,
+        grad_med,
+        trial_abs_med,
+        bias_q50_med,
+        bias_mean_med,
+        bias_mode_med,
+    ]
+
+    q05_mats = [
+        dose_q05,
+        grad_q05,
+        trial_abs_q05,
+        bias_q50_q05,
+        bias_mean_q05,
+        bias_mode_q05,
+    ]
+
+    q95_mats = [
+        dose_q95,
+        grad_q95,
+        trial_abs_q95,
+        bias_q50_q95,
+        bias_mean_q95,
+        bias_mode_q95,
+    ]
+
+    titles = [
+        r"$D_{b,v}^{(t)}$",
+        r"$G_{b,v}^{(t)}$",
+        r"$|\Delta D_{b,v,t}|$",
+        r"$\Delta D^{(\mathrm{Q50})}_{b,v}$",
+        r"$\Delta D^{(\mathrm{mean})}_{b,v}$",
+        r"$\Delta D^{(\mathrm{mode})}_{b,v}$",
+    ]
+
+    cmaps = [
+        "viridis",
+        "magma",
+        "cividis",
+        "coolwarm",
+        "coolwarm",
+        "coolwarm",
+    ]
+
+    cbar_labels = [
+        r"Median $D_{b,v}^{(t)}$ (Gy)",
+        r"Median $G_{b,v}^{(t)}$ (Gy mm$^{-1}$)",
+        r"Median $|\Delta D_{b,v,t}|$ (Gy)",
+        r"Median $\Delta D^{(\mathrm{Q50})}_{b,v}$ (Gy)",
+        r"Median $\Delta D^{(\mathrm{mean})}_{b,v}$ (Gy)",
+        r"Median $\Delta D^{(\mathrm{mode})}_{b,v}$ (Gy)",
+    ]
+
+    norms = []
+    for j, mat in enumerate(data_mats):
+        finite = np.isfinite(mat)
+        if not finite.any():
+            if j >= 3:
+                norms.append(TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=1.0))
+            else:
+                norms.append(Normalize(vmin=0.0, vmax=1.0))
+            continue
+
+        if j >= 3:
+            max_abs = float(np.nanmax(np.abs(mat[finite])))
+            if max_abs == 0:
+                max_abs = 1e-6
+            norms.append(TwoSlopeNorm(vmin=-max_abs, vcenter=0.0, vmax=max_abs))
+        else:
+            vmax = float(np.nanmax(mat[finite]))
+            if vmax <= 0:
+                vmax = 1e-6
+            norms.append(Normalize(vmin=0.0, vmax=vmax))
+
+    # slightly taller again → more vertical padding
+    fig, axes = plt.subplots(
+        3,
+        2,
+        figsize=(8.5 * fig_scale, 14.0 * fig_scale),
+        constrained_layout=True,
+    )
+
+    for j in range(6):
+        row, col = divmod(j, 2)
+        ax = axes[row, col]
+
+        mat = data_mats[j]
+        q05_mat = q05_mats[j]
+        q95_mat = q95_mats[j]
+
+        annot = np.empty(mat.shape, dtype=object)
+        for i in range(mat.shape[0]):
+            if np.isnan(mat[i, 0]):
+                annot[i, 0] = ""
+            else:
+                annot[i, 0] = (
+                    f"{mat[i, 0]:.1f}\n"
+                    f"[{q05_mat[i, 0]:.1f},{q95_mat[i, 0]:.1f}]"
+                )
+
+        hm = sns.heatmap(
+            mat,
+            ax=ax,
+            cmap=cmaps[j],
+            norm=norms[j],
+            cbar=True,
+            cbar_kws={
+                "shrink": 1,
+                "label": cbar_labels[j],
+                "fraction": 0.15,
+                "pad": 0.04,
+                "aspect": 20,
+            },
+            annot=annot,
+            fmt="",
+            annot_kws={
+                "fontsize": cell_fontsize,
+                "fontweight": "bold",
+                "linespacing": 2.1,   # more vertical spacing in each cell
+                "va": "center",
+            },
+            yticklabels=row_labels if col == 0 else False,
+            xticklabels=False,
+            linewidths=0.3,
+            linecolor="black",
+        )
+
+        cbar = hm.collections[0].colorbar
+        cbar.ax.yaxis.label.set_size(cbar_label_fontsize)
+        cbar.ax.tick_params(labelsize=cbar_tick_fontsize)
+
+        ax.set_title(titles[j], fontsize=title_fontsize)
+        if col == 0:
+            ax.tick_params(axis="y", labelsize=ytick_fontsize)
+        else:
+            ax.tick_params(axis="y", left=False)
+
+    png_path = output_dir / f"{fig_name}.png"
+    svg_path = output_dir / f"{fig_name}.svg"
+    fig.savefig(png_path, dpi=dpi, bbox_inches="tight")
+    fig.savefig(svg_path, dpi=dpi, bbox_inches="tight")
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _predictor_x_label_for_log1p_delta(
+    col: str,
+    label_style: str = "latex",
+    predictor_label_map: dict | None = None,
+    idx_sub: tuple[str, str] = ("b", "v"),
+) -> str:
+    """
+    Map a predictor column name to an x-axis label for the log1p(|Δ|) vs predictor plots.
+
+    If predictor_label_map is provided and contains the column, its value is used verbatim.
+    Otherwise, fall back to simple LaTeX / plain-text heuristics, with special-cases for
+    the nominal dose and nominal dose gradient used in the paper.
+    """
+    if predictor_label_map is not None and col in predictor_label_map:
+        return predictor_label_map[col]
+
+    b, v = idx_sub
+
+    # Plain-text style: just echo the column name
+    if label_style != "latex":
+        return col
+
+    base = col.strip()
+    base_lower = base.lower()
+
+    # Nominal dose gradient at voxel - reuse the same helper used for Grad[...] plots
+    if "grad" in base_lower:
+        # This keeps the notation consistent with the other gradient figures
+        return _x_label_for("Grad[nominal] (Gy/mm)", label_style, grad_stat_tex=None)
+
+    # Nominal dose at voxel
+    if base_lower.startswith("nominal dose"):
+        # D^{(0)}_{b,v} (Gy)
+        return rf"$D^{{(0)}}_{{{b},{v}}}\ \mathrm{{(Gy)}}$"
+
+    # Generic fallback: wrap the column name in \mathrm{⋯}, escaping underscores/carets
+    safe = re.sub(r"([_^])", r"\\\1", base)
+    return rf"$\mathrm{{{safe}}}$"
+
+
+def plot_log1p_median_delta_vs_predictors_pkg(
+    long_df: pd.DataFrame,
+    save_dir,
+    file_prefix: str,
+    *,
+    predictor_cols: Sequence[str],
+    # scatter / regression options
+    scatter: bool = True,
+    scatter_sample: int | None = 20000,
+    scatter_alpha: float = 0.15,
+    scatter_size: float = 10.0,
+    ci: int = 95,
+    annotate_stats: bool = True,
+    write_stats_csv: bool = True,
+    # layout / fonts
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    legend_fontsize: int = 11,
+    height: float = 3.0,
+    aspect: float = 1.6,
+    facet_cols: int = 2,
+    title: str | None = None,
+    # label style
+    label_style: str = "latex",
+    idx_sub: tuple[str, str] = ("b", "v"),
+    j_symbol: str = "Q50",
+    predictor_label_map: dict | None = None,
+):
+    """
+    Multi-panel figure: log1p(|Δ|) for the median bias vs a set of voxel-level predictors.
+
+    Parameters
+    ----------
+    long_df
+        Long-form delta design table with at least:
+          ['Delta kind', 'log1p|Delta|', <predictor columns>].
+        Typically the output of make_long_delta_design_from_delta_design(...).
+    save_dir
+        Directory where the SVG/PNG (and optional CSV of regression stats) will be written.
+    file_prefix
+        Base name for output files, e.g. "log1p_median_delta_vs_top_predictors".
+    predictor_cols
+        Iterable of predictor column names to facet over (e.g. nominal dose, nominal
+        dose gradient, best distance-based predictor, best radiomic predictor).
+        Usually you will pass four names to obtain a 2×2 layout.
+
+    Returns
+    -------
+    svg_path, png_path, csv_path, stats_df
+    """
+    df = long_df.copy()
+
+    # Filter to the median delta kind only
+    if "Delta kind" not in df.columns:
+        raise KeyError("Expected a 'Delta kind' column in long_df.")
+    df["__kind__"] = df["Delta kind"].map(_kind_prefix)
+    df = df[df["__kind__"] == "Δ_median"].copy()
+    if df.empty:
+        raise ValueError("No rows left after filtering to Δ_median.")
+
+    y_col = "log1p|Delta|"
+    if y_col not in df.columns:
+        raise KeyError("Expected a 'log1p|Delta|' column in long_df.")
+
+    # Ensure predictors are present
+    if predictor_cols is None or len(predictor_cols) == 0:
+        raise ValueError("predictor_cols must be a non-empty sequence of column names.")
+    predictor_cols = list(predictor_cols)
+    missing = [c for c in predictor_cols if c not in df.columns]
+    if missing:
+        raise KeyError(f"Predictor columns not found in long_df: {missing}")
+
+    # Layout
+    n = len(predictor_cols)
+    ncols = min(facet_cols, n) if n > 0 else 1
+    nrows = int(np.ceil(n / ncols)) if n > 0 else 1
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(aspect * height * ncols, height * nrows),
+        squeeze=False,
+    )
+    sns.set(style="whitegrid")
+
+    # y-axis uses the same notation helper as the other delta plots
+    y_label = _y_label_for(y_col, label_style, j_symbol, idx_sub)
+
+    stats_rows: list[dict] = []
+
+    for i, col in enumerate(predictor_cols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+
+        pane = df[[col, y_col]].copy()
+        pane = pane.rename(columns={col: "X", y_col: "Y"}).dropna()
+        if pane.empty:
+            ax.set_visible(False)
+            continue
+
+        # Single "group" for reuse of the existing panel helper
+        pane["Group"] = "Δ_median"
+
+        # Scatter + OLS + CI via the shared helper
+        _panel_regplot(
+            ax,
+            pane,
+            xcol="X",
+            ycol="Y",
+            hue="Group",
+            ci=ci,
+            scatter=scatter,
+            scatter_sample=scatter_sample,
+            scatter_alpha=scatter_alpha,
+            scatter_size=scatter_size,
+        )
+
+        # Axis labels
+        ax.set_xlabel(
+            _predictor_x_label_for_log1p_delta(
+                col,
+                label_style=label_style,
+                predictor_label_map=predictor_label_map,
+                idx_sub=idx_sub,
+            ),
+            fontsize=axes_label_fontsize,
+        )
+        ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+        ax.tick_params(axis="both", labelsize=tick_label_fontsize)
+
+        # Legend: there is a single entry ("Δ_median"); keep it small or hide entirely
+        leg = ax.legend(title=None, frameon=True)
+        if leg:
+            for txt in leg.get_texts():
+                txt.set_fontsize(max(legend_fontsize - 1, 8))
+
+        # Per-panel regression stats (slope, CI, ρ, R², n)
+        s = _ols_stats(pane["X"], pane["Y"])
+        s_row = {"predictor_col": col, "y_col": y_col, "delta_kind": "Δ_median", **s}
+        stats_rows.append(s_row)
+
+        if annotate_stats and not np.isnan(s.get("slope", np.nan)):
+            txt = (
+                f"slope={s['slope']:.3f} "
+                f"[{s['slope_lo']:.3f},{s['slope_hi']:.3f}]\n"
+                f"ρ={s['rho']:.3f}, R²={s['r2']:.3f}, n={s['n']}"
+            )
+            ax.text(
+                0.02,
+                0.98,
+                txt,
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+                fontsize=max(legend_fontsize - 1, 9),
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.6, lw=0),
+            )
+
+    # Hide any unused subplots
+    for j in range(i + 1, nrows * ncols):
+        r, c = divmod(j, ncols)
+        axes[r][c].axis("off")
+
+    if title:
+        fig.suptitle(title, fontsize=axes_label_fontsize)
+        fig.subplots_adjust(top=0.90)
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    svg = out_dir / f"{file_prefix}.svg"
+    png = out_dir / f"{file_prefix}.png"
+    fig.tight_layout()
+    fig.savefig(svg, format="svg", dpi=300)
+    fig.savefig(png, format="png", dpi=300)
+    plt.close(fig)
+
+    # Optional CSV of stats
+    stats_df = pd.DataFrame(stats_rows)
+    csv_path = None
+    if write_stats_csv and not stats_df.empty:
+        csv_path = out_dir / f"{file_prefix}__stats.csv"
+        stats_df.to_csv(csv_path, index=False)
+
+    return svg, png, csv_path, stats_df
+
+
+
+
+
+
+def plot_delta_vs_predictors_pkg(
+    long_df: pd.DataFrame,
+    save_dir,
+    file_prefix: str,
+    *,
+    predictor_cols: Sequence[str],
+    # NEW: general y control
+    y_col: str = "log1p|Delta|",
+    delta_kind_label: str | None = "Δ_median",     # e.g. "Δ_median", "Δ_mean", "Δ_mode", or None for no filter
+    delta_kind_col: str = "Delta kind",
+    # scatter / regression options
+    scatter: bool = True,
+    scatter_sample: int | None = 20000,
+    scatter_alpha: float = 0.15,
+    scatter_size: float = 10.0,
+    ci: int = 95,
+    annotate_stats: bool = True,
+    write_stats_csv: bool = True,
+    # layout / fonts
+    axes_label_fontsize: int = 13,
+    tick_label_fontsize: int = 11,
+    legend_fontsize: int = 11,
+    height: float = 3.0,
+    aspect: float = 1.6,
+    facet_cols: int = 2,
+    title: str | None = None,
+    # label style
+    label_style: str = "latex",
+    idx_sub: tuple[str, str] = ("b", "v"),
+    j_symbol: str = "Q50",
+    predictor_label_map: dict | None = None,
+):
+    """
+    Multi-panel figure: (general) y-column vs a set of voxel-level predictors.
+
+    Parameters
+    ----------
+    long_df
+        Long-form delta design table with at least:
+          [delta_kind_col, y_col, <predictor columns>].
+        Typically the output of make_long_delta_design_from_delta_design(...).
+    save_dir
+        Directory where the SVG/PNG (and optional CSV of regression stats) will be written.
+    file_prefix
+        Base name for output files, e.g. "median_absDelta_vs_top_predictors".
+    predictor_cols
+        Iterable of predictor column names to facet over.
+    y_col
+        Name of the column to use on the y-axis (e.g. "log1p|Delta|" or
+        something like "|Delta|", "Delta (Gy) deltas nominal_minus_q50 abs", etc.).
+    delta_kind_label
+        Display label used by _kind_prefix (e.g. "Δ_median"). If not None,
+        rows are filtered to this kind. If None, no Delta kind filtering is applied.
+    delta_kind_col
+        Name of the column containing the delta kind, default "Delta kind".
+
+    Returns
+    -------
+    svg_path, png_path, csv_path, stats_df
+    """
+    df = long_df.copy()
+
+    # Optionally filter to a specific delta kind (default: Δ_median, same as before)
+    if delta_kind_label is not None:
+        if delta_kind_col not in df.columns:
+            raise KeyError(f"Expected a '{delta_kind_col}' column in long_df.")
+        df["__kind__"] = df[delta_kind_col].map(_kind_prefix)
+        df = df[df["__kind__"] == delta_kind_label].copy()
+        if df.empty:
+            raise ValueError(
+                f"No rows left after filtering to delta kind '{delta_kind_label}'."
+            )
+
+    # y column
+    if y_col not in df.columns:
+        raise KeyError(f"Expected a '{y_col}' column in long_df.")
+    y_label = _y_label_for(y_col, label_style, j_symbol, idx_sub)
+
+    # Ensure predictors are present
+    if not predictor_cols:
+        raise ValueError("predictor_cols must be a non-empty sequence of column names.")
+    predictor_cols = list(predictor_cols)
+    missing = [c for c in predictor_cols if c not in df.columns]
+    if missing:
+        raise KeyError(f"Predictor columns not found in long_df: {missing}")
+
+    # Layout
+    n = len(predictor_cols)
+    ncols = min(facet_cols, n) if n > 0 else 1
+    nrows = int(np.ceil(n / ncols)) if n > 0 else 1
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(aspect * height * ncols, height * nrows),
+        squeeze=False,
+    )
+    sns.set(style="whitegrid")
+
+    stats_rows: list[dict] = []
+
+    for i, col in enumerate(predictor_cols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+
+        pane = df[[col, y_col]].copy()
+        pane = pane.rename(columns={col: "X", y_col: "Y"}).dropna()
+        if pane.empty:
+            ax.set_visible(False)
+            continue
+
+        # Single "group" for reuse of the existing panel helper
+        group_label = delta_kind_label if delta_kind_label is not None else "all"
+        pane["Group"] = group_label
+
+        # Scatter + OLS + CI via the shared helper
+        _panel_regplot(
+            ax,
+            pane,
+            xcol="X",
+            ycol="Y",
+            hue="Group",
+            ci=ci,
+            scatter=scatter,
+            scatter_sample=scatter_sample,
+            scatter_alpha=scatter_alpha,
+            scatter_size=scatter_size,
+        )
+
+        # Axis labels
+        ax.set_xlabel(
+            _predictor_x_label_for_log1p_delta(  # still OK: only depends on predictor
+                col,
+                label_style=label_style,
+                predictor_label_map=predictor_label_map,
+                idx_sub=idx_sub,
+            ),
+            fontsize=axes_label_fontsize,
+        )
+        ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+        ax.tick_params(axis="both", labelsize=tick_label_fontsize)
+
+        # Legend: single entry; keep small
+        leg = ax.legend(title=None, frameon=True)
+        if leg:
+            for txt in leg.get_texts():
+                txt.set_fontsize(max(legend_fontsize - 1, 8))
+
+        # Per-panel regression stats (slope, CI, ρ, R², n)
+        s = _ols_stats(pane["X"], pane["Y"])
+        s_row = {
+            "predictor_col": col,
+            "y_col": y_col,
+            "delta_kind": group_label,
+            **s,
+        }
+        stats_rows.append(s_row)
+
+        if annotate_stats and not np.isnan(s.get("slope", np.nan)):
+            txt = (
+                f"slope={s['slope']:.3f} "
+                f"[{s['slope_lo']:.3f},{s['slope_hi']:.3f}]\n"
+                f"ρ={s['rho']:.3f}, R²={s['r2']:.3f}, n={s['n']}"
+            )
+            ax.text(
+                0.02,
+                0.98,
+                txt,
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+                fontsize=max(legend_fontsize - 1, 9),
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.6, lw=0),
+            )
+
+    # Hide any unused subplots
+    for j in range(i + 1, nrows * ncols):
+        r, c = divmod(j, ncols)
+        axes[r][c].axis("off")
+
+    if title:
+        fig.suptitle(title, fontsize=axes_label_fontsize)
+        fig.subplots_adjust(top=0.90)
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    svg = out_dir / f"{file_prefix}.svg"
+    png = out_dir / f"{file_prefix}.png"
+    fig.tight_layout()
+    fig.savefig(svg, format="svg", dpi=300)
+    fig.savefig(png, format="png", dpi=300)
+    plt.close(fig)
+
+    # Optional CSV of stats
+    stats_df = pd.DataFrame(stats_rows)
+    csv_path = None
+    if write_stats_csv and not stats_df.empty:
+        csv_path = out_dir / f"{file_prefix}__stats.csv"
+        stats_df.to_csv(csv_path, index=False)
+
+    return svg, png, csv_path, stats_df
+
+
+
+# this one is generalized to allow multiple delta kinds in one plot
+def plot_delta_vs_predictors_pkg_generalized(
+        long_df: pd.DataFrame,
+        save_dir,
+        file_prefix: str,
+        *,
+        predictor_cols: Sequence[str],
+        y_col: str = "log1p|Delta|",
+        # can be "Δ_median" or ["Δ_median", "Δ_mean", "Δ_mode"]
+        delta_kind_label: str | Sequence[str] | None = "Δ_median",
+        delta_kind_col: str = "Delta kind",
+        # scatter / regression options
+        scatter: bool = True,
+        scatter_sample: int | None = 20000,
+        scatter_alpha: float = 0.15,
+        scatter_size: float = 10.0,
+        ci: int = 95,
+        annotate_stats: bool = True,
+        write_stats_csv: bool = True,
+        # layout / fonts
+        axes_label_fontsize: int = 13,
+        tick_label_fontsize: int = 11,
+        legend_fontsize: int = 11,
+        height: float = 3.0,
+        aspect: float = 1.6,
+        facet_cols: int = 2,
+        title: str | None = None,
+        # label style
+        label_style: str = "latex",
+        idx_sub: tuple[str, str] = ("b", "v"),
+        j_symbol: str = "Q50",
+        predictor_label_map: dict | None = None,
+        delta_kind_label_map = None,
+        zero_x_predictors: Sequence[str] = (
+            "Nominal dose (Gy)",
+            "Nominal dose grad (Gy/mm)",
+            # maybe distance, maybe not
+        ),
+    ):
+    df = long_df.copy()
+
+    # ---------- handle delta kinds ----------
+    if delta_kind_label is not None:
+        if delta_kind_col not in df.columns:
+            raise KeyError(f"Expected a '{delta_kind_col}' column in long_df.")
+
+        # map raw kind -> pretty label (e.g. "median" -> "Δ_median")
+        df["__kind__"] = df[delta_kind_col].map(_kind_prefix)
+
+        if isinstance(delta_kind_label, str):
+            wanted = [delta_kind_label]
+        else:
+            wanted = list(delta_kind_label)
+
+        df = df[df["__kind__"].isin(wanted)].copy()
+        if df.empty:
+            raise ValueError(
+                f"No rows left after filtering to delta kinds {wanted!r}."
+            )
+    else:
+        # no filtering, but still build a label column if possible
+        if delta_kind_col in df.columns:
+            df["__kind__"] = df[delta_kind_col].map(_kind_prefix)
+        else:
+            df["__kind__"] = "all"
+
+    # ---------- y axis ----------
+    if y_col not in df.columns:
+        raise KeyError(f"Expected a '{y_col}' column in long_df.")
+    y_label = _y_label_for(y_col, label_style, j_symbol, idx_sub)
+
+    # ---------- predictor checks ----------
+    if not predictor_cols:
+        raise ValueError("predictor_cols must be a non-empty sequence of column names.")
+    predictor_cols = list(predictor_cols)
+    missing = [c for c in predictor_cols if c not in df.columns]
+    if missing:
+        raise KeyError(f"Predictor columns not found in long_df: {missing}")
+
+    # ---------- layout ----------
+    n = len(predictor_cols)
+    ncols = min(facet_cols, n) if n > 0 else 1
+    nrows = int(np.ceil(n / ncols)) if n > 0 else 1
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(aspect * height * ncols, height * nrows),
+        squeeze=False,
+    )
+    sns.set(style="whitegrid")
+
+    stats_rows: list[dict] = []
+
+    # before the plotting loop
+    same_y_range = True
+    if same_y_range:
+        y_max = float(df[y_col].max())
+        # round up to a nice number, e.g. nearest 10
+        y_max = np.ceil(y_max / 10) * 10
+
+
+    for i, col in enumerate(predictor_cols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+
+        # keep predictor, y, and kind
+        pane = df[[col, y_col, "__kind__"]].copy()
+        pane = pane.rename(
+            columns={col: "X", y_col: "Y", "__kind__": "Group"}
+        ).dropna()
+
+        if pane.empty:
+            ax.set_visible(False)
+            continue
+
+        # draw all groups in one call
+        _panel_regplot(
+            ax,
+            pane,
+            xcol="X",
+            ycol="Y",
+            hue="Group",  # <-- multiple bias types distinguished here
+            ci=ci,
+            scatter=scatter,
+            scatter_sample=scatter_sample,
+            scatter_alpha=scatter_alpha,
+            scatter_size=scatter_size,
+        )
+
+        if same_y_range:
+            ax.set_ylim(0, y_max)
+        else:
+            ax.set_ylim(bottom=0)  # at least anchor at 0
+
+        if col in zero_x_predictors:
+            ax.set_xlim(left=0)
+
+        # labels
+        ax.set_xlabel(
+            _predictor_x_label_for_log1p_delta(
+                col,
+                label_style=label_style,
+                predictor_label_map=predictor_label_map,
+                idx_sub=idx_sub,
+            ),
+            fontsize=axes_label_fontsize,
+        )
+        ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
+        ax.tick_params(axis="both", labelsize=tick_label_fontsize)
+
+        # legend: now has one entry per bias type
+        leg = ax.legend(title=None, frameon=True)
+        if leg:
+            for txt in leg.get_texts():
+                txt.set_fontsize(max(legend_fontsize - 1, 8))
+                ## map the legend text (each entry) to custom labels
+                if delta_kind_label_map is not None:
+                    txt_str = txt.get_text()
+                    if txt_str in delta_kind_label_map:
+                        txt.set_text(delta_kind_label_map[txt_str])
+
+        # ---------- per-group stats ----------
+        group_stats: list[tuple[str, dict]] = []
+        for gname, sub in pane.groupby("Group", observed=True, sort=False):
+            s = _ols_stats(sub["X"], sub["Y"])
+            group_stats.append((gname, s))
+            stats_rows.append(
+                {
+                    "predictor_col": col,
+                    "y_col": y_col,
+                    "delta_kind": gname,
+                    **s,
+                }
+            )
+
+        if annotate_stats:
+            y0 = 0.98
+            dy = 0.14  # move text down a bit for each group
+            for jg, (gname, s) in enumerate(group_stats):
+                if np.isnan(s.get("slope", np.nan)):
+                    continue
+                txt = (
+                    f"{gname}: slope={s['slope']:.3f} "
+                    f"[{s['slope_lo']:.3f},{s['slope_hi']:.3f}]\n"
+                    f"ρ={s['rho']:.3f}, R²={s['r2']:.3f}, n={s['n']}"
+                )
+                ax.text(
+                    0.02,
+                    y0 - jg * dy,
+                    txt,
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    fontsize=max(legend_fontsize - 1, 9),
+                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.6, lw=0),
+                )
+
+    # hide unused axes
+    for j in range(i + 1, nrows * ncols):
+        r, c = divmod(j, ncols)
+        axes[r][c].axis("off")
+
+    if title:
+        fig.suptitle(title, fontsize=axes_label_fontsize)
+        fig.subplots_adjust(top=0.90)
+
+    ## add major gridlines
+    for ax in axes.flat:
+        ax.grid(visible=True, which="major", linestyle="-", linewidth=0.5)
+    ## add minor gridlines
+        ax.minorticks_on()
+        ax.grid(visible=True, which="minor", linestyle="--", linewidth=0.25, alpha=0.7)
+
+    """
+    #set x limit to start at 0, and y limit to for from 0 to max y range + 10% for all plots
+    for ax in axes.flat:
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0, top=ax.get_ylim()[1] * 1.1)
+    """
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    svg = out_dir / f"{file_prefix}.svg"
+    png = out_dir / f"{file_prefix}.png"
+    fig.tight_layout()
+    fig.savefig(svg, format="svg", dpi=300)
+    fig.savefig(png, format="png", dpi=300)
+    plt.close(fig)
+
+    stats_df = pd.DataFrame(stats_rows)
+    csv_path = None
+    if write_stats_csv and not stats_df.empty:
+        csv_path = out_dir / f"{file_prefix}__stats.csv"
+        stats_df.to_csv(csv_path, index=False)
+
+    return svg, png, csv_path, stats_df

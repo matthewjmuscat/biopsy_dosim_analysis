@@ -472,14 +472,14 @@ def compute_dvh_metrics_per_trial(
 ) -> pd.DataFrame:
     """
     Compute DVH metrics (D_X% and V_Y%) per MC trial for each (Patient ID, Bx index) pair.
-    Keeps the metadata columns: 'Simulated bool', 'Simulated type', 'Bx refnum', 'Bx ID'.
+    Keeps the metadata columns: 'Simulated bool', 'Simulated type', 'Bx ID'.
 
     Parameters
     ----------
     df : pd.DataFrame
         Must contain at least:
         ['Voxel index','MC trial num','Dose (Gy)','Patient ID','Bx index','Bx ID',
-         'Simulated bool','Simulated type','Bx refnum']
+         'Simulated bool','Simulated type']
     d_perc_list : list[int|float]
         X values for D_X% (e.g., [2, 50, 98]). D_X% is computed as the dose at
         quantile q = 1 - X/100 (i.e., near-maximum for small X).
@@ -508,7 +508,7 @@ def compute_dvh_metrics_per_trial(
     """
     required_cols = [
         'Voxel index', 'MC trial num', 'Dose (Gy)', 'Patient ID', 'Bx index',
-        'Bx ID', 'Simulated bool', 'Simulated type', 'Bx refnum'
+        'Bx ID', 'Simulated bool', 'Simulated type'
     ]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
@@ -523,7 +523,7 @@ def compute_dvh_metrics_per_trial(
     group_keys = ['Patient ID', 'Bx index', 'MC trial num']
 
     # We will carry these metadata columns through by taking a unique value per group
-    meta_cols = ['Simulated bool', 'Simulated type', 'Bx refnum', 'Bx ID']
+    meta_cols = ['Simulated bool', 'Simulated type', 'Bx ID']
 
     # Helper to resolve the reference dose (Gy) for V_Y% in a given group
     def resolve_ref_dose(group_df: pd.DataFrame) -> float:
@@ -627,7 +627,7 @@ def compute_dvh_metrics_per_trial_vectorized(
     """
     Vectorized DVH metrics per MC trial for each (Patient ID, Bx index) group.
     Produces D_X% (Gy) and V_Y% (%) columns, one row per (Patient ID, Bx index, MC trial num),
-    carrying metadata: 'Simulated bool', 'Simulated type', 'Bx refnum', 'Bx ID'.
+    carrying metadata: 'Simulated bool', 'Simulated type', 'Bx ID'.
 
     Assumptions:
       - D_X% = dose at quantile q = 1 - X/100 (e.g., D2% ~ 98th percentile).
@@ -639,7 +639,7 @@ def compute_dvh_metrics_per_trial_vectorized(
     """
     required = [
         'Voxel index', 'MC trial num', 'Dose (Gy)', 'Patient ID', 'Bx index',
-        'Bx ID', 'Simulated bool', 'Simulated type', 'Bx refnum'
+        'Bx ID', 'Simulated bool', 'Simulated type'
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -651,7 +651,7 @@ def compute_dvh_metrics_per_trial_vectorized(
     work = work.dropna(subset=['Dose (Gy)'])
 
     keys = ['Patient ID', 'Bx index', 'MC trial num']
-    meta_cols = ['Simulated bool', 'Simulated type', 'Bx refnum', 'Bx ID']
+    meta_cols = ['Simulated bool', 'Simulated type', 'Bx ID']
 
     # -------------------------
     # 1) Vectorized D_X% using groupby.quantile at once
@@ -765,8 +765,6 @@ def build_dvh_summary_one_row_per_biopsy(
     df = per_trial_df.copy()
 
     # Normalize metadata to legacy schema
-    if "Dicom ref num" not in df.columns and "Bx refnum" in df.columns:
-        df = df.rename(columns={"Bx refnum": "Dicom ref num"})
     if "Struct type" not in df.columns:
         df["Struct type"] = "Bx ref"
     if "Struct index" not in df.columns:
@@ -790,7 +788,6 @@ def build_dvh_summary_one_row_per_biopsy(
         for keys, sub in df.groupby(group_keys, observed=False):
             # Pull a stable representative for display-only columns
             first = sub.iloc[0]
-            dicom_ref = first.get("Dicom ref num", np.nan)
             struct_index = first.get("Struct index", first.get("Bx index", np.nan))
 
             # Values across trials for this biopsy & metric
@@ -829,7 +826,6 @@ def build_dvh_summary_one_row_per_biopsy(
                 "Metric": mname,
                 "Bx ID": keys[1],
                 "Struct type": keys[2],
-                "Dicom ref num": dicom_ref,
                 "Simulated bool": keys[3],
                 "Simulated type": keys[4],
                 "Struct index": struct_index,
@@ -854,7 +850,7 @@ def build_dvh_summary_one_row_per_biopsy(
 
     # Exact legacy order (+ Nominal)
     desired_cols = [
-        "Patient ID","Metric","Bx ID","Struct type","Dicom ref num",
+        "Patient ID","Metric","Bx ID","Struct type",
         "Simulated bool","Simulated type","Struct index",
         "Mean","STD","SEM","Max","Min","Skewness","Kurtosis",
         "Q05","Q25","Q50","Q75","Q95","IQR","IPR90","Nominal",
@@ -949,7 +945,7 @@ def build_deltas_vs_gradient_df(
     gradient_stat: str = 'nominal',            # sub-level under gradient_top: e.g. 'nominal', 'mean', ...
     meta_keep: Optional[Iterable[str]] = (
         'Voxel begin (Z)', 'Voxel end (Z)', 'Voxel index',
-        'Patient ID', 'Bx ID', 'Bx index', 'Bx refnum',
+        'Patient ID', 'Bx ID', 'Bx index', 
         'Simulated bool', 'Simulated type'
     ),
     add_abs: bool = True,                      # add |Δ| columns
@@ -1077,7 +1073,7 @@ def build_deltas_vs_gradient_df_with_abs(
     gradient_stat: Optional[str] = None,               # alias (if provided, overrides gradient_stats when str)
     meta_keep: Optional[Iterable[str]] = (
         'Voxel begin (Z)', 'Voxel end (Z)', 'Voxel index',
-        'Patient ID', 'Bx ID', 'Bx index', 'Bx refnum',
+        'Patient ID', 'Bx ID', 'Bx index', 
         'Simulated bool', 'Simulated type'
     ),
     add_abs: bool = True,                              # include precomputed |Δ| columns
@@ -1260,3 +1256,1323 @@ def build_deltas_vs_gradient_df_with_abs(
 
 
     return wide, long
+
+
+
+
+
+
+
+
+def build_path1_margin_with_spatial_and_radiomics(
+    path1_enriched_df: pd.DataFrame,
+    biopsy_basic_df: pd.DataFrame,
+    radiomics_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Merge path1 QA results (per biopsy, per threshold) with:
+      - biopsy spatial features
+      - radiomics for the targeted DIL
+      - radiomics for the prostate
+
+    Assumptions:
+      * path1_enriched_df has one row per (Patient ID, Bx ID, Bx index, Threshold)
+      * biopsy_basic_df has columns:
+          ['Patient ID', 'Bx ID', 'Simulated bool', 'Simulated type',
+           'Struct type', 'Bx index', 'Length (mm)',
+           'Volume (mm3)', 'Voxel side length (mm)', 'Relative DIL ID',
+           'Relative DIL index', 'BX to DIL centroid (X)',
+           'BX to DIL centroid (Y)', 'BX to DIL centroid (Z)',
+           'BX to DIL centroid distance', 'NN surface-surface distance',
+           'Relative prostate ID', 'Relative prostate index',
+           'Bx position in prostate LR', 'Bx position in prostate AP',
+           'Bx position in prostate SI']
+      * radiomics_df has columns:
+          ['Patient ID', 'Structure ID', 'Structure type', 'Structure refnum',
+           'Volume', 'Surface area', 'Surface area to volume ratio',
+           'Sphericity', 'Compactness 1', 'Compactness 2',
+           'Spherical disproportion', 'Maximum 3D diameter', 'PCA major',
+           'PCA minor', 'PCA least', 'PCA eigenvector major',
+           'PCA eigenvector minor', 'PCA eigenvector least',
+           'Major axis (equivalent ellipse)',
+           'Minor axis (equivalent ellipse)',
+           'Least axis (equivalent ellipse)', 'Elongation', 'Flatness',
+           'L/R dimension at centroid', 'A/P dimension at centroid',
+           'S/I dimension at centroid', 'S/I arclength',
+           'DIL centroid (X, prostate frame)',
+           'DIL centroid (Y, prostate frame)',
+           'DIL centroid (Z, prostate frame)',
+           'DIL centroid distance (prostate frame)',
+           'DIL prostate sextant (LR)',
+           'DIL prostate sextant (AP)',
+           'DIL prostate sextant (SI)']
+
+    Returns:
+      A dataframe with all path1 QA columns plus:
+        - biopsy spatial features
+        - DIL_* radiomic features
+        - Prostate_* radiomic features
+        - a couple of normalized distance features
+    """
+
+    # --- 1) Merge path1 QA with biopsy spatial features ---
+    key_cols = ["Patient ID", "Bx ID", "Bx index"]
+
+    biopsy_feature_cols = [
+        "Simulated bool",
+        "Simulated type",
+        "Length (mm)",
+        "Volume (mm3)",
+        "Voxel side length (mm)",
+        "Relative DIL ID",
+        "Relative DIL index",
+        "BX to DIL centroid (X)",
+        "BX to DIL centroid (Y)",
+        "BX to DIL centroid (Z)",
+        "BX to DIL centroid distance",
+        "NN surface-surface distance",
+        "Relative prostate ID",
+        "Relative prostate index",
+        "Bx position in prostate LR",
+        "Bx position in prostate AP",
+        "Bx position in prostate SI",
+    ]
+
+    biopsy_for_merge = (
+        biopsy_basic_df[key_cols + biopsy_feature_cols]
+        .drop_duplicates(subset=key_cols)
+    )
+
+    merged = path1_enriched_df.merge(
+        biopsy_for_merge,
+        on=key_cols,
+        how="left",
+        validate="m:1",
+    )
+
+    # --- 2) Prepare radiomics (DIL + prostate) ---
+    base_rad_cols = [
+        c
+        for c in radiomics_df.columns
+        if c not in ["Patient ID", "Structure ID", "Structure type", "Structure refnum"]
+    ]
+
+    # DIL radiomics
+    dil_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "DIL ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .copy()
+    )
+    dil_rad = dil_rad.rename(
+        columns={c: f"DIL {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        dil_rad,
+        left_on=["Patient ID", "Relative DIL ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    )
+    # We keep Relative DIL ID, drop duplicate Structure ID
+    merged = merged.drop(columns=["Structure ID"])
+
+    # Prostate radiomics (Structure type == 'OAR ref' is prostate)
+    prostate_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "OAR ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .copy()
+    )
+    prostate_rad = prostate_rad.rename(
+        columns={c: f"Prostate {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        prostate_rad,
+        left_on=["Patient ID", "Relative prostate ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    )
+    merged = merged.drop(columns=["Structure ID"])
+
+    # --- 3) Normalized distance features (simple, interpretable) ---
+    # Normalize by prostate S/I dimension at centroid if available
+    si_col = "Prostate S/I dimension at centroid"
+    if "BX to DIL centroid distance" in merged.columns and si_col in merged.columns:
+        denom = merged[si_col].replace(0, pd.NA)
+        merged["BX_to_DIL_centroid_distance_norm_SI"] = (
+            merged["BX to DIL centroid distance"] / denom
+        )
+
+    if "NN surface-surface distance" in merged.columns and si_col in merged.columns:
+        denom = merged[si_col].replace(0, pd.NA)
+        merged["NN_surface_surface_distance_norm_SI"] = (
+            merged["NN surface-surface distance"] / denom
+        )
+
+    return merged
+
+
+
+def build_path1_margin_with_spatial_radiomics_and_distances(
+    path1_enriched_df: pd.DataFrame,
+    biopsy_basic_df: pd.DataFrame,
+    radiomics_df: pd.DataFrame,
+    distances_df: pd.DataFrame,
+    radiomics_feature_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Build a single design-matrix-style dataframe for correlations / modelling.
+
+    One row = one (Patient ID, Bx ID, Bx index, Threshold).
+
+    Attaches to the path 1 QA dataframe:
+      - biopsy spatial features
+      - radiomics for the *targeted DIL*
+      - radiomics for the prostate
+      - distance summaries (mean NN and mean centroid distance)
+        for: targeted DIL, prostate, rectum, urethra
+
+    Parameters
+    ----------
+    path1_enriched_df
+        Output of `attach_core_nominal_predictors`, i.e. per biopsy / per
+        DVH threshold with QA quantities (p_b, margin, etc).
+    biopsy_basic_df
+        Cohort: Biopsy basic spatial features dataframe.
+    radiomics_df
+        Cohort: 3D radiomic features all OAR and DIL structures.
+    distances_df
+        Cohort: Tissue class - distances global results.
+    radiomics_feature_cols
+        Optional subset of radiomic feature columns to keep.
+        If None, use all columns in `radiomics_df` except the ID columns:
+        ["Patient ID", "Structure ID", "Structure type", "Structure refnum"].
+
+    Returns
+    -------
+    pd.DataFrame
+        `path1_enriched_df` with extra columns for spatial, radiomics and
+        distance features.
+    """
+    key_cols = ["Patient ID", "Bx ID", "Bx index"]
+
+    # --- 0) Basic sanity checks ------------------------------------------------
+    missing_keys = [c for c in key_cols if c not in path1_enriched_df.columns]
+    if missing_keys:
+        raise KeyError(
+            f"path1_enriched_df is missing key columns: {missing_keys}"
+        )
+
+    for c in ["Relative DIL ID", "Relative DIL index",
+              "Relative prostate ID", "Relative prostate index"]:
+        if c not in biopsy_basic_df.columns:
+            raise KeyError(
+                f"biopsy_basic_df is missing required column: {c}"
+            )
+
+    # --- 1) Merge biopsy spatial features -------------------------------------
+    biopsy_feature_cols = [
+        "Simulated bool",
+        "Simulated type",
+        "Length (mm)",
+        "Volume (mm3)",
+        "Voxel side length (mm)",
+        "Relative DIL ID",
+        "Relative DIL index",
+        #"BX to DIL centroid (X)",
+        #"BX to DIL centroid (Y)",
+        #"BX to DIL centroid (Z)",
+        #"BX to DIL centroid distance",
+        #"NN surface-surface distance",
+        "Relative prostate ID",
+        "Relative prostate index",
+        "Bx position in prostate LR",
+        "Bx position in prostate AP",
+        "Bx position in prostate SI",
+    ]
+
+    missing_biopsy_cols = [
+        c for c in biopsy_feature_cols if c not in biopsy_basic_df.columns
+    ]
+    if missing_biopsy_cols:
+        raise KeyError(
+            f"biopsy_basic_df is missing expected columns: {missing_biopsy_cols}"
+        )
+
+    biopsy_for_merge = (
+        biopsy_basic_df[key_cols + biopsy_feature_cols]
+        .drop_duplicates(subset=key_cols)
+    )
+
+    merged = path1_enriched_df.merge(
+        biopsy_for_merge,
+        on=key_cols,
+        how="left",
+        validate="m:1",
+    )
+
+    # --- 2) Radiomics: targeted DIL + prostate --------------------------------
+    id_cols = ["Patient ID", "Structure ID", "Structure type", "Structure refnum"]
+    for c in id_cols:
+        if c not in radiomics_df.columns:
+            raise KeyError(
+                f"radiomics_df is missing expected ID column: {c}"
+            )
+
+    if radiomics_feature_cols is None:
+        base_rad_cols = [c for c in radiomics_df.columns if c not in id_cols]
+    else:
+        base_rad_cols = list(radiomics_feature_cols)
+        missing_rad = [c for c in base_rad_cols if c not in radiomics_df.columns]
+        if missing_rad:
+            raise KeyError(
+                f"radiomics_feature_cols contains columns not in radiomics_df: {missing_rad}"
+            )
+
+    # DIL radiomics (only the structure the biopsy was targeting)
+    dil_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "DIL ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .drop_duplicates(subset=["Patient ID", "Structure ID"])
+        .copy()
+    )
+    dil_rad = dil_rad.rename(
+        columns={c: f"DIL {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        dil_rad,
+        left_on=["Patient ID", "Relative DIL ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    )
+    merged = merged.drop(columns=["Structure ID"])
+
+    # Prostate radiomics (Structure type == 'OAR ref' is prostate)
+    prostate_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "OAR ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .drop_duplicates(subset=["Patient ID", "Structure ID"])
+        .copy()
+    )
+    prostate_rad = prostate_rad.rename(
+        columns={c: f"Prostate {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        prostate_rad,
+        left_on=["Patient ID", "Relative prostate ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    )
+    merged = merged.drop(columns=["Structure ID"])
+
+    # --- 3) Distances: targeted DIL + prostate + rectum + urethra -------------
+    # Flatten MultiIndex columns from distances_df if needed.
+    if isinstance(distances_df.columns, pd.MultiIndex):
+        flat_cols = []
+        for lvl0, lvl1 in distances_df.columns:
+            if not lvl1 or str(lvl1).lower() == "nan":
+                flat_cols.append(str(lvl0))
+            else:
+                flat_cols.append(f"{lvl0} {lvl1}")
+        distances_flat = distances_df.copy()
+        distances_flat.columns = flat_cols
+    else:
+        distances_flat = distances_df.copy()
+
+    required_dist_cols = [
+        "Patient ID",
+        "Bx ID",
+        "Bx index",
+        "Relative structure ROI",
+        "Relative structure type",
+        "Relative structure index",
+        "Struct. boundary NN dist. mean",
+        "Dist. from struct. centroid mean",
+    ]
+    missing_dist = [c for c in required_dist_cols if c not in distances_flat.columns]
+    if missing_dist:
+        raise KeyError(
+            f"distances_df is missing expected columns: {missing_dist}"
+        )
+
+    # Small helper to add per-structure distance summaries
+    def merge_single_structure_distance(
+        base_df: pd.DataFrame,
+        dist_df: pd.DataFrame,
+        struct_type: str,
+        prefix: str,
+    ) -> pd.DataFrame:
+        sub = (
+            dist_df[dist_df["Relative structure type"] == struct_type]
+            [
+                [
+                    "Patient ID",
+                    "Bx ID",
+                    "Bx index",
+                    "Struct. boundary NN dist. mean",
+                    "Dist. from struct. centroid mean",
+                ]
+            ]
+            .drop_duplicates(subset=["Patient ID", "Bx ID", "Bx index"])
+            .copy()
+        )
+
+        sub = sub.rename(
+            columns={
+                "Struct. boundary NN dist. mean": f"{prefix} NN dist mean",
+                "Dist. from struct. centroid mean": f"{prefix} centroid dist mean",
+            }
+        )
+
+        return base_df.merge(
+            sub,
+            on=["Patient ID", "Bx ID", "Bx index"],
+            how="left",
+            validate="m:1",
+        )
+
+    # 3a) Targeted DIL distances (need Relative DIL index)
+    dil_dist = (
+        distances_flat[distances_flat["Relative structure type"] == "DIL ref"]
+        [
+            [
+                "Patient ID",
+                "Bx ID",
+                "Bx index",
+                "Relative structure index",
+                "Struct. boundary NN dist. mean",
+                "Dist. from struct. centroid mean",
+            ]
+        ]
+        .drop_duplicates(
+            subset=["Patient ID", "Bx ID", "Bx index", "Relative structure index"]
+        )
+        .copy()
+    )
+
+    dil_dist = dil_dist.rename(
+        columns={
+            "Struct. boundary NN dist. mean": "DIL NN dist mean",
+            "Dist. from struct. centroid mean": "DIL centroid dist mean",
+        }
+    )
+
+    merged = merged.merge(
+        dil_dist,
+        left_on=["Patient ID", "Bx ID", "Bx index", "Relative DIL index"],
+        right_on=["Patient ID", "Bx ID", "Bx index", "Relative structure index"],
+        how="left",
+        validate="m:1",
+    )
+    merged = merged.drop(columns=["Relative structure index"], errors="ignore")
+
+    # 3b) Prostate, rectum, urethra distances (take first row per biopsy)
+    merged = merge_single_structure_distance(
+        merged, distances_flat, struct_type="OAR ref",    prefix="Prostate"
+    )
+    merged = merge_single_structure_distance(
+        merged, distances_flat, struct_type="Rectum ref", prefix="Rectum"
+    )
+    merged = merge_single_structure_distance(
+        merged, distances_flat, struct_type="Urethra ref", prefix="Urethra"
+    )
+
+    # --- 3) Normalized distance features (use mean prostate dimension) ---
+    dim_cols = [
+        "Prostate L/R dimension at centroid",
+        "Prostate A/P dimension at centroid",
+        "Prostate S/I dimension at centroid",
+    ]
+
+    if all(c in merged.columns for c in dim_cols):
+        # Mean linear extent of the prostate at the centroid (one per biopsy)
+        merged["Prostate mean dimension at centroid"] = merged[dim_cols].mean(axis=1)
+
+        denom = merged["Prostate mean dimension at centroid"].replace(0, pd.NA)
+
+        if "Prostate centroid dist mean" in merged.columns:
+            merged["BX_to_prostate_centroid_distance_norm_mean_dim"] = (
+                merged["Prostate centroid dist mean"] / denom
+            )
+
+        if "DIL DIL centroid distance (prostate frame)" in merged.columns:
+            merged["DIL_centroid_distance_norm_mean_dim"] = (
+                merged["DIL DIL centroid distance (prostate frame)"] / denom
+            )
+
+
+    return merged
+
+
+
+
+
+
+
+
+
+
+
+
+def build_deltas_with_spatial_radiomics_and_distances(
+    nominal_deltas_df_with_abs: pd.DataFrame,
+    biopsy_basic_df: pd.DataFrame,
+    radiomics_df: pd.DataFrame,
+    distances_df: pd.DataFrame,
+    all_voxel_wise_dose_df: pd.DataFrame | None = None,
+    radiomics_feature_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Build a design-matrix-style dataframe for voxel-level delta analysis.
+
+    One row = one voxel within one biopsy:
+        (Patient ID, Bx ID, Bx index, Voxel index).
+
+    Starting from the voxel-level nominal deltas dataframe, this:
+      - flattens MultiIndex columns in nominal_deltas_df_with_abs
+      - attaches biopsy spatial features
+      - attaches radiomics for the targeted DIL and prostate
+      - attaches *voxel-level* distance summaries to DIL, prostate, rectum, urethra
+      - optionally attaches nominal dose and dose-gradient for MC trial 0
+        from all_voxel_wise_dose_df
+    """
+
+    # 0) Start from voxel-level deltas and flatten any MultiIndex columns
+    df = nominal_deltas_df_with_abs.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            top if (sub == "" or pd.isna(sub))
+            else f"{top} {sub}"
+            for (top, sub) in df.columns
+        ]
+
+    # Required biopsy identifiers
+    key_cols = ["Patient ID", "Bx ID", "Bx index"]
+    missing_keys = [c for c in key_cols if c not in df.columns]
+    if missing_keys:
+        raise KeyError(
+            f"nominal_deltas_df_with_abs is missing key columns: {missing_keys}"
+        )
+
+    # Drop Simulated bool/type here so we only keep the versions from biopsy_basic_df
+    for col in ["Simulated bool", "Simulated type"]:
+        if col in df.columns:
+            df = df.drop(columns=[col])
+
+    # 1) Attach biopsy spatial features
+    biopsy_feature_cols = [
+        "Simulated bool",
+        "Simulated type",
+        "Length (mm)",
+        "Volume (mm3)",
+        "Voxel side length (mm)",
+        "Relative DIL ID",
+        "Relative DIL index",
+        "Relative prostate ID",
+        "Relative prostate index",
+        "Bx position in prostate LR",
+        "Bx position in prostate AP",
+        "Bx position in prostate SI",
+    ]
+
+    missing_biopsy_cols = [
+        c for c in biopsy_feature_cols if c not in biopsy_basic_df.columns
+    ]
+    if missing_biopsy_cols:
+        raise KeyError(
+            f"biopsy_basic_df is missing expected columns: {missing_biopsy_cols}"
+        )
+
+    biopsy_for_merge = (
+        biopsy_basic_df[key_cols + biopsy_feature_cols]
+        .drop_duplicates(subset=key_cols)
+    )
+
+    merged = df.merge(
+        biopsy_for_merge,
+        on=key_cols,
+        how="left",
+        validate="m:1",
+    )
+
+    # 2) Attach radiomics: targeted DIL + prostate
+    id_cols = ["Patient ID", "Structure ID", "Structure type", "Structure refnum"]
+    for c in id_cols:
+        if c not in radiomics_df.columns:
+            raise KeyError(
+                f"radiomics_df is missing expected ID column: {c}"
+            )
+
+    if radiomics_feature_cols is None:
+        base_rad_cols = [c for c in radiomics_df.columns if c not in id_cols]
+    else:
+        base_rad_cols = list(radiomics_feature_cols)
+        missing_rad = [c for c in base_rad_cols if c not in radiomics_df.columns]
+        if missing_rad:
+            raise KeyError(
+                f"radiomics_feature_cols contains columns not in radiomics_df: {missing_rad}"
+            )
+
+    # DIL radiomics (only the structure the biopsy was targeting)
+    dil_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "DIL ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .drop_duplicates(subset=["Patient ID", "Structure ID"])
+        .copy()
+    )
+    dil_rad = dil_rad.rename(
+        columns={c: f"DIL {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        dil_rad,
+        left_on=["Patient ID", "Relative DIL ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    ).drop(columns=["Structure ID"])
+
+    # Prostate radiomics (Structure type == 'OAR ref' is prostate)
+    prostate_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "OAR ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .drop_duplicates(subset=["Patient ID", "Structure ID"])
+        .copy()
+    )
+    prostate_rad = prostate_rad.rename(
+        columns={c: f"Prostate {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        prostate_rad,
+        left_on=["Patient ID", "Relative prostate ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    ).drop(columns=["Structure ID"])
+
+    # 3) Attach *voxel-level* distances to DIL, prostate, rectum, urethra
+    if isinstance(distances_df.columns, pd.MultiIndex):
+        flat_cols = []
+        for lvl0, lvl1 in distances_df.columns:
+            if not lvl1 or str(lvl1).lower() == "nan":
+                flat_cols.append(str(lvl0))
+            else:
+                flat_cols.append(f"{lvl0} {lvl1}")
+        distances_flat = distances_df.copy()
+        distances_flat.columns = flat_cols
+    else:
+        distances_flat = distances_df.copy()
+
+    # We only need mean distances per voxel
+    required_dist_cols = [
+        "Patient ID",
+        "Bx ID",
+        "Bx index",
+        "Relative structure type",
+        "Voxel index",
+        "Struct. boundary NN dist. mean",
+        "Dist. from struct. centroid mean",
+    ]
+    missing_dist_cols = [c for c in required_dist_cols if c not in distances_flat.columns]
+    if missing_dist_cols:
+        raise KeyError(
+            f"distances_df is missing expected columns: {missing_dist_cols}"
+        )
+
+    # 3a) Targeted DIL distances (need Relative DIL index and Relative structure index)
+    if "Relative structure index" in distances_flat.columns:
+        dil_dist = (
+            distances_flat[distances_flat["Relative structure type"] == "DIL ref"]
+            [
+                [
+                    "Patient ID",
+                    "Bx ID",
+                    "Bx index",
+                    "Relative structure index",
+                    "Voxel index",
+                    "Struct. boundary NN dist. mean",
+                    "Dist. from struct. centroid mean",
+                ]
+            ]
+            .drop_duplicates(
+                subset=["Patient ID", "Bx ID", "Bx index",
+                        "Relative structure index", "Voxel index"]
+            )
+            .copy()
+        )
+
+        dil_dist = dil_dist.rename(
+            columns={
+                "Struct. boundary NN dist. mean": "DIL NN dist mean",
+                "Dist. from struct. centroid mean": "DIL centroid dist mean",
+            }
+        )
+
+        merged = merged.merge(
+            dil_dist,
+            left_on=["Patient ID", "Bx ID", "Bx index",
+                     "Relative DIL index", "Voxel index"],
+            right_on=["Patient ID", "Bx ID", "Bx index",
+                      "Relative structure index", "Voxel index"],
+            how="left",
+            validate="m:1",
+        ).drop(columns=["Relative structure index"], errors="ignore")
+
+    # 3b) Prostate, rectum, urethra distances
+    def _merge_single_voxel_structure(
+        base: pd.DataFrame,
+        struct_type: str,
+        prefix: str,
+    ) -> pd.DataFrame:
+        sub = (
+            distances_flat[distances_flat["Relative structure type"] == struct_type]
+            [
+                [
+                    "Patient ID",
+                    "Bx ID",
+                    "Bx index",
+                    "Voxel index",
+                    "Struct. boundary NN dist. mean",
+                    "Dist. from struct. centroid mean",
+                ]
+            ]
+            .drop_duplicates(subset=["Patient ID", "Bx ID", "Bx index", "Voxel index"])
+            .copy()
+        )
+
+        sub = sub.rename(
+            columns={
+                "Struct. boundary NN dist. mean": f"{prefix} NN dist mean",
+                "Dist. from struct. centroid mean": f"{prefix} centroid dist mean",
+            }
+        )
+
+        return base.merge(
+            sub,
+            on=["Patient ID", "Bx ID", "Bx index", "Voxel index"],
+            how="left",
+            validate="m:1",
+        )
+
+    merged = _merge_single_voxel_structure(merged, "OAR ref",    "Prostate")
+    merged = _merge_single_voxel_structure(merged, "Rectum ref", "Rectum")
+    merged = _merge_single_voxel_structure(merged, "Urethra ref","Urethra")
+
+    # 4) Normalized distance features
+    dim_cols = [
+        "Prostate L/R dimension at centroid",
+        "Prostate A/P dimension at centroid",
+        "Prostate S/I dimension at centroid",
+    ]
+    if all(c in merged.columns for c in dim_cols):
+        merged["Prostate mean dimension at centroid"] = merged[dim_cols].mean(axis=1)
+        denom = merged["Prostate mean dimension at centroid"].replace(0, pd.NA)
+
+        if "Prostate centroid dist mean" in merged.columns:
+            merged["BX_to_prostate_centroid_distance_norm_mean_dim"] = (
+                merged["Prostate centroid dist mean"] / denom
+            )
+
+    # 5) Optionally attach nominal dose and nominal gradient per voxel
+    if all_voxel_wise_dose_df is not None:
+        dose_df = all_voxel_wise_dose_df.copy()
+
+        if "MC trial num" not in dose_df.columns:
+            raise KeyError("all_voxel_wise_dose_df is missing 'MC trial num' column.")
+
+        # Keep only nominal trial (MC trial 0)
+        dose_df = dose_df[dose_df["MC trial num"] == 0].copy()
+
+        voxel_keys = [
+            "Patient ID",
+            "Bx ID",
+            "Bx index",
+            "Voxel index",
+        ]
+        missing_voxel_keys = [c for c in voxel_keys if c not in dose_df.columns]
+        if missing_voxel_keys:
+            raise KeyError(
+                f"all_voxel_wise_dose_df is missing voxel key columns: {missing_voxel_keys}"
+            )
+
+        if "Dose (Gy)" not in dose_df.columns or "Dose grad (Gy/mm)" not in dose_df.columns:
+            raise KeyError(
+                "all_voxel_wise_dose_df must contain 'Dose (Gy)' and 'Dose grad (Gy/mm)'."
+            )
+
+        dose_df = (
+            dose_df[
+                voxel_keys + ["Dose (Gy)", "Dose grad (Gy/mm)"]
+            ]
+            .drop_duplicates(subset=voxel_keys)
+            .rename(
+                columns={
+                    "Dose (Gy)": "Nominal dose (Gy)",
+                    "Dose grad (Gy/mm)": "Nominal dose grad (Gy/mm)",
+                }
+            )
+        )
+
+        merged = merged.merge(
+            dose_df,
+            on=voxel_keys,
+            how="left",
+            validate="m:1",
+        )
+
+    return merged
+
+
+
+def build_deltas_with_spatial_radiomics_and_distances_v2(
+    nominal_deltas_df_with_abs: pd.DataFrame,
+    biopsy_basic_df: pd.DataFrame,
+    radiomics_df: pd.DataFrame,
+    distances_df: pd.DataFrame,
+    all_voxel_wise_dose_df: pd.DataFrame | None = None,
+    radiomics_feature_cols: list[str] | None = None,
+    bx_voxel_sextant_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    Build a design-matrix-style dataframe for voxel-level delta analysis.
+
+    One row = one voxel within one biopsy:
+        (Patient ID, Bx ID, Bx index, Voxel index).
+
+    Starting from the voxel-level nominal deltas dataframe, this:
+      - flattens MultiIndex columns in nominal_deltas_df_with_abs
+      - attaches biopsy spatial features
+      - attaches radiomics for the targeted DIL and prostate
+      - attaches *voxel-level* distance summaries to DIL, prostate, rectum, urethra
+      - optionally attaches nominal dose and dose-gradient for MC trial 0
+        from all_voxel_wise_dose_df
+      - optionally attaches voxel-level prostate double sextant labels
+        from bx_voxel_sextant_df
+    """
+
+    # 0) Start from voxel-level deltas and flatten any MultiIndex columns
+    df = nominal_deltas_df_with_abs.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            top if (sub == "" or pd.isna(sub))
+            else f"{top} {sub}"
+            for (top, sub) in df.columns
+        ]
+
+    # Required biopsy identifiers
+    key_cols = ["Patient ID", "Bx ID", "Bx index"]
+    missing_keys = [c for c in key_cols if c not in df.columns]
+    if missing_keys:
+        raise KeyError(
+            f"nominal_deltas_df_with_abs is missing key columns: {missing_keys}"
+        )
+
+    # Drop Simulated bool/type here so we only keep the versions from biopsy_basic_df
+    for col in ["Simulated bool", "Simulated type"]:
+        if col in df.columns:
+            df = df.drop(columns=[col])
+
+    # 1) Attach biopsy spatial features
+    biopsy_feature_cols = [
+        "Simulated bool",
+        "Simulated type",
+        "Length (mm)",
+        "Volume (mm3)",
+        "Voxel side length (mm)",
+        "Relative DIL ID",
+        "Relative DIL index",
+        "Relative prostate ID",
+        "Relative prostate index",
+        "Bx position in prostate LR",
+        "Bx position in prostate AP",
+        "Bx position in prostate SI",
+    ]
+
+    missing_biopsy_cols = [
+        c for c in biopsy_feature_cols if c not in biopsy_basic_df.columns
+    ]
+    if missing_biopsy_cols:
+        raise KeyError(
+            f"biopsy_basic_df is missing expected columns: {missing_biopsy_cols}"
+        )
+
+    biopsy_for_merge = (
+        biopsy_basic_df[key_cols + biopsy_feature_cols]
+        .drop_duplicates(subset=key_cols)
+    )
+
+    merged = df.merge(
+        biopsy_for_merge,
+        on=key_cols,
+        how="left",
+        validate="m:1",
+    )
+
+    # 2) Attach radiomics: targeted DIL + prostate
+    id_cols = ["Patient ID", "Structure ID", "Structure type", "Structure refnum"]
+    for c in id_cols:
+        if c not in radiomics_df.columns:
+            raise KeyError(
+                f"radiomics_df is missing expected ID column: {c}"
+            )
+
+    if radiomics_feature_cols is None:
+        base_rad_cols = [c for c in radiomics_df.columns if c not in id_cols]
+    else:
+        base_rad_cols = list(radiomics_feature_cols)
+        missing_rad = [c for c in base_rad_cols if c not in radiomics_df.columns]
+        if missing_rad:
+            raise KeyError(
+                f"radiomics_feature_cols contains columns not in radiomics_df: {missing_rad}"
+            )
+
+    # DIL radiomics (only the structure the biopsy was targeting)
+    dil_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "DIL ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .drop_duplicates(subset=["Patient ID", "Structure ID"])
+        .copy()
+    )
+    dil_rad = dil_rad.rename(
+        columns={c: f"DIL {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        dil_rad,
+        left_on=["Patient ID", "Relative DIL ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    ).drop(columns=["Structure ID"])
+
+    # Prostate radiomics (Structure type == 'OAR ref' is prostate)
+    prostate_rad = (
+        radiomics_df[radiomics_df["Structure type"] == "OAR ref"]
+        [["Patient ID", "Structure ID"] + base_rad_cols]
+        .drop_duplicates(subset=["Patient ID", "Structure ID"])
+        .copy()
+    )
+    prostate_rad = prostate_rad.rename(
+        columns={c: f"Prostate {c}" for c in base_rad_cols}
+    )
+
+    merged = merged.merge(
+        prostate_rad,
+        left_on=["Patient ID", "Relative prostate ID"],
+        right_on=["Patient ID", "Structure ID"],
+        how="left",
+        validate="m:1",
+    ).drop(columns=["Structure ID"])
+
+    # 3) Attach *voxel-level* distances to DIL, prostate, rectum, urethra
+    if isinstance(distances_df.columns, pd.MultiIndex):
+        flat_cols = []
+        for lvl0, lvl1 in distances_df.columns:
+            if not lvl1 or str(lvl1).lower() == "nan":
+                flat_cols.append(str(lvl0))
+            else:
+                flat_cols.append(f"{lvl0} {lvl1}")
+        distances_flat = distances_df.copy()
+        distances_flat.columns = flat_cols
+    else:
+        distances_flat = distances_df.copy()
+
+    # We only need mean distances per voxel
+    required_dist_cols = [
+        "Patient ID",
+        "Bx ID",
+        "Bx index",
+        "Relative structure type",
+        "Voxel index",
+        "Struct. boundary NN dist. mean",
+        "Dist. from struct. centroid mean",
+    ]
+    missing_dist_cols = [c for c in required_dist_cols if c not in distances_flat.columns]
+    if missing_dist_cols:
+        raise KeyError(
+            f"distances_df is missing expected columns: {missing_dist_cols}"
+        )
+
+    # 3a) Targeted DIL distances (need Relative DIL index and Relative structure index)
+    if "Relative structure index" in distances_flat.columns:
+        dil_dist = (
+            distances_flat[distances_flat["Relative structure type"] == "DIL ref"]
+            [
+                [
+                    "Patient ID",
+                    "Bx ID",
+                    "Bx index",
+                    "Relative structure index",
+                    "Voxel index",
+                    "Struct. boundary NN dist. mean",
+                    "Dist. from struct. centroid mean",
+                ]
+            ]
+            .drop_duplicates(
+                subset=["Patient ID", "Bx ID", "Bx index",
+                        "Relative structure index", "Voxel index"]
+            )
+            .copy()
+        )
+
+        dil_dist = dil_dist.rename(
+            columns={
+                "Struct. boundary NN dist. mean": "DIL NN dist mean",
+                "Dist. from struct. centroid mean": "DIL centroid dist mean",
+            }
+        )
+
+        merged = merged.merge(
+            dil_dist,
+            left_on=["Patient ID", "Bx ID", "Bx index",
+                     "Relative DIL index", "Voxel index"],
+            right_on=["Patient ID", "Bx ID", "Bx index",
+                      "Relative structure index", "Voxel index"],
+            how="left",
+            validate="m:1",
+        ).drop(columns=["Relative structure index"], errors="ignore")
+
+    # 3b) Prostate, rectum, urethra distances
+    def _merge_single_voxel_structure(
+        base: pd.DataFrame,
+        struct_type: str,
+        prefix: str,
+    ) -> pd.DataFrame:
+        sub = (
+            distances_flat[distances_flat["Relative structure type"] == struct_type]
+            [
+                [
+                    "Patient ID",
+                    "Bx ID",
+                    "Bx index",
+                    "Voxel index",
+                    "Struct. boundary NN dist. mean",
+                    "Dist. from struct. centroid mean",
+                ]
+            ]
+            .drop_duplicates(subset=["Patient ID", "Bx ID", "Bx index", "Voxel index"])
+            .copy()
+        )
+
+        sub = sub.rename(
+            columns={
+                "Struct. boundary NN dist. mean": f"{prefix} NN dist mean",
+                "Dist. from struct. centroid mean": f"{prefix} centroid dist mean",
+            }
+        )
+
+        return base.merge(
+            sub,
+            on=["Patient ID", "Bx ID", "Bx index", "Voxel index"],
+            how="left",
+            validate="m:1",
+        )
+
+    merged = _merge_single_voxel_structure(merged, "OAR ref",    "Prostate")
+    merged = _merge_single_voxel_structure(merged, "Rectum ref", "Rectum")
+    merged = _merge_single_voxel_structure(merged, "Urethra ref","Urethra")
+
+    # 3c) Attach voxel-level prostate double sextant labels (optional)
+    if bx_voxel_sextant_df is not None:
+        sextant_cols = [
+            "Patient ID",
+            "Bx ID",
+            "Bx index",
+            "Voxel index",
+            "Bx voxel prostate sextant (LR)",
+            "Bx voxel prostate sextant (AP)",
+            "Bx voxel prostate sextant (SI)",
+        ]
+        missing_sextant = [
+            c for c in sextant_cols if c not in bx_voxel_sextant_df.columns
+        ]
+        if missing_sextant:
+            raise KeyError(
+                f"bx_voxel_sextant_df is missing expected columns: {missing_sextant}"
+            )
+
+        sextant_merge = (
+            bx_voxel_sextant_df[sextant_cols]
+            .drop_duplicates(
+                subset=["Patient ID", "Bx ID", "Bx index", "Voxel index"]
+            )
+            .copy()
+        )
+
+        merged = merged.merge(
+            sextant_merge,
+            on=["Patient ID", "Bx ID", "Bx index", "Voxel index"],
+            how="left",
+            validate="m:1",
+        )
+
+    # 4) Normalized distance features
+    dim_cols = [
+        "Prostate L/R dimension at centroid",
+        "Prostate A/P dimension at centroid",
+        "Prostate S/I dimension at centroid",
+    ]
+    if all(c in merged.columns for c in dim_cols):
+        merged["Prostate mean dimension at centroid"] = merged[dim_cols].mean(axis=1)
+        denom = merged["Prostate mean dimension at centroid"].replace(0, pd.NA)
+
+        if "Prostate centroid dist mean" in merged.columns:
+            merged["BX_to_prostate_centroid_distance_norm_mean_dim"] = (
+                merged["Prostate centroid dist mean"] / denom
+            )
+
+        if "DIL DIL centroid distance (prostate frame)" in merged.columns:
+            merged["DIL_centroid_distance_norm_mean_prostate_diameter"] = (
+                merged["DIL DIL centroid distance (prostate frame)"] / denom
+            )
+
+    # 5) Optionally attach nominal dose and nominal gradient per voxel
+    if all_voxel_wise_dose_df is not None:
+        dose_df = all_voxel_wise_dose_df.copy()
+
+        if "MC trial num" not in dose_df.columns:
+            raise KeyError("all_voxel_wise_dose_df is missing 'MC trial num' column.")
+
+        # Keep only nominal trial (MC trial 0)
+        dose_df = dose_df[dose_df["MC trial num"] == 0].copy()
+
+        voxel_keys = [
+            "Patient ID",
+            "Bx ID",
+            "Bx index",
+            "Voxel index",
+        ]
+        missing_voxel_keys = [c for c in voxel_keys if c not in dose_df.columns]
+        if missing_voxel_keys:
+            raise KeyError(
+                f"all_voxel_wise_dose_df is missing voxel key columns: {missing_voxel_keys}"
+            )
+
+        if "Dose (Gy)" not in dose_df.columns or "Dose grad (Gy/mm)" not in dose_df.columns:
+            raise KeyError(
+                "all_voxel_wise_dose_df must contain 'Dose (Gy)' and 'Dose grad (Gy/mm)'."
+            )
+
+        dose_df = (
+            dose_df[
+                voxel_keys + ["Dose (Gy)", "Dose grad (Gy/mm)"]
+            ]
+            .drop_duplicates(subset=voxel_keys)
+            .rename(
+                columns={
+                    "Dose (Gy)": "Nominal dose (Gy)",
+                    "Dose grad (Gy/mm)": "Nominal dose grad (Gy/mm)",
+                }
+            )
+        )
+
+        merged = merged.merge(
+            dose_df,
+            on=voxel_keys,
+            how="left",
+            validate="m:1",
+        )
+
+    return merged
+
+
+
+def filter_df_by_sim_inplace(
+    df: pd.DataFrame,
+    name: str = "",
+    sim_type_filter=None,
+    sim_bool_filter=None,
+):
+    """
+    In-place filter of a DataFrame by Simulated type and/or Simulated bool.
+
+    Works for:
+      - normal Index columns
+      - MultiIndex columns
+      - MultiIndex indices
+
+    sim_type_filter:
+        None           -> do not filter on Simulated type
+        "Real"         -> keep only rows where Simulated type == "Real"
+        "Simulated"    -> keep only rows where Simulated type == "Simulated"
+        ["Real", ...]  -> keep rows whose Simulated type is in this list
+
+    sim_bool_filter:
+        None  -> do not filter on Simulated bool
+        True  -> keep only rows where Simulated bool == True
+        False -> keep only rows where Simulated bool == False
+    """
+    if df is None or not isinstance(df, pd.DataFrame):
+        return
+
+    # Use the *original* column keys (tuples for MultiIndex, scalars otherwise)
+    flat_cols = list(df.columns.to_flat_index())
+
+    sim_type_candidates = []
+    sim_bool_candidates = []
+
+    for c in flat_cols:
+        # For MultiIndex column c is a tuple; for normal Index it's a scalar
+        levels = c if isinstance(c, tuple) else (c,)
+        levels_str = [str(l) for l in levels]
+
+        if any("Simulated type" in s for s in levels_str):
+            sim_type_candidates.append(c)
+        if any("Simulated bool" in s for s in levels_str):
+            sim_bool_candidates.append(c)
+
+    # If no filters requested or no relevant columns, do nothing
+    if sim_type_filter is None and sim_bool_filter is None:
+        return
+    if not sim_type_candidates and not sim_bool_candidates:
+        return
+
+    mask = pd.Series(True, index=df.index)
+
+    # 1) Simulated type
+    if sim_type_filter is not None and sim_type_candidates:
+        col = sim_type_candidates[0]  # this is the true key (scalar or tuple)
+        series = df[col].astype(str).str.lower()
+
+        if isinstance(sim_type_filter, (list, tuple, set)):
+            allowed = {str(v).lower() for v in sim_type_filter}
+            mask &= series.isin(allowed)
+        else:
+            wanted = str(sim_type_filter).lower()
+            mask &= series.eq(wanted)
+
+    # 2) Simulated bool
+    if sim_bool_filter is not None and sim_bool_candidates:
+        col = sim_bool_candidates[0]
+        series = df[col].astype(bool)
+        mask &= series.eq(sim_bool_filter)
+
+    # Nothing to do if everything passes the mask
+    if mask.all():
+        return
+
+    before = len(df)
+    df.drop(index=df.index[~mask], inplace=True)
+    after = len(df)
+
+    print(f"[SIM_FILTER] {name}: {before} -> {after} rows")
+
+
+
+
+
+
+def filter_df_by_sim_flags(
+    df: pd.DataFrame,
+    name: str = "",
+    sim_type_filter=None,
+    sim_bool_filter=None,
+) -> pd.DataFrame:
+    """
+    Return a filtered copy of `df` based on Simulated type and/or Simulated bool.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to filter.
+    name : str
+        Optional name for logging.
+    sim_type_filter :
+        None           -> do not filter on Simulated type
+        "Real"         -> keep only rows where Simulated type == "Real"
+        "Simulated"    -> keep only rows where Simulated type == "Simulated"
+        iterable       -> keep rows whose Simulated type is in this list
+    sim_bool_filter :
+        None  -> do not filter on Simulated bool
+        True  -> keep only rows where Simulated bool == True
+        False -> keep only rows where Simulated bool == False
+
+    Works for normal Index and MultiIndex columns.
+    If a relevant column is missing, that filter is skipped.
+    """
+    if df is None or not isinstance(df, pd.DataFrame):
+        return df
+
+    # If no filters requested, return as-is
+    if sim_type_filter is None and sim_bool_filter is None:
+        return df
+
+    # --- Find sim columns (MultiIndex-safe) ---
+    flat_cols = list(df.columns.to_flat_index())
+    sim_type_col = None
+    sim_bool_col = None
+
+    for c in flat_cols:
+        # c is a tuple for MultiIndex, scalar otherwise
+        levels = c if isinstance(c, tuple) else (c,)
+        levels_str = [str(l) for l in levels]
+
+        if any("Simulated type" in s for s in levels_str) and sim_type_col is None:
+            sim_type_col = c
+        if any("Simulated bool" in s for s in levels_str) and sim_bool_col is None:
+            sim_bool_col = c
+
+    # If neither column exists, nothing to do
+    if sim_type_col is None and sim_bool_col is None:
+        print(f"[SIM_FILTER] {name}: no sim columns found, skipped")
+        return df
+
+    mask = pd.Series(True, index=df.index)
+
+    # --- Simulated type filter ---
+    if sim_type_filter is not None and sim_type_col is not None:
+        s = df[sim_type_col]
+
+        # Make sure we can compare case-insensitively
+        if not pd.api.types.is_string_dtype(s.dtype):
+            s = s.astype("string")
+
+        s = s.str.lower()
+
+        if isinstance(sim_type_filter, (list, tuple, set)):
+            allowed = {str(v).lower() for v in sim_type_filter}
+            mask &= s.isin(allowed)
+        else:
+            wanted = str(sim_type_filter).lower()
+            mask &= s.eq(wanted)
+
+    # --- Simulated bool filter ---
+    if sim_bool_filter is not None and sim_bool_col is not None:
+        s = df[sim_bool_col]
+        # Normalize to bool
+        if not pd.api.types.is_bool_dtype(s.dtype):
+            s = s.astype(bool)
+        mask &= s.eq(sim_bool_filter)
+
+    # If mask is all True, return original df
+    if mask.all():
+        return df
+
+    before = len(df)
+    filtered = df.loc[mask].copy()
+    after = len(filtered)
+
+    print(
+        f"[SIM_FILTER] {name}: {before} -> {after} rows "
+        f"(type={sim_type_filter}, bool={sim_bool_filter})"
+    )
+    return filtered
+
+
+
+def drop_bx_refnum(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop 'Bx refnum' if present. Returns a new DataFrame (no in-place mutation).
+    """
+    if "Bx refnum" in df.columns:
+        return df.drop(columns=["Bx refnum"])
+    return df

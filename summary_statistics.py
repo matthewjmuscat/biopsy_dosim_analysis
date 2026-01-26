@@ -149,46 +149,53 @@ def generate_summary_csv_with_argmax(output_dir, csv_name, df, col_pairs=None, e
 
 
 
-def compute_summary(df: pd.DataFrame,
-                    group_vars: list,
-                    value_vars: list,
-                    output_dir = None,
-                    flatten = False, 
-                    csv_name = None) -> pd.DataFrame:
+
+
+def compute_summary(
+    df: pd.DataFrame,
+    group_vars: list,
+    value_vars: list,
+    output_dir=None,
+    flatten: bool = False,
+    csv_name: str | None = None
+) -> pd.DataFrame:
     """
     Group df by group_vars and compute summary stats on value_vars.
-    Returns a tidy DataFrame where each row is one group and the columns
-    are count, mean, std, min, median, max for each of the two metrics.
+
+    Includes:
+      count, mean, std, min, 5%, 25%, 50% (median), 75%, 95%, max
+      plus:
+        - IQR   = 75% - 25%
+        - IPR90 = 95% - 5%
     """
 
-    # 1) compute the summary statistics
-    stats = (
-        df
-        .groupby(group_vars)[value_vars]
-        .describe(percentiles=[.05, .25, .5, .75, .95])
-        .reset_index()
+    # 1) compute the summary statistics (MultiIndex columns: (metric, stat))
+    stats = df.groupby(group_vars)[value_vars].describe(
+        percentiles=[0.05, 0.25, 0.5, 0.75, 0.95]
     )
-    
-    # 2) flatten the MultiIndex columns  
-    if flatten:
-        # Flatten the MultiIndex columns
+
+    # 2) add IQR and IPR90 for each metric (still in MultiIndex form)
+    for metric in value_vars:
+        stats[(metric, "IQR")] = stats[(metric, "75%")] - stats[(metric, "25%")]
+        stats[(metric, "IPR90")] = stats[(metric, "95%")] - stats[(metric, "5%")]
+
+    stats = stats.reset_index()
+
+    # 3) optionally flatten the MultiIndex columns
+    if flatten and isinstance(stats.columns, pd.MultiIndex):
         stats.columns = [
-            f"{metric}_{stat}"
-            for metric, stat in stats.columns
+            col[0] if (col[1] == "" or col[1] is None) else f"{col[0]}_{col[1]}"
+            for col in stats.columns
         ]
-    else:
-        # Keep the MultiIndex structure
-        pass
-        
-    
-    # 3) if output_dir is specified, save the summary to a CSV file
+
+    # 4) save if requested
     if output_dir is not None and csv_name is not None:
         output_path = os.path.join(output_dir, csv_name)
-        # Save the summary DataFrame to CSV
         stats.to_csv(output_path, index=False)
         print(f"Summary CSV successfully saved to: {output_path}")
 
     return stats
+
 
 
 
@@ -455,7 +462,7 @@ def compute_biopsy_nominal_deltas(cohort_global_dosimetry_by_voxel_df: pd.DataFr
     # --- columns we must preserve (metadata) ---
     meta_cols = [
         ('Voxel begin (Z)', ''), ('Voxel end (Z)', ''), ('Voxel index', ''),
-        ('Patient ID', ''), ('Bx ID', ''), ('Bx index', ''), ('Bx refnum', ''),
+        ('Patient ID', ''), ('Bx ID', ''), ('Bx index', ''), 
         ('Simulated bool', ''), ('Simulated type', '')
     ]
 
@@ -533,7 +540,7 @@ def compute_biopsy_nominal_deltas_with_abs(
     # --- columns we must preserve (metadata) ---
     meta_cols = [
         ('Voxel begin (Z)', ''), ('Voxel end (Z)', ''), ('Voxel index', ''),
-        ('Patient ID', ''), ('Bx ID', ''), ('Bx index', ''), ('Bx refnum', ''),
+        ('Patient ID', ''), ('Bx ID', ''), ('Bx index', ''), 
         ('Simulated bool', ''), ('Simulated type', '')
     ]
 
@@ -963,7 +970,7 @@ def compute_mc_trial_deltas(
     include_nominal: bool = False,
     group_cols: tuple[str, ...] = ('Patient ID', 'Bx index', 'Voxel index'),
     keep_extra_cols: tuple[str, ...] = (
-        'Bx refnum', 'Bx ID', 'Voxel begin (Z)', 'Voxel end (Z)',
+        'Bx ID', 'Voxel begin (Z)', 'Voxel end (Z)',
         'Simulated bool', 'Simulated type', 'X (Bx frame)', 'Y (Bx frame)',
         'Z (Bx frame)', 'R (Bx frame)'
     ),
@@ -1046,7 +1053,7 @@ def compute_mc_trial_deltas_with_abs(
     include_nominal: bool = False,
     group_cols: tuple[str, ...] = ('Patient ID', 'Bx index', 'Voxel index'),
     keep_extra_cols: tuple[str, ...] = (
-        'Bx refnum', 'Bx ID', 'Voxel begin (Z)', 'Voxel end (Z)',
+        'Bx ID', 'Voxel begin (Z)', 'Voxel end (Z)',
         'Simulated bool', 'Simulated type', 'X (Bx frame)', 'Y (Bx frame)',
         'Z (Bx frame)', 'R (Bx frame)'
     ),
@@ -1617,7 +1624,7 @@ def save_nominal_vs_trial_proportions_csv(
     eps: float = 0.0,                             # tie tolerance for float comparisons
     # metadata handling
     biopsy_meta_candidates: Iterable[str] = (
-        'Bx ID', 'Bx refnum', 'Simulated bool', 'Simulated type'
+        'Bx ID', 'Simulated bool', 'Simulated type'
     ),
     voxel_meta_candidates: Iterable[str] = (
         'Voxel begin (Z)', 'Voxel end (Z)',
