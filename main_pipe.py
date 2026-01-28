@@ -1995,6 +1995,7 @@ MultiIndex([(                   'Patient ID',      ''),
     # What we want explicit on the plots:
     #   - percent labels in bar blocks + callouts for tiny blocks (default in our updated function)
     #   - legend moved outside so it never covers the bars
+    """
     production_plots.production_plot_path1_threshold_qa_summary(
         path1_results_df,
         save_dir=qa_fig_dir,
@@ -2007,11 +2008,11 @@ MultiIndex([(                   'Patient ID',      ''),
         show_title = False,
 
     )
-
+    """
     production_plots.production_plot_path1_threshold_qa_summary_v2(
         path1_results_df,
         save_dir=qa_fig_dir,
-        file_name="Fig_Path1_threshold_QA_summary_v2.png",
+        file_name="Fig_Path1_threshold_QA_summary_v2.pdf",
         legend_outside=True,          # move legend outside panel A
         annotate_percents=True,       # show % labels (and callouts when too small)
         percent_fmt="{:.0f}%",        # e.g., 37%
@@ -2031,7 +2032,7 @@ MultiIndex([(                   'Patient ID',      ''),
     production_plots.production_plot_path1_p_pass_vs_margin_by_metric(
         path1_results_df,
         save_dir=qa_fig_dir,
-        file_name="Fig_Path1_p_pass_vs_margin_by_metric.png",
+        file_name="Fig_Path1_p_pass_vs_margin_by_metric.pdf",
         add_logistic_fit=True,
         annotate_fit_stats=True,                 # print GOF per subplot
         fit_stats=("n", 
@@ -2061,7 +2062,7 @@ MultiIndex([(                   'Patient ID',      ''),
         comparison_df=model_compare_df,          # has column "label", so default comparison_label_col is OK
 
         save_dir=qa_fig_dir,
-        file_name="Fig_Path1_logit_margin_plus_grad_families.png",
+        file_name="Fig_Path1_logit_margin_plus_grad_families.pdf",
 
         n_grad_levels=4,
         grad_quantiles=(0.10, 0.37, 0.63, 0.90),
@@ -2213,7 +2214,7 @@ MultiIndex([(                   'Patient ID',      ''),
         per_label_secondary_annotation=per_label_secondary_annotation,
 
         save_dir=qa_fig_dir,
-        file_name="Fig_Path1_logit_margin_plus_best_secondary_families.png",
+        file_name="Fig_Path1_logit_margin_plus_best_secondary_families.pdf",
         n_grad_levels=4,
         grad_quantiles=(0.10, 0.37, 0.63, 0.90),
         prob_pass_cutoffs=(0.05, 0.95),
@@ -2229,6 +2230,10 @@ MultiIndex([(                   'Patient ID',      ''),
         ),
         per_label_stats_box_corner = per_label_stats_box_corner,
         per_label_stats_box_xy = per_label_stats_box_xy,
+        panel_legend_fontsize=9,
+        panel_legend_title_fontsize=9,
+        fit_stats_fontsize=10,
+        annotation_box_width_fraction=0.3
     )
 
 
@@ -2834,7 +2839,7 @@ Index([                                               'Patient ID',
         # maybe distance, maybe not
     }
 
-    svg_abs_delta, png_abs_delta, stats_csv_med_abs_delta, stats_df_abs_delta = production_plots.plot_delta_vs_predictors_pkg_generalized(
+    svg_abs_delta, png_abs_delta, pdf_abs_delta, stats_csv_med_abs_delta, stats_df_abs_delta = production_plots.plot_delta_vs_predictors_pkg_generalized(
         delta_long_design,
         save_dir=delta_corr_dir,
         file_prefix="03c_abs_medianDelta_vs_top4_predictors",
@@ -4199,7 +4204,7 @@ Index([                                               'Patient ID',
                 save_name_base=f"dose_upper_dosegrad_lower_absolute_pooledstats_no_std",
                 n_col="n_biopsies",
                 n_label_fontsize = 10,
-                cell_annot_fontsize= 6.9,
+                cell_annot_fontsize= 8,
                 tick_label_fontsize = 12,
                 axis_label_fontsize = 14,
                 cbar_tick_fontsize = 12,
@@ -4229,6 +4234,7 @@ Index([                                               'Patient ID',
         # 3. Cohort DVH metrics boxplot
         print("Generating cohort DVH metrics boxplot...")
 
+        """
         production_plots.dvh_boxplot(cohort_global_dosimetry_dvh_metrics_df, 
                                      save_path = cohort_output_figures_dir, 
                                      custom_name = "dvh_boxplot", 
@@ -4236,6 +4242,19 @@ Index([                                               'Patient ID',
                                      axis_label_font_size = 14,
                                      tick_label_font_size = 12
                                     )
+        """
+
+        production_plots.dvh_boxplot_pretty(
+            cohort_global_dosimetry_dvh_metrics_df,
+            save_path=cohort_output_figures_dir,
+            custom_name="dvh_boxplot",
+            title=None,
+            axis_label_font_size=18,
+            tick_label_font_size=18,
+            # optional but nice to be explicit:
+            metric_order_D=["D_2", "D_50", "D_98"],
+            metric_order_V=["V_100","V_125","V_150","V_175","V_200","V_300"],
+        )
 
 
 
@@ -4316,6 +4335,8 @@ Index([                                               'Patient ID',
             annotation_box=False,
             y_trim=True,
             y_min_fixed=0,
+            y_max_fixed=40.0, 
+            include_pair_curves_in_ylim=False,
             metric_family="dose",
             show_pair_mean_curves=True,
             show_pair_legend=False,
@@ -4376,6 +4397,8 @@ Index([                                               'Patient ID',
             annotation_box=False,
             y_trim=True,
             y_min_fixed=0,
+            y_max_fixed=25.0,      # <-- pick whatever looks right (20, 25, 30…)
+            include_pair_curves_in_ylim=False,
             metric_family="grad",
             show_pair_mean_curves=True,
             show_pair_legend=False,

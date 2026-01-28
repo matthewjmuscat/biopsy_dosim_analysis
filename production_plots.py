@@ -35,6 +35,27 @@ from scipy.stats import spearmanr
 import re 
 from matplotlib.ticker import StrMethodFormatter
 
+
+
+# for high-quality vector graphics output
+mpl.rcParams["pdf.fonttype"] = 42   # TrueType fonts in PDF
+mpl.rcParams["ps.fonttype"] = 42
+
+# Global font / math settings for all figures in this module
+MPL_FONT_RC = {
+    "text.usetex": False,
+    "mathtext.fontset": "stix",
+    "font.family": "STIXGeneral",
+    "axes.unicode_minus": True,
+}
+
+mpl.rcParams.update(MPL_FONT_RC)
+
+# (Optional) make seaborn respect these too
+sns.set_theme(rc=MPL_FONT_RC)
+
+
+
 plt.ioff()
 
 def production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
@@ -3815,15 +3836,22 @@ def histogram_and_fit_v2(
     # Save or show
     if save_path:
         if custom_name is None:
-            png_path = save_path.joinpath("all_voxels_dose_histogram_fit.png")
-            svg_path = save_path.joinpath("all_voxels_dose_histogram_fit.svg")
+            base = "all_voxels_dose_histogram_fit"
         else:
-            png_path = save_path.joinpath(f"{custom_name}.png")
-            svg_path = save_path.joinpath(f"{custom_name}.svg")
-        fig.savefig(png_path, format='png', bbox_inches='tight', dpi=300)
-        fig.savefig(svg_path, format='svg', bbox_inches='tight')
+            base = custom_name
+
+        png_path = save_path.joinpath(f"{base}.png")
+        svg_path = save_path.joinpath(f"{base}.svg")
+        pdf_path = save_path.joinpath(f"{base}.pdf")   # <--- NEW
+
+        # high-quality exports
+        fig.savefig(png_path, format="png", bbox_inches="tight", dpi=300)
+        fig.savefig(svg_path, format="svg", bbox_inches="tight", dpi=300)
+        fig.savefig(pdf_path, format="pdf", bbox_inches="tight", dpi=600)  # <--- NEW
+
         print(f"Plot saved as PNG: {png_path}")
         print(f"Plot saved as SVG: {svg_path}")
+        print(f"Plot saved as PDF: {pdf_path}")         # <--- NEW
         plt.close(fig)
     else:
         plt.show()
@@ -6234,27 +6262,83 @@ def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs_v2(
 
     ax.set_xticks(np.arange(n) + 0.5)
     ax.set_yticks(np.arange(n) + 0.5)
-    ax.set_xticklabels(ticklabs, fontsize=tick_label_fontsize)
-    ax.set_yticklabels(ticklabs, fontsize=tick_label_fontsize)
+
+    rotation_x = 90  # vertical / sideways labels for x only
+
+    # Bottom x-axis: sideways
+    ax.set_xticklabels(
+        ticklabs,
+        fontsize=tick_label_fontsize,
+        rotation=rotation_x,
+        ha="center",
+        va="top",
+    )
+
+    # Left y-axis: horizontal
+    ax.set_yticklabels(
+        ticklabs,
+        fontsize=tick_label_fontsize,
+        rotation=0,
+    )
 
     # Lower triangle semantics on bottom/left
     ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize)
     ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize)
-    ax.tick_params(axis="x", bottom=True, top=False, direction="out", length=4, width=1, color="black")
-    ax.tick_params(axis="y", left=True, right=False, direction="out", length=4, width=1, color="black")
+    ax.tick_params(
+        axis="x",
+        bottom=True,
+        top=False,
+        direction="out",
+        length=4,
+        width=1,
+        color="black",
+    )
+    ax.tick_params(
+        axis="y",
+        left=True,
+        right=False,
+        direction="out",
+        length=4,
+        width=1,
+        color="black",
+    )
 
     # Upper triangle semantics on top/right
-    top_ax = ax.secondary_xaxis('top')
+    top_ax = ax.secondary_xaxis("top")
     top_ax.set_xticks(ax.get_xticks())
-    top_ax.set_xticklabels(ticklabs, fontsize=tick_label_fontsize)
+    top_ax.set_xticklabels(
+        ticklabs,
+        fontsize=tick_label_fontsize,
+        rotation=rotation_x,
+        ha="center",
+        va="bottom",
+    )
     top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize)
-    top_ax.tick_params(axis="x", top=True, direction="out", length=4, width=1, color="black")
+    top_ax.tick_params(
+        axis="x",
+        top=True,
+        direction="out",
+        length=4,
+        width=1,
+        color="black",
+    )
 
-    right_ax = ax.secondary_yaxis('right')
+    right_ax = ax.secondary_yaxis("right")
     right_ax.set_yticks(ax.get_yticks())
-    right_ax.set_yticklabels(ticklabs, fontsize=tick_label_fontsize)
+    right_ax.set_yticklabels(
+        ticklabs,
+        fontsize=tick_label_fontsize,
+        rotation=0,
+    )
     right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize)
-    right_ax.tick_params(axis="y", right=True, direction="out", length=4, width=1, color="black")
+    right_ax.tick_params(
+        axis="y",
+        right=True,
+        direction="out",
+        length=4,
+        width=1,
+        color="black",
+    )
 
 
     # independent colorbars (LEFT=lower, RIGHT=upper)
@@ -6384,14 +6468,22 @@ def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs_v2(
     # save/show
     if save_path_base:
         os.makedirs(save_path_base, exist_ok=True)
-        base = os.path.join(save_path_base, f"cohort_dualtri_{save_name_base or 'dose_upper__dosegrad_lower'}_v2")
+        base = os.path.join(
+            save_path_base,
+            f"cohort_dualtri_{save_name_base or 'dose_upper__dosegrad_lower'}_v2"
+        )
+
+        # raster + vector outputs
         plt.savefig(base + ".png", bbox_inches="tight", dpi=300)
-        plt.savefig(base + ".svg", bbox_inches="tight")
-        print(f"Saved dual-triangle cohort heatmap to {base}.png/.svg")
+        plt.savefig(base + ".svg", bbox_inches="tight", dpi=300)
+        plt.savefig(base + ".pdf", bbox_inches="tight", dpi=600, format="pdf")
+
+        print(f"Saved dual-triangle cohort heatmap to {base}.png/.svg/.pdf")
         plt.close(fig)
     else:
         plt.show()
         plt.close(fig)
+
 
 
 
@@ -6530,6 +6622,175 @@ def dvh_boxplot(cohort_bx_dvh_metrics_df, save_path=None, custom_name=None,
 
 
 
+
+def dvh_boxplot_pretty(
+    cohort_bx_dvh_metrics_df,
+    save_path: Path | None = None,
+    custom_name: str | None = None,
+    title: str | None = None,
+    axis_label_font_size: int | None = 14,
+    tick_label_font_size: int | None = 12,
+    seaborn_style: str = "ticks",
+    seaborn_context: str = "paper",
+    font_scale: float = 1.2,
+    metric_order_D: Sequence[str] | None = None,  # e.g. ["D_2", "D_50", "D_98"]
+    metric_order_V: Sequence[str] | None = None,  # e.g. ["V_150"]
+    flier_size: float = 4.0,          # <--- NEW
+    flier_alpha: float = 1.0,         # <--- NEW
+    annotate: bool = False,            # <--- NEW
+):
+    plt.ioff()  # <--- this stops figures from popping up
+
+
+    def convert_metric_label(metric: str) -> str:
+        """Convert 'D_2' -> 'D$_{2\\%}$' for mathtext."""
+        if metric.startswith(("D_", "V_")):
+            base = metric[0]          # 'D' or 'V'
+            number = metric.split("_")[1]
+            return f"{base}$_{{{number}\\%}}$"
+        return metric
+
+    d_metrics = cohort_bx_dvh_metrics_df[
+        cohort_bx_dvh_metrics_df["Metric"].str.startswith("D_")
+    ].copy()
+    v_metrics = cohort_bx_dvh_metrics_df[
+        cohort_bx_dvh_metrics_df["Metric"].str.startswith("V_")
+    ].copy()
+
+    def _plot_one(data, metric_type: str, metric_order: Sequence[str] | None):
+        if data.empty:
+            return
+
+        sns.set_style(seaborn_style)
+        sns.set_context(seaborn_context, font_scale=font_scale)
+
+        # Decide order (if not given, use sorted unique)
+        if metric_order is None:
+            metric_order_local = sorted(data["Metric"].unique())
+        else:
+            metric_order_local = [m for m in metric_order if m in data["Metric"].unique()]
+
+        fig, ax = plt.subplots(figsize=(6.5, 4.5), dpi=300)
+
+        sns.boxplot(
+            data=data,
+            x="Metric",
+            y="Mean",
+            order=metric_order_local,
+            ax=ax,
+            width=0.6,
+            fliersize=2,
+            linewidth=1.0,
+            boxprops=dict(facecolor="lightgray", edgecolor="black"),
+            whiskerprops=dict(color="black"),
+            capprops=dict(color="black"),
+            medianprops=dict(color="black", linewidth=1.5),
+            flierprops=dict(                      # <--- explicit outlier styling
+                marker="o",
+                markersize=flier_size,
+                markerfacecolor="black",
+                markeredgecolor="black",
+                alpha=flier_alpha,
+            ),
+        )
+
+
+        # Title
+        if title is not None:
+            ax.set_title(title, fontsize=axis_label_font_size or 14)
+        else:
+            ax.set_title("")
+
+        # Axis labels
+        if axis_label_font_size is not None:
+            ax.set_xlabel("DVH metric", fontsize=axis_label_font_size)
+        else:
+            ax.set_xlabel("DVH metric")
+
+        if "V" in metric_type:
+            ylabel = "Percent volume"
+        else:
+            ylabel = "Dose (Gy)"
+
+        if axis_label_font_size is not None:
+            ax.set_ylabel(ylabel, fontsize=axis_label_font_size)
+        else:
+            ax.set_ylabel(ylabel)
+
+        # Tick labels
+        tick_labels = [convert_metric_label(m) for m in metric_order_local]
+        ax.set_xticklabels(
+            tick_labels,
+            rotation=45,
+            ha="right",
+            fontsize=tick_label_font_size or 12,
+        )
+        if tick_label_font_size is not None:
+            ax.tick_params(axis="y", labelsize=tick_label_font_size)
+
+        # Grids & spines
+        ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.7)
+        ax.grid(visible=False, axis="x")
+        sns.despine(ax=ax, left=False, bottom=False)
+
+        # Y limits
+        if "D" in metric_type:
+            ymin, ymax = ax.get_ylim()
+            ax.set_ylim(bottom=0, top=ymax)
+        else:
+            ax.set_ylim(0, 100)
+
+        # Annotation box
+        if annotate:
+            n_patients = data["Patient ID"].nunique()
+            n_biopsies = data.groupby(["Patient ID", "Bx ID"]).ngroups
+            annotation_text = f"Patients: {n_patients}\nBiopsies: {n_biopsies}"
+
+            ax.text(
+                0.98,
+                0.98,
+                annotation_text,
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=tick_label_font_size or 12,
+                bbox=dict(
+                    boxstyle="round,pad=0.25",
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.85,
+                ),
+            )
+
+        fig.tight_layout()
+
+        if save_path is not None:
+            out_dir = Path(save_path)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            metric_suffix = metric_type.lower().replace(" ", "_")
+            if custom_name:
+                stem = f"{custom_name}_{metric_suffix}"
+            else:
+                stem = metric_suffix
+
+            png_path = out_dir / f"{stem}.png"
+            svg_path = out_dir / f"{stem}.svg"
+            pdf_path = out_dir / f"{stem}.pdf"
+
+            fig.savefig(png_path, bbox_inches="tight", dpi=300)
+            fig.savefig(svg_path, bbox_inches="tight", dpi=300)
+            fig.savefig(pdf_path, bbox_inches="tight", format="pdf", dpi=600)
+
+            print(f"Saved: {png_path}")
+            print(f"Saved: {svg_path}")
+            print(f"Saved: {pdf_path}")
+
+        plt.close(fig)
+
+
+    _plot_one(d_metrics, "D_x", metric_order_D)
+    _plot_one(v_metrics, "V_x", metric_order_V)
 
 
 
@@ -7096,6 +7357,8 @@ def plot_dose_vs_length_with_summary_cohort_v2(
     # counts
     annotate_counts: bool = True,
     annotation_box: bool = False,       # external box only
+    counts_mode: str = "N_b",          # "both", "N_b", or "N_p"
+
 
     # y-limits
     y_trim: bool = False,
@@ -7113,6 +7376,8 @@ def plot_dose_vs_length_with_summary_cohort_v2(
     title_font_size: int = 20,
     axis_label_font_size: int = 16,
     tick_label_font_size: int = 14,
+    annotation_label_font_size: int = 14,
+
 
     # absolute label control (auto if None)
     y_is_abs: bool | None = None,
@@ -7387,21 +7652,33 @@ def plot_dose_vs_length_with_summary_cohort_v2(
         # Total sample counts per ℓ_k (rows per box)
         counts_rows = df.groupby(x_col, dropna=False, observed=False)[y_col].count()
 
+        # helper: build one label string based on counts_mode
+        def _make_label(xv):
+            n_bx = int(counts_bx.get(xv, 0))
+            n_rows = int(counts_rows.get(xv, 0))
+
+            if counts_mode == "N_b":
+                return rf"$N_b={n_bx}$"
+            elif counts_mode == "N_p":
+                return rf"$N_p={n_rows}$"
+            else:  # "both" (default)
+                return rf"$N_b={n_bx}$" + ", " + rf"$N_p={n_rows}$"
+
         if annotation_box:
-            # side-box behaviour
+            # side-box behaviour: one line per ℓ_k
             ann_text = "\n".join(
-                [rf"{xv}: $N_p={int(n)}$" for xv, n in counts_rows.items()]
+                [rf"{xv}: {_make_label(xv)}" for xv in counts_rows.index]
             )
             ax.annotate(
                 ann_text, xy=(1.02, 0.5), xycoords="axes fraction",
-                va="center", ha="left", fontsize=tick_label_font_size,
+                va="center", ha="left", fontsize=annotation_label_font_size,
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7)
             )
         else:
-            # text directly under each ℓ_k tick, rotated and on two lines
+            # text directly under each ℓ_k tick
             x_positions = {cat: i for i, cat in enumerate(x_order)}
             trans = ax.get_xaxis_transform()
-            y_text = -0.16   # a bit lower so it clears the tick labels
+            y_text = -0.16
 
             for xv in x_order:
                 cat = str(xv)
@@ -7409,10 +7686,7 @@ def plot_dose_vs_length_with_summary_cohort_v2(
                     continue
 
                 x_idx = x_positions[cat]
-                n_bx = int(counts_bx.get(xv, 0))
-                n_rows = int(counts_rows.get(xv, 0))
-
-                label_text = rf"$N_b={n_bx}$" + ", " + rf"$N_p={n_rows}$"
+                label_text = _make_label(xv)
 
                 ax.text(
                     x_idx,
@@ -7421,12 +7695,11 @@ def plot_dose_vs_length_with_summary_cohort_v2(
                     transform=trans,
                     ha="right",
                     va="top",
-                    fontsize=max(tick_label_font_size - 4, 8),
+                    fontsize=annotation_label_font_size,
                     rotation=35,
                     rotation_mode="anchor",
                     clip_on=False,
                 )
-
 
 
 
@@ -7436,7 +7709,17 @@ def plot_dose_vs_length_with_summary_cohort_v2(
         ax.set_title(title, fontsize=title_font_size)
 
     y_span = (y_max - y_min) if np.isfinite(y_max - y_min) else 1.0
-    ax.set_ylim(y_min - 0.05 * y_span, y_max * (1.0 + ylim_top_pad))
+
+    # If user pinned the bottom (y_min_fixed), do NOT pad below
+    if y_min_fixed is not None:
+        bottom = y_min
+    else:
+        bottom = y_min - 0.05 * y_span
+
+    top = y_max * (1.0 + ylim_top_pad)
+
+    ax.set_ylim(bottom, top)
+
 
     ax.grid(True)
 
@@ -7451,11 +7734,21 @@ def plot_dose_vs_length_with_summary_cohort_v2(
     # ---- save ----
     png_path = os.path.join(save_dir, f"{file_name}.png")
     svg_path = os.path.join(save_dir, f"{file_name}.svg")
-    plt.savefig(png_path, dpi=dpi)
-    plt.savefig(svg_path)
+    pdf_path = os.path.join(save_dir, f"{file_name}.pdf")  # <--- NEW
+
+    plt.savefig(png_path, dpi=dpi, bbox_inches="tight")
+    plt.savefig(svg_path, bbox_inches="tight")
+    plt.savefig(pdf_path, dpi=600, bbox_inches="tight", format="pdf")  # <--- NEW
+
     plt.close()
 
-    print(f"Plot saved as:\n - {png_path}\n - {svg_path}")
+    print(
+        "Plot saved as:\n"
+        f" - {png_path}\n"
+        f" - {svg_path}\n"
+        f" - {pdf_path}"  # <--- NEW
+    )
+
 
 
 
@@ -12213,12 +12506,12 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                 elif kk in ("wrmse", "w_rmse", "rmse_w"):
                     wrmse = row_coef.get("rmse_prob_w", np.nan)
                     if np.isfinite(wrmse):
-                        parts.append("wRMSE=" + f"{wrmse:.3f}")
+                        parts.append("wRMSE=" + f"{wrmse:.2f}")
 
                 elif kk in ("brier", "wbrier", "w_brier"):
                     wbrier = row_coef.get("brier_w", np.nan)
                     if np.isfinite(wbrier):
-                        parts.append("wBrier=" + f"{wbrier:.3f}")
+                        parts.append("wBrier=" + f"{wbrier:.2f}")
 
             if show_required_margin_line and (x_req is not None) and np.isfinite(x_req):
                 suffix = _x_units_suffix(metric_name)
@@ -12255,12 +12548,12 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                 elif kk in ("wrmse", "w_rmse", "rmse_w"):
                     wrmse, _ = _weighted_scores_from_fit(sub, res)
                     if wrmse is not None and np.isfinite(wrmse):
-                        parts.append("wRMSE=" + f"{wrmse:.3f}")
+                        parts.append("wRMSE=" + f"{wrmse:.2f}")
 
                 elif kk in ("brier", "wbrier", "w_brier"):
                     _, wbrier = _weighted_scores_from_fit(sub, res)
                     if wbrier is not None and np.isfinite(wbrier):
-                        parts.append("wBrier=" + f"{wbrier:.3f}")
+                        parts.append("wBrier=" + f"{wbrier:.2f}")
 
             if show_required_margin_line and (x_req is not None) and np.isfinite(x_req):
                 suffix = _x_units_suffix(metric_name)
@@ -12268,7 +12561,12 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
 
             return "\n".join(parts)
 
-        def _choose_fitbox_loc(xvals: np.ndarray, yvals: np.ndarray, txt: str) -> tuple[float, float]:
+        def _choose_fitbox_loc(
+            xvals: np.ndarray,
+            yvals: np.ndarray,
+            txt: str,
+            avoid_x: Sequence[float] | None = None,
+        ) -> tuple[float, float]:
             try:
                 xvals = np.asarray(xvals, float)
                 yvals = np.asarray(yvals, float)
@@ -12281,10 +12579,31 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                 if xmax <= xmin:
                     return fit_stats_loc
 
+                # fixed y range for normalization
                 ymin, ymax = -0.05, 1.05
+
                 xN = (xvals - xmin) / (xmax - xmin)
                 yN = (yvals - ymin) / (ymax - ymin)
                 yN = np.clip(yN, 0.0, 1.0)
+
+                # NEW: penalize specific vertical lines (e.g. required margin)
+                if avoid_x:
+                    avoid_arr = np.array(
+                        [ax for ax in avoid_x if np.isfinite(ax)], dtype=float
+                    )
+                    if avoid_arr.size > 0:
+                        # keep only within data x-span, otherwise ignore
+                        avoid_arr = avoid_arr[(avoid_arr >= xmin) & (avoid_arr <= xmax)]
+                        if avoid_arr.size > 0:
+                            avoid_xN = (avoid_arr - xmin) / (xmax - xmin)
+                            # tile across y to simulate a vertical "wall" of points
+                            n_y_fake = 25
+                            fake_yN = np.linspace(0.0, 1.0, n_y_fake)
+                            fake_xN = np.repeat(avoid_xN, n_y_fake)
+                            fake_yN = np.tile(fake_yN, avoid_arr.size)
+
+                            xN = np.concatenate([xN, fake_xN])
+                            yN = np.concatenate([yN, fake_yN])
 
                 n_lines = txt.count("\n") + 1
                 box_w = 0.34
@@ -12307,13 +12626,16 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                     inside = (xN >= xa) & (xN <= xb) & (yN >= ya) & (yN <= yb)
                     score = float(np.sum(inside))
                     tie = -xa
-                    if (score < best_score) or (score == best_score and (best is None or tie < -best[0])):
+                    if (score < best_score) or (
+                        score == best_score and (best is None or tie < -best[0])
+                    ):
                         best = (xa, ya)
                         best_score = score
 
                 return best if best is not None else fit_stats_loc
             except Exception:
                 return fit_stats_loc
+
 
         # map coef_df column names for metric / threshold if supplied
         if coef_df is not None:
@@ -12430,6 +12752,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                     sub[margin_col].to_numpy(),
                                     sub[p_pass_col].to_numpy(),
                                     txt,
+                                    avoid_x=[x_req] if x_req is not None else None,
                                 )
                                 ax.text(
                                     xa, ya, txt,
@@ -12480,6 +12803,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                     sub[margin_col].to_numpy(),
                                     sub[p_pass_col].to_numpy(),
                                     txt,
+                                    avoid_x=[x_req] if x_req is not None else None,
                                 )
                                 ax.text(
                                     xa, ya, txt,
@@ -13169,6 +13493,11 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
     # values can be: "top-left", "top-right", "bottom-left", "bottom-right"
     per_label_stats_box_corner: dict[str, str] | None = None,
     per_label_stats_box_xy: dict[str, tuple[float, float]] | None = None,
+    # NEW: font sizes for per-panel secondary-legend and fit-stats box
+    panel_legend_fontsize: float | str = 8,
+    panel_legend_title_fontsize: float | str = 8,
+    fit_stats_fontsize: float | str = 9,
+    annotation_box_width_fraction: float = 0.28,
 
 ):
     """
@@ -13497,13 +13826,13 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                 elif kk in ("wrmse", "rmse_prob_w", "rmse"):
                     if row2 is not None and "rmse_prob_w" in row2:
                         try:
-                            parts.append(f"wRMSE={float(row2['rmse_prob_w']):.3f}")
+                            parts.append(f"wRMSE={float(row2['rmse_prob_w']):.2f}")
                         except Exception:
                             pass
                 elif kk in ("brier", "brier_w", "wbrier"):
                     if row2 is not None and "brier_w" in row2:
                         try:
-                            parts.append(f"wBrier={float(row2['brier_w']):.3f}")
+                            parts.append(f"wBrier={float(row2['brier_w']):.2f}")
                         except Exception:
                             pass
                 elif kk == "delta_aic":
@@ -13524,7 +13853,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                     if row_cmp is not None and "delta_rmse_prob_w" in row_cmp:
                         try:
                             parts.append(
-                                r"$\Delta$wRMSE=" + f"{float(row_cmp['delta_rmse_prob_w']):+.3f}"
+                                r"$\Delta$wRMSE=" + f"{float(row_cmp['delta_rmse_prob_w']):+.2f}"
                             )
                         except Exception:
                             pass
@@ -13532,7 +13861,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                     if row_cmp is not None and "delta_brier_w" in row_cmp:
                         try:
                             parts.append(
-                                r"$\Delta$wBrier=" + f"{float(row_cmp['delta_brier_w']):+.3f}"
+                                r"$\Delta$wBrier=" + f"{float(row_cmp['delta_brier_w']):+.2f}"
                             )
                         except Exception:
                             pass
@@ -13545,7 +13874,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                 elif kk in ("lr_p", "lr_pvalue", "p_lr"):
                     if row_cmp is not None and "lr_pvalue" in row_cmp:
                         try:
-                            parts.append(f"LR p={float(row_cmp['lr_pvalue']):.3f}")
+                            parts.append(f"LR p={float(row_cmp['lr_pvalue']):.2f}")
                         except Exception:
                             pass
 
@@ -13846,12 +14175,13 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                     leg_panel = ax.legend(
                         handles=grad_handles_panel,
                         loc="lower right",
-                        fontsize="x-small",
+                        fontsize=panel_legend_fontsize,
                         title=panel_legend_title,
-                        title_fontsize="x-small",
+                        title_fontsize=panel_legend_title_fontsize,
                         frameon=True,
                         framealpha=0.95,
                     )
+
                     leg_panel.get_frame().set_facecolor("white")
                     leg_panel.get_frame().set_edgecolor("black")
 
@@ -13888,7 +14218,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                                 fig.canvas.draw()
                                 bbox = leg_panel.get_window_extent()
                                 bbox_ax = bbox.transformed(ax.transAxes.inverted())
-                                box_w = 0.32
+                                box_w = annotation_box_width_fraction
                                 pad = 0.02
                                 xa = max(bbox_ax.x0 - box_w - pad, 0.02)
                                 ya = bbox_ax.y0
@@ -13912,7 +14242,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                             transform=ax.transAxes,
                             ha="left",
                             va="bottom",
-                            fontsize="small",
+                            fontsize=fit_stats_fontsize,
                             bbox=dict(
                                 boxstyle="round,pad=0.25",
                                 facecolor="white",
@@ -13921,6 +14251,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                             ),
                             zorder=15,
                         )
+
 
 
 
@@ -14938,11 +15269,27 @@ def plot_delta_vs_predictors_pkg_generalized(
 
     out_dir = Path(save_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
     svg = out_dir / f"{file_prefix}.svg"
     png = out_dir / f"{file_prefix}.png"
+    pdf = out_dir / f"{file_prefix}.pdf"      # <--- NEW
+
     fig.tight_layout()
-    fig.savefig(svg, format="svg", dpi=300)
-    fig.savefig(png, format="png", dpi=300)
+
+    # high-quality exports
+    for path, fmt, dpi in [
+        (svg, "svg", 300),
+        (png, "png", 300),
+        (pdf, "pdf", 600),   # 600 dpi for raster bits in the PDF
+    ]:
+        fig.savefig(
+            path,
+            format=fmt,
+            dpi=dpi,
+            bbox_inches="tight",
+            pad_inches=0.02,
+        )
+
     plt.close(fig)
 
     stats_df = pd.DataFrame(stats_rows)
@@ -14951,4 +15298,4 @@ def plot_delta_vs_predictors_pkg_generalized(
         csv_path = out_dir / f"{file_prefix}__stats.csv"
         stats_df.to_csv(csv_path, index=False)
 
-    return svg, png, csv_path, stats_df
+    return svg, png, pdf, csv_path, stats_df   # <--- include pdf in return
