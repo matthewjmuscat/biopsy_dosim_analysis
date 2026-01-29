@@ -121,6 +121,8 @@ def run_gp_and_collect_metrics(
     *,
     target_stat: str = "median",
     nu: float = 1.5,
+    kernel_spec=None,
+    kernel_label: str | None = None,
 ):
     """
     Runs the per-biopsy GP (posterior + hyperparams) on an already-filtered
@@ -145,6 +147,7 @@ def run_gp_and_collect_metrics(
             bx_index=bx_idx,
             target_stat=target_stat,
             nu=nu,
+            kernel_spec=kernel_spec,
         )
         results[(pid, bx_idx)] = res
         print(f"Processed Patient ID: {pid}, Bx index: {bx_idx}")
@@ -152,7 +155,7 @@ def run_gp_and_collect_metrics(
     # Per-biopsy metrics table
     rows = []
     for (pid, bx_idx), res in results.items():
-        row = gpr_pf.compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df)
+        row = gpr_pf.compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label=kernel_label)
         rows.append(row)
     metrics_df = pd.DataFrame(rows)
     print("Per-biopsy metrics (head):")
@@ -190,6 +193,8 @@ def run_gp_and_collect_metrics(
         "median_nugget": float(metrics_df["nugget"].median()),
         "median_sv_rmse": float(metrics_df["sv_rmse"].median()),
     }
+    if kernel_label:
+        cohort_summary["kernel_label"] = kernel_label
     print("Cohort summary:", cohort_summary)
     pd.Series(cohort_summary).to_csv(output_dir.joinpath("cohort_summary_numbers.csv"))
 
@@ -204,9 +209,36 @@ def run_gp_and_collect_metrics(
         )
         .reset_index()
     )
+    if kernel_label:
+        by_patient["kernel_label"] = kernel_label
     by_patient.to_csv(output_dir.joinpath("patient_level_rollups.csv"), index=False)
 
     return results, metrics_df, cohort_summary, by_patient
+
+
+def run_gp_and_collect_metrics_for_matern(
+    all_voxel_wise_dose_df: pd.DataFrame,
+    semivariogram_df: pd.DataFrame,
+    output_dir,
+    *,
+    target_stat: str = "median",
+    nu: float = 1.5,
+    kernel_label: str | None = None,
+):
+    """
+    Convenience wrapper to run GP/metrics for a specific Matérn ν and tag outputs.
+    """
+    if kernel_label is None:
+        kernel_label = f"matern_nu_{str(nu).replace('.', '_')}"
+    return run_gp_and_collect_metrics(
+        all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+        semivariogram_df=semivariogram_df,
+        output_dir=output_dir,
+        target_stat=target_stat,
+        nu=nu,
+        kernel_spec=("matern", nu),
+        kernel_label=kernel_label,
+    )
 
 
 # ---------------------------------------

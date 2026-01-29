@@ -19,6 +19,7 @@ class GPHyperparams:
     ell: float        # range / length-scale (mm)
     nugget: float     # micro-scale variance τ^2 (added to diagonal)
     nu: float = 1.5   # Matern smoothness (use 1.5 or 2.5 typically)
+    kernel: str = "matern"  # kernel name: 'matern', 'rbf', 'exp'
 
 def matern_covariance(h: np.ndarray, sigma_f2: float, ell: float, nu: float) -> np.ndarray:
     """Isotropic Matérn covariance in 1D for distances h >= 0."""
@@ -47,9 +48,31 @@ def matern_semivariogram(h: np.ndarray, sigma_f2: float, ell: float, nugget: flo
     # Note: nugget appears as discontinuity at h=0 in empirical γ; we fit it as a separate parameter.
     return gamma
 
+# RBF (squared exponential) kernel and semivariogram
+def rbf_covariance(h: np.ndarray, sigma_f2: float, ell: float) -> np.ndarray:
+    h = np.asarray(h, dtype=float)
+    return sigma_f2 * np.exp(-0.5 * (h / max(ell, 1e-12)) ** 2)
+
+def rbf_semivariogram(h: np.ndarray, sigma_f2: float, ell: float, nugget: float) -> np.ndarray:
+    return sigma_f2 - rbf_covariance(h, sigma_f2, ell)  # nugget handled separately
+
+# Exponential kernel (Matérn ν=0.5)
+def exp_covariance(h: np.ndarray, sigma_f2: float, ell: float) -> np.ndarray:
+    h = np.asarray(h, dtype=float)
+    return sigma_f2 * np.exp(-np.abs(h) / max(ell, 1e-12))
+
+def exp_semivariogram(h: np.ndarray, sigma_f2: float, ell: float, nugget: float) -> np.ndarray:
+    return sigma_f2 - exp_covariance(h, sigma_f2, ell)  # nugget handled separately
+
 def _variogram_model_for_fit(h, sigma_f2, ell, nugget, nu):
     # For curve_fit: add nugget on γ(0); for h>0, γ(h) = σ_f^2 - C(h). We approximate nugget as an additive constant.
     return matern_semivariogram(h, sigma_f2, ell, 0.0, nu) + nugget
+
+def _variogram_model_for_fit_rbf(h, sigma_f2, ell, nugget):
+    return rbf_semivariogram(h, sigma_f2, ell, 0.0) + nugget
+
+def _variogram_model_for_fit_exp(h, sigma_f2, ell, nugget):
+    return exp_semivariogram(h, sigma_f2, ell, 0.0) + nugget
 
 # ---------------------------------------
 # 1) Build voxel-level targets + variances
@@ -139,7 +162,62 @@ def fit_variogram_matern(
     popt, _ = curve_fit(lambda hh, s2, L, ng: _variogram_model_for_fit(hh, s2, L, ng, nu),
                         h, gamma_hat, p0=p0, bounds=(lower, upper), maxfev=10000)
     sigma_f2, ell, nugget = float(popt[0]), float(popt[1]), float(popt[2])
-    return GPHyperparams(sigma_f2=sigma_f2, ell=ell, nugget=nugget, nu=nu)
+    return GPHyperparams(sigma_f2=sigma_f2, ell=ell, nugget=nugget, nu=nu, kernel="matern")
+
+
+def _fit_variogram_common(semivariogram_df, patient_id, bx_index, model_fn, bounds=None):
+    sv = semivariogram_df.query("`Patient ID` == @patient_id and `Bx index` == @bx_index").copy()
+    sv = sv.sort_values("h_mm")
+    h = sv["h_mm"].to_numpy(float)
+    gamma_hat = sv["semivariance"].to_numpy(float)
+
+    if bounds is None:
+        bounds = {
+            "sigma_f2": (1e-6, max(gamma_hat.max() * 10, 1e-3)),
+            "ell": (np.maximum(np.diff(np.unique(h)).min() if h.size > 1 else 0.1, 0.05), max(h.max() * 5, 1.0)),
+            "nugget": (0.0, max(gamma_hat.max(), 1.0)),
+        }
+
+    p0 = [
+        max(gamma_hat.max() * 0.7, 1e-3),
+        max(h.max() / 3.0, 1.0),
+        max(gamma_hat.min(), 1e-6),
+    ]
+
+    lower = [bounds["sigma_f2"][0], bounds["ell"][0], bounds["nugget"][0]]
+    upper = [bounds["sigma_f2"][1], bounds["ell"][1], bounds["nugget"][1]]
+
+    popt, _ = curve_fit(model_fn, h, gamma_hat, p0=p0, bounds=(lower, upper), maxfev=10000)
+    sigma_f2, ell, nugget = float(popt[0]), float(popt[1]), float(popt[2])
+    return sigma_f2, ell, nugget
+
+
+def fit_variogram_rbf(
+    semivariogram_df: pd.DataFrame,
+    patient_id: str,
+    bx_index: int,
+    bounds: Optional[Dict[str, Tuple[float,float]]] = None
+) -> GPHyperparams:
+    sigma_f2, ell, nugget = _fit_variogram_common(
+        semivariogram_df, patient_id, bx_index,
+        model_fn=_variogram_model_for_fit_rbf,
+        bounds=bounds,
+    )
+    return GPHyperparams(sigma_f2=sigma_f2, ell=ell, nugget=nugget, nu=float("nan"), kernel="rbf")
+
+
+def fit_variogram_exponential(
+    semivariogram_df: pd.DataFrame,
+    patient_id: str,
+    bx_index: int,
+    bounds: Optional[Dict[str, Tuple[float,float]]] = None
+) -> GPHyperparams:
+    sigma_f2, ell, nugget = _fit_variogram_common(
+        semivariogram_df, patient_id, bx_index,
+        model_fn=_variogram_model_for_fit_exp,
+        bounds=bounds,
+    )
+    return GPHyperparams(sigma_f2=sigma_f2, ell=ell, nugget=nugget, nu=0.5, kernel="exp")
 
 # -------------------------------
 # 3) Build GP matrices and solve
@@ -150,6 +228,10 @@ def build_kernel_matrix(Xa: np.ndarray, Xb: np.ndarray, hyp: GPHyperparams) -> n
     Xa = np.asarray(Xa, float)[:, None]
     Xb = np.asarray(Xb, float)[None, :]
     h = np.abs(Xa - Xb)
+    if getattr(hyp, "kernel", "matern") == "rbf":
+        return rbf_covariance(h, hyp.sigma_f2, hyp.ell)
+    if getattr(hyp, "kernel", "matern") == "exp":
+        return exp_covariance(h, hyp.sigma_f2, hyp.ell)
     return matern_covariance(h, hyp.sigma_f2, hyp.ell, hyp.nu)
 
 def gp_posterior(
@@ -187,7 +269,8 @@ def run_gp_for_biopsy(
     bx_index: int,
     target_stat: Literal["median","mean"]="median",
     nu: float = 1.5,
-    grid_mm: Optional[np.ndarray] = None
+    grid_mm: Optional[np.ndarray] = None,
+    kernel_spec: Tuple[str, Optional[float]] | None = None,
 ) -> Dict[str, object]:
     """
     Orchestrates: targets+noise -> variogram fit -> GP posterior on grid.
@@ -199,7 +282,23 @@ def run_gp_for_biopsy(
     )
 
     # Step 2: variogram fit → kernel hyperparams
-    hyp = fit_variogram_matern(semivariogram_df, patient_id, bx_index, nu=nu)
+    # kernel_spec: (name, param) e.g., ("matern", 1.5), ("rbf", None), ("exp", None)
+    if kernel_spec is None:
+        kernel_name, kernel_param = "matern", nu
+    else:
+        if len(kernel_spec) != 2:
+            raise ValueError("kernel_spec must be a 2-tuple: (kernel_name, param_or_None)")
+        kernel_name, kernel_param = kernel_spec
+
+    if kernel_name == "matern":
+        nu_use = kernel_param if kernel_param is not None else nu
+        hyp = fit_variogram_matern(semivariogram_df, patient_id, bx_index, nu=nu_use)
+    elif kernel_name == "rbf":
+        hyp = fit_variogram_rbf(semivariogram_df, patient_id, bx_index)
+    elif kernel_name == "exp":
+        hyp = fit_variogram_exponential(semivariogram_df, patient_id, bx_index)
+    else:
+        raise ValueError(f"Unsupported kernel '{kernel_name}'. Use 'matern', 'rbf', or 'exp'.")
 
     # Step 3/4: posterior on grid
     if grid_mm is None:
@@ -251,7 +350,7 @@ def _finite(arr):
     arr = np.asarray(arr)
     return arr[np.isfinite(arr)]
 
-def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df):
+def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label: str | None = None):
     """
     Build one row of metrics for a single biopsy using your existing 'res' dict.
     Expected keys in res: X, y, var_n, sd_X, mu_X, X_star, mu_star, sd_star, hyperparams
@@ -327,16 +426,27 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df):
     if len(sv):
         h = sv["h_mm"].to_numpy(float)
         gamma_hat = sv["semivariance"].to_numpy(float)
-        gamma_model = (
-            matern_semivariogram(
-                h, sigma_f2, ell, 0.0, nu_param
-            ) + nugget
-        )
+        if getattr(hyp, "kernel", "matern") == "rbf":
+            gamma_model = rbf_semivariogram(h, sigma_f2, ell, 0.0) + nugget
+        elif getattr(hyp, "kernel", "matern") == "exp":
+            gamma_model = exp_semivariogram(h, sigma_f2, ell, 0.0) + nugget
+        else:
+            gamma_model = matern_semivariogram(h, sigma_f2, ell, 0.0, nu_param) + nugget
         sv_rmse = float(np.sqrt(np.nanmean((gamma_hat - gamma_model)**2)))
     else:
         sv_rmse = np.nan
 
-    return dict(
+    # Kernel label handling
+    inferred_label = None
+    if kernel_label is not None:
+        inferred_label = kernel_label
+    elif getattr(hyp, "kernel", None):
+        if getattr(hyp, "kernel") == "matern" and isfinite(nu_param):
+            inferred_label = f"matern_nu_{str(nu_param).replace('.', '_')}"
+        else:
+            inferred_label = getattr(hyp, "kernel")
+
+    row = dict(
         **{"Patient ID": pid, "Bx index": bx_idx, "n_voxels": int(len(X)), "spacing_mm": spacing},
         mean_indep_sd=mean_indep_sd,
         mean_gp_sd=mean_gp_sd,
@@ -359,6 +469,10 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df):
         ell=ell, sigma_f2=sigma_f2, nugget=nugget, nu=nu_param,
         sv_rmse=sv_rmse
     )
+    if inferred_label:
+        row["kernel_label"] = inferred_label
+
+    return row
 
 
 
@@ -459,12 +573,6 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
-
-
-
-
-
 
 
 

@@ -17,6 +17,7 @@ import numpy as np
 import GPR_analysis_pipeline_functions
 import GPR_analysis_plotting_functions_manual_methods
 import GPR_production_plots
+import GPR_kernel_sensitivity
 
 
 def main():
@@ -347,6 +348,16 @@ def main():
         nu=1.5,                # try 1.5 and 2.5 in sensitivity
     )
 
+    # Optional kernel sensitivity block (kept minimal to avoid clutter)
+    run_kernel_sensitivity_flag = True
+    if run_kernel_sensitivity_flag:
+        GPR_kernel_sensitivity.run_kernel_sensitivity(
+            all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+            semivariogram_df=semivariogram_df,
+            output_dir=output_dir,
+            target_stat="median",
+        )
+
 
     for patient_id, bx_index in semivariogram_df.groupby(['Patient ID','Bx index']).groups.keys():
         patient_dir = pt_sp_figures_dir.joinpath(patient_id)
@@ -354,38 +365,52 @@ def main():
 
         res = results[(patient_id, bx_index)]
 
-        # 1) GP profile
-        GPR_analysis_plotting_functions_manual_methods.plot_gp_profile(all_voxel_wise_dose_df, semivariogram_df, patient_id, bx_index,
-                        save_path=patient_dir,
-                        file_name=f"gp_profile_patient_{patient_id}_bx_{bx_index}.svg", gp_res=res, ci_level="both")
+        # 1) GP profile (production styling)
+        GPR_production_plots.plot_gp_profile_production(
+            res, patient_id, bx_index,
+            save_dir=patient_dir,
+            file_name_base=f"gp_profile_patient_{patient_id}_bx_{bx_index}",
+            file_types=("pdf", "svg"),
+            ci_level="both",
+        )
 
         # 2) Noise profile
-        GPR_analysis_plotting_functions_manual_methods.plot_noise_profile(all_voxel_wise_dose_df, patient_id, bx_index,
-                        save_path=patient_dir,
-                        file_name=f"noise_profile_patient_{patient_id}_bx_{bx_index}.svg")
+        GPR_production_plots.plot_noise_profile_production(
+            res, patient_id, bx_index,
+            save_dir=patient_dir,
+            file_name_base=f"noise_profile_patient_{patient_id}_bx_{bx_index}",
+            file_types=("pdf", "svg"),
+        )
 
         # 3) Uncertainty reduction
-        GPR_analysis_plotting_functions_manual_methods.plot_uncertainty_reduction(all_voxel_wise_dose_df, semivariogram_df, patient_id, bx_index,
-                                save_path=patient_dir,
-                                file_name=f"uncertainty_reduction_patient_{patient_id}_bx_{bx_index}.svg", gp_res=res)
-        
-        GPR_analysis_plotting_functions_manual_methods.plot_uncertainty_ratio(
-            all_voxel_wise_dose_df, semivariogram_df, patient_id, bx_index,
-            save_path=patient_dir,
-            file_name=f"uncertainty_ratio_patient_{patient_id}_bx_{bx_index}.svg",
-            gp_res=res
+        GPR_production_plots.plot_uncertainty_reduction_production(
+            res, patient_id, bx_index,
+            save_dir=patient_dir,
+            file_name_base=f"uncertainty_reduction_patient_{patient_id}_bx_{bx_index}",
+            file_types=("pdf", "svg"),
+        )
+        GPR_production_plots.plot_uncertainty_ratio_production(
+            res, patient_id, bx_index,
+            save_dir=patient_dir,
+            file_name_base=f"uncertainty_ratio_patient_{patient_id}_bx_{bx_index}",
+            file_types=("pdf", "svg"),
         )
 
         # 4) Residuals
-        GPR_analysis_plotting_functions_manual_methods.plot_residuals(all_voxel_wise_dose_df, semivariogram_df, patient_id, bx_index,
-                    save_path=patient_dir,
-                    file_name=f"residuals_patient_{patient_id}_bx_{bx_index}.svg", gp_res=res)
+        GPR_production_plots.plot_residuals_production(
+            res, patient_id, bx_index,
+            save_dir=patient_dir,
+            file_name_base=f"residuals_patient_{patient_id}_bx_{bx_index}",
+            file_types=("pdf", "svg"),
+        )
 
-        # 5) Variogram overlay (need hyperparams; reuse from a run or call _predict_at_X)
-        #out = GPR_analysis_plotting_functions_manual_methods.predict_at_X(all_voxel_wise_dose_df, semivariogram_df, patient_id, bx_index)
-        GPR_analysis_plotting_functions_manual_methods.plot_variogram_overlay(semivariogram_df, patient_id, bx_index, res["hyperparams"],
-                            save_path=patient_dir,
-                            file_name=f"variogram_overlay_patient_{patient_id}_bx_{bx_index}.svg")
+        # 5) Variogram overlay (kernel-aware)
+        GPR_production_plots.plot_variogram_overlay_production(
+            semivariogram_df, patient_id, bx_index, res["hyperparams"],
+            save_dir=patient_dir,
+            file_name_base=f"variogram_overlay_patient_{patient_id}_bx_{bx_index}",
+            file_types=("pdf", "svg"),
+        )
         
         print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
 
@@ -395,8 +420,8 @@ def main():
 
     # Cohort plots
 
-    GPR_analysis_plotting_functions_manual_methods.cohort_plots(metrics_df,
-                 cohort_output_figures_dir)
+    GPR_production_plots.cohort_plots_production(metrics_df,
+                 cohort_output_figures_dir, file_types=("pdf","svg"))
 
     print('test')
 
@@ -404,8 +429,12 @@ def main():
     stats_path = output_dir.joinpath("cohort_mean_sd_regression_stats.csv")
     reg_stats = GPR_analysis_pipeline_functions.fit_mean_sd_regressions(metrics_df, save_csv_path=stats_path)
 
-    plot_path = cohort_output_figures_dir.joinpath("cohort_mean_sd_scatter_with_fits.svg")
-    GPR_analysis_plotting_functions_manual_methods.plot_mean_sd_scatter_with_fits(metrics_df, reg_stats, save_svg_path=plot_path)
+    GPR_production_plots.plot_mean_sd_scatter_with_fits_production(
+        metrics_df, reg_stats,
+        save_dir=cohort_output_figures_dir,
+        file_name_base="cohort_mean_sd_scatter_with_fits",
+        file_types=("pdf","svg"),
+    )
 
 
     print('test')
