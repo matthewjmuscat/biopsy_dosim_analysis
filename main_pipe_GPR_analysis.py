@@ -16,11 +16,33 @@ import GPR_analysis_helpers
 import numpy as np 
 import GPR_analysis_pipeline_functions
 import GPR_analysis_plotting_functions_manual_methods
+import GPR_production_plots
 
 
 def main():
-    main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-18,11,24")
 
+
+    # filter by simulated types
+    simulated_types = ['Real']  # options: 'Real', 'Centroid DIL' 'Optimal DIL'
+
+
+
+    # GPR pipeline phases:
+    # 1. Load MC voxelwise dose table
+    # 2. Per-biopsy extraction
+    # 3. Per-biopsy semivariogram + Matérn fit
+    # 4. Per-biopsy GP posterior
+    # 5. Per-biopsy metrics
+    # 6. Cohort aggregation and plots
+
+
+
+
+
+
+    ### Set main output path ###
+    #main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-18,11,24")
+    main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-Jan-04-2026 Time-11,55,49")
 
     
     ### Load Dataframes 
@@ -64,17 +86,146 @@ def main():
     # Print the columns of the dataframe
     print(f"Columns of all voxel wise dose dataframe: {all_voxel_wise_dose_df.columns}")
     # Print the first 5 rows of the dataframe
-    print(f"First 5 rows of all voxel wise dose dataframe: {all_voxel_wise_dose_df.head()}")
+    print(f"First 5 rows of all voxel wise dose dataframe:\n {all_voxel_wise_dose_df.head()}")
     # Print the last 5 rows of the dataframe
-    print(f"Last 5 rows of all voxel wise dose dataframe: {all_voxel_wise_dose_df.tail()}")
+    print(f"Last 5 rows of all voxel wise dose dataframe:\n {all_voxel_wise_dose_df.tail()}")
     # voxel wise dose output by MC trial number (END)
 
+
+
+
+    # Cohort global dosimetry by voxel
+    cohort_global_dosimetry_by_voxel_path = cohort_csvs_directory.joinpath("Cohort: Global dosimetry by voxel.csv")  # Ensure the directory is a Path object
+    # this is a multiindex dataframe
+    cohort_global_dosimetry_by_voxel_df = load_files.load_multiindex_csv(cohort_global_dosimetry_by_voxel_path, header_rows=[0, 1])  # Load the CSV file into a DataFrame
+    # Note that each biopsy has unique voxels, ie no biopsy has more than one voxel i 
+    """ NOTE: The columns of the dataframe are:
+    print(cohort_global_dosimetry_by_voxel_df.columns)
+	MultiIndex([(  'Voxel begin (Z)',               ''),
+            (    'Voxel end (Z)',               ''),
+            (      'Voxel index',               ''),
+            (       'Patient ID',               ''),
+            (            'Bx ID',               ''),
+            (         'Bx index',               ''),
+            (        'Bx refnum',               ''),
+            (   'Simulated bool',               ''),
+            (   'Simulated type',               ''),
+            (        'Dose (Gy)', 'argmax_density'),
+            (        'Dose (Gy)',       'kurtosis'),
+            (        'Dose (Gy)',            'max'),
+            (        'Dose (Gy)',           'mean'),
+            (        'Dose (Gy)',            'min'),
+            (        'Dose (Gy)',        'nominal'),
+            (        'Dose (Gy)',    'quantile_05'),
+            (        'Dose (Gy)',    'quantile_25'),
+            (        'Dose (Gy)',    'quantile_50'),
+            (        'Dose (Gy)',    'quantile_75'),
+            (        'Dose (Gy)',    'quantile_95'),
+            (        'Dose (Gy)',            'sem'),
+            (        'Dose (Gy)',       'skewness'),
+            (        'Dose (Gy)',            'std'),
+            ('Dose grad (Gy/mm)', 'argmax_density'),
+            ('Dose grad (Gy/mm)',       'kurtosis'),
+            ('Dose grad (Gy/mm)',            'max'),
+            ('Dose grad (Gy/mm)',           'mean'),
+            ('Dose grad (Gy/mm)',            'min'),
+            ('Dose grad (Gy/mm)',        'nominal'),
+            ('Dose grad (Gy/mm)',    'quantile_05'),
+            ('Dose grad (Gy/mm)',    'quantile_25'),
+            ('Dose grad (Gy/mm)',    'quantile_50'),
+            ('Dose grad (Gy/mm)',    'quantile_75'),
+            ('Dose grad (Gy/mm)',    'quantile_95'),
+            ('Dose grad (Gy/mm)',            'sem'),
+            ('Dose grad (Gy/mm)',       'skewness'),
+            ('Dose grad (Gy/mm)',            'std')],
+           )
+    """
+
+    # Add IQR (Q75 - Q25) and 90% IPR (Q95 - Q05) for both Dose and Dose Gradient
+    for col in ["Dose (Gy)", "Dose grad (Gy/mm)"]:
+        cohort_global_dosimetry_by_voxel_df[(col, "IQR")] = (
+            cohort_global_dosimetry_by_voxel_df[(col, "quantile_75")] 
+            - cohort_global_dosimetry_by_voxel_df[(col, "quantile_25")]
+        )
+        cohort_global_dosimetry_by_voxel_df[(col, "IPR90")] = (
+            cohort_global_dosimetry_by_voxel_df[(col, "quantile_95")] 
+            - cohort_global_dosimetry_by_voxel_df[(col, "quantile_05")]
+        )
+    """ Now the columns of the dataframe are:
+        print(cohort_global_dosimetry_by_voxel_df.columns)
+        MultiIndex([(  'Voxel begin (Z)',               ''),
+                    (    'Voxel end (Z)',               ''),
+                    (      'Voxel index',               ''),
+                    (       'Patient ID',               ''),
+                    (            'Bx ID',               ''),
+                    (         'Bx index',               ''),
+                    (        'Bx refnum',               ''),
+                    (   'Simulated bool',               ''),
+                    (   'Simulated type',               ''),
+                    (        'Dose (Gy)', 'argmax_density'),
+                    (        'Dose (Gy)',       'kurtosis'),
+                    (        'Dose (Gy)',            'max'),
+                    (        'Dose (Gy)',           'mean'),
+                    (        'Dose (Gy)',            'min'),
+                    (        'Dose (Gy)',        'nominal'),
+                    (        'Dose (Gy)',    'quantile_05'),
+                    (        'Dose (Gy)',    'quantile_25'),
+                    (        'Dose (Gy)',    'quantile_50'),
+                    (        'Dose (Gy)',    'quantile_75'),
+                    (        'Dose (Gy)',    'quantile_95'),
+                    (        'Dose (Gy)',            'sem'),
+                    (        'Dose (Gy)',       'skewness'),
+                    (        'Dose (Gy)',            'std'),
+                    ('Dose grad (Gy/mm)', 'argmax_density'),
+                    ('Dose grad (Gy/mm)',       'kurtosis'),
+                    ('Dose grad (Gy/mm)',            'max'),
+                    ('Dose grad (Gy/mm)',           'mean'),
+                    ('Dose grad (Gy/mm)',            'min'),
+                    ('Dose grad (Gy/mm)',        'nominal'),
+                    ('Dose grad (Gy/mm)',    'quantile_05'),
+                    ('Dose grad (Gy/mm)',    'quantile_25'),
+                    ('Dose grad (Gy/mm)',    'quantile_50'),
+                    ('Dose grad (Gy/mm)',    'quantile_75'),
+                    ('Dose grad (Gy/mm)',    'quantile_95'),
+                    ('Dose grad (Gy/mm)',            'sem'),
+                    ('Dose grad (Gy/mm)',       'skewness'),
+                    ('Dose grad (Gy/mm)',            'std'),
+                    (        'Dose (Gy)',            'IQR'),
+                    (        'Dose (Gy)',          'IPR90'),
+                    ('Dose grad (Gy/mm)',            'IQR'),
+                    ('Dose grad (Gy/mm)',          'IPR90')],
+                )
+    """
+
+
+    print(f"done loading cohort global dosimetry by voxel dataframe. Shape: {cohort_global_dosimetry_by_voxel_df.shape}")
 
     ### Load all individual bx csvs and concatenate ### (END)
 
 
 
 
+    # filter dataframes by simulated types
+    if simulated_types is not None:
+        all_voxel_wise_dose_df = all_voxel_wise_dose_df[
+            all_voxel_wise_dose_df['Simulated type'].isin(simulated_types)
+        ].reset_index(drop=True)
+
+        cohort_global_dosimetry_by_voxel_df = cohort_global_dosimetry_by_voxel_df[
+            cohort_global_dosimetry_by_voxel_df[('Simulated type','')].isin(simulated_types)
+        ].reset_index(drop=True)
+
+        print(f"Filtered dataframes by simulated types: {simulated_types}")
+        print(f"Shape of filtered all voxel wise dose dataframe: {all_voxel_wise_dose_df.shape}")
+        print(f"Shape of filtered cohort global dosimetry by voxel dataframe: {cohort_global_dosimetry_by_voxel_df.shape}")
+        # To determine number of biopsies we need number of unique patient ID and bx index pairs 
+        print(f"Number of biopsies after filtering: {cohort_global_dosimetry_by_voxel_df[['Patient ID','Bx index']].drop_duplicates().shape[0]}")
+        print(f"Number of patients after filtering: {cohort_global_dosimetry_by_voxel_df['Patient ID'].nunique()}")
+
+
+
+
+    # ---------------------------------------    # Create output directories
 
     ## Create output directory
     # Output directory 
@@ -92,10 +243,54 @@ def main():
 
 
 
+
+
+
+
+
+
+    # ---------------------------------------    # Cross-check voxelwise stats vs cohort summary
+    # ---------------------------------------
+    cross_summary_df, cross_mismatches_df = helper_funcs.cross_check_voxelwise_statistics(
+        mc_voxel_df=all_voxel_wise_dose_df,
+        cohort_voxel_df=cohort_global_dosimetry_by_voxel_df,
+        value_cols=("Dose (Gy)", "Dose grad (Gy/mm)"),
+        key_cols=("Patient ID", "Bx index", "Bx ID", "Voxel index"),
+        nominal_trial_num=0,
+        rtol=1e-3,
+        atol=1e-4,
+        verbose=True,
+        max_mismatch_rows=50,
+        compute_mode=False,
+    )
+
+    cross_summary_path = output_dir.joinpath("voxel_stats_cross_check_summary.csv")
+    cross_summary_df.to_csv(cross_summary_path, index=False)
+    print(f"Saved voxelwise stats cross-check summary to: {cross_summary_path}")
+
+    if not cross_mismatches_df.empty:
+        cross_mismatch_path = output_dir.joinpath("voxel_stats_cross_check_mismatches_sample.csv")
+        cross_mismatches_df.to_csv(cross_mismatch_path, index=False)
+        print(f"Saved sample mismatches to: {cross_mismatch_path}")
+    else:
+        print("Voxelwise stats cross-check: no mismatches beyond tolerance.")
+
+
+    # Good they seems to match within tolerance, so I will continue to just calcualte desired stats throughout the piupeline from the raw data for now.
+
+
+
+
+
+
     # ---------------------------------------    # Semivariogram analysis
     # ---------------------------------------
 
-    semivariogram_df = GPR_analysis_helpers.semivariogram_by_biopsy(all_voxel_wise_dose_df, voxel_size_mm=1.0, max_lag_voxels=None)
+    semivariogram_df = GPR_analysis_helpers.semivariogram_by_biopsy(
+        all_voxel_wise_dose_df,
+        voxel_size_mm=1.0,
+        max_lag_voxels=None,
+    )
     """NOTE: The columns of the dataframe are:
     Index(['lag_voxels', 'h_mm', 'semivariance', 'n_pairs', 'Patient ID',
        'Bx index', 'Simulated bool', 'Simulated type', 'Bx refnum', 'Bx ID',
@@ -121,85 +316,36 @@ def main():
         os.makedirs(patient_dir, exist_ok=True)
         
 
-        # Plot the semivariogram for each biopsy
-        GPR_analysis_helpers.plot_variogram_from_df(
+        # Plot the semivariogram for each biopsy (production-quality)
+        GPR_production_plots.plot_variogram_from_df(
             semivariogram_df,
             patient_id,
             bx_index,
-            overlay_df = None,  # optional precomputed overlay with columns ['h_mm', 'median_absdiff', 'mean_absdiff'] (any subset ok)
-            include_title_meta = True,
-            save_path = patient_dir,     # directory or full file path
-            file_name =f"semivariogram_patient_{patient_id}_bx_{bx_index}.png",    # if dir provided, use this file name (ext optional)
-            return_path = False,               # return saved path for downstream use
+            overlay_df=None,  # optional precomputed overlay with columns ['h_mm', 'median_absdiff', 'mean_absdiff'] (any subset ok)
+            include_title_meta=False,  # paper-ready: keep title off, caption will hold metadata
+            label_fontsize=16,
+            tick_labelsize=14,
+            title_fontsize=16,
+            legend_fontsize=13,
+            save_path=patient_dir,     # directory or full file path stem
+            file_name=f"semivariogram_patient_{patient_id}_bx_{bx_index}",  # base name, extension handled by save_formats
+            save_formats=("pdf", "svg"),     # defaults to vector formats for publication; add "png" if needed
+            dpi=400,
         )
         print(f"Saved semivariogram plot for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
     
     print('test')
 
 
-    results = {}
-    for (pid, bx_idx), _ in all_voxel_wise_dose_df.groupby(["Patient ID","Bx index"]):
-        res = GPR_analysis_pipeline_functions.run_gp_for_biopsy(
-            all_voxel_wise_dose_df,
-            semivariogram_df,
-            patient_id=pid,
-            bx_index=bx_idx,
-            target_stat="median",   # or "mean"
-            nu=1.5                  # try 1.5 and 2.5 in sensitivity
-        )
-        results[(pid, bx_idx)] = res
-        print(f"Processed Patient ID: {pid}, Bx index: {bx_idx}")
-
-    
-    # Build a metrics dataframe
-    rows = []
-    for (pid, bx_idx), res in results.items():
-        row = GPR_analysis_pipeline_functions.compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df)
-        rows.append(row)
-
-    metrics_df = pd.DataFrame(rows)
-    print("Per-biopsy metrics (head):")
-    print(metrics_df.head())
-
-    # Save for reproducibility
-    metrics_csv_path = output_dir.joinpath("cohort_per_biopsy_metrics.csv")
-    metrics_df.to_csv(metrics_csv_path, index=False)
-    print(f"Saved per-biopsy metrics to: {metrics_csv_path}")
-
-    cohort_summary = {
-        "n_biopsies": int(len(metrics_df)),
-        "mean_uncertainty_ratio": float(metrics_df["mean_ratio"].mean()),
-        "median_uncertainty_ratio": float(metrics_df["median_ratio"].median()),
-        "mean_integrated_ratio": float(metrics_df["integ_ratio"].mean()),
-        "pct_biopsies_ge20pct_reduction": float((metrics_df["pct_vox_ge_20"] > 50).mean() * 100.0),  # >50% of voxels get ≥20% reduction
-        "pct_reduction_mean_sd_mean":  float(metrics_df["pct_reduction_mean_sd"].mean()),
-        "pct_reduction_mean_sd_std":   float(metrics_df["pct_reduction_mean_sd"].std(ddof=1)),
-        "pct_reduction_mean_sd_median":float(metrics_df["pct_reduction_mean_sd"].median()),
-        "pct_reduction_mean_sd_iqr":   float(metrics_df["pct_reduction_mean_sd"].quantile(0.75)
-                                            - metrics_df["pct_reduction_mean_sd"].quantile(0.25)),
-        "pct_reduction_integ_sd_mean": float(metrics_df["pct_reduction_integ_sd"].mean()),
-        "pct_reduction_integ_sd_std":  float(metrics_df["pct_reduction_integ_sd"].std(ddof=1)),
-        "pct_reduction_integ_sd_median":float(metrics_df["pct_reduction_integ_sd"].median()),
-        "pct_reduction_integ_sd_iqr":  float(metrics_df["pct_reduction_integ_sd"].quantile(0.75)
-                                            - metrics_df["pct_reduction_integ_sd"].quantile(0.25)),
-        "median_length_scale_mm": float(metrics_df["ell"].median()),
-        "median_nugget": float(metrics_df["nugget"].median()),
-        "median_sv_rmse": float(metrics_df["sv_rmse"].median()),
-    }
-    print("Cohort summary:", cohort_summary)
-    pd.Series(cohort_summary).to_csv(output_dir.joinpath("cohort_summary_numbers.csv"))
-
-
-    by_patient = (
-        metrics_df
-        .groupby("Patient ID")
-        .agg(n_bx=("Bx index", "nunique"),
-            mean_ratio_mean=("mean_ratio","mean"),
-            mean_ratio_sd=("mean_ratio","std"),
-            ell_median=("ell","median"))
-        .reset_index()
+    # Run per-biopsy Matérn GP on the filtered cohort, derive per-biopsy metrics,
+    # and write cohort-level summary/rollup CSVs (metrics, summary numbers, patient rollups).
+    results, metrics_df, cohort_summary, by_patient = GPR_analysis_helpers.run_gp_and_collect_metrics(
+        all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+        semivariogram_df=semivariogram_df,
+        output_dir=output_dir,
+        target_stat="median",  # or "mean"
+        nu=1.5,                # try 1.5 and 2.5 in sensitivity
     )
-    by_patient.to_csv(output_dir.joinpath("patient_level_rollups.csv"), index=False)
 
 
     for patient_id, bx_index in semivariogram_df.groupby(['Patient ID','Bx index']).groups.keys():

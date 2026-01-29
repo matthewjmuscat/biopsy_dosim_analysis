@@ -4,7 +4,196 @@ import numpy as np
 from typing import Optional, List, Union, Dict, Iterable, Tuple
 import os
 import re
-from scipy.stats import skew, kurtosis
+from scipy.stats import skew, kurtosis, gaussian_kde
+
+
+def cross_check_voxelwise_statistics(
+    mc_voxel_df: pd.DataFrame,
+    cohort_voxel_df: pd.DataFrame,
+    *,
+    value_cols: Iterable[str] = ("Dose (Gy)", "Dose grad (Gy/mm)"),
+    key_cols: Iterable[str] = ("Patient ID", "Bx index", "Bx ID", "Voxel index"),
+    nominal_trial_num: int | None = 0,
+    rtol: float = 1e-3,
+    atol: float = 1e-4,
+    verbose: bool = True,
+    max_mismatch_rows: int = 50,
+    compute_mode: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Recompute per-voxel summary statistics from the raw MC table and compare them
+    against the cohort-level per-voxel summary dataframe.
+
+    Returns
+    -------
+    summary_df : pd.DataFrame
+        One row per metric/stat with columns: metric, max_abs_diff,
+        mean_abs_diff, n_mismatched.
+    mismatches_df : pd.DataFrame
+        Long-form rows that exceeded tolerance (atol + rtol*|ref|), limited to
+        max_mismatch_rows for readability.
+
+    Notes
+    -----
+    Setting compute_mode=True will estimate a KDE mode per voxel/metric, which
+    is expensive. Default False skips KDE and leaves argmax_density as NaN.
+    """
+
+    value_cols = tuple(value_cols)
+    keys_present = [k for k in key_cols if k in mc_voxel_df.columns]
+    if not keys_present:
+        raise KeyError("None of the requested key columns are present in mc_voxel_df.")
+
+    # helper: flatten MultiIndex columns to single strings for easy alignment
+    def _flatten_cols(df: pd.DataFrame) -> pd.DataFrame:
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df.copy()
+            df.columns = [
+                c[0] if (len(c) > 1 and (c[1] == "" or c[1] is None)) else f"{c[0]}__{c[1]}"
+                for c in df.columns
+            ]
+        return df
+
+    stat_names = (
+        "argmax_density",
+        "kurtosis",
+        "max",
+        "mean",
+        "min",
+        "nominal",
+        "quantile_05",
+        "quantile_25",
+        "quantile_50",
+        "quantile_75",
+        "quantile_95",
+        "sem",
+        "skewness",
+        "std",
+        "IQR",
+        "IPR90",
+    )
+
+    records: List[Dict[str, object]] = []
+    for keys, sub in mc_voxel_df.groupby(keys_present, sort=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        row: Dict[str, object] = dict(zip(keys_present, keys))
+
+        for metric in value_cols:
+            if metric not in sub.columns:
+                continue
+            vals = pd.to_numeric(sub[metric], errors="coerce").dropna().to_numpy()
+            n = len(vals)
+
+            if n == 0:
+                for stat in stat_names:
+                    row[f"{metric}__{stat}"] = np.nan
+                continue
+
+            q05 = float(np.quantile(vals, 0.05))
+            q25 = float(np.quantile(vals, 0.25))
+            q50 = float(np.quantile(vals, 0.50))
+            q75 = float(np.quantile(vals, 0.75))
+            q95 = float(np.quantile(vals, 0.95))
+
+            row[f"{metric}__mean"] = float(vals.mean())
+            row[f"{metric}__std"] = float(vals.std(ddof=1)) if n > 1 else np.nan
+            row[f"{metric}__min"] = float(vals.min())
+            row[f"{metric}__max"] = float(vals.max())
+            row[f"{metric}__quantile_05"] = q05
+            row[f"{metric}__quantile_25"] = q25
+            row[f"{metric}__quantile_50"] = q50
+            row[f"{metric}__quantile_75"] = q75
+            row[f"{metric}__quantile_95"] = q95
+            row[f"{metric}__IQR"] = q75 - q25
+            row[f"{metric}__IPR90"] = q95 - q05
+            row[f"{metric}__sem"] = float(vals.std(ddof=1) / np.sqrt(n)) if n > 1 else np.nan
+            row[f"{metric}__skewness"] = float(skew(vals, bias=False)) if n > 2 else np.nan
+            row[f"{metric}__kurtosis"] = float(kurtosis(vals, bias=False)) if n > 3 else np.nan
+
+            if compute_mode:
+                try:
+                    if n == 1 or np.unique(vals).size < 2:
+                        mode_val = float(vals[0])
+                    else:
+                        kde = gaussian_kde(vals)
+                        xs = np.linspace(vals.min(), vals.max(), min(512, max(64, int(np.sqrt(n)) * 8)))
+                        pdf = kde(xs)
+                        mode_val = float(xs[np.argmax(pdf)])
+                except Exception:
+                    mode_val = np.nan
+                row[f"{metric}__argmax_density"] = mode_val
+            else:
+                row[f"{metric}__argmax_density"] = np.nan
+
+            if nominal_trial_num is not None and "MC trial num" in sub.columns:
+                nominal_vals = pd.to_numeric(
+                    sub.loc[sub["MC trial num"] == nominal_trial_num, metric], errors="coerce"
+                ).dropna()
+                row[f"{metric}__nominal"] = float(nominal_vals.iloc[0]) if len(nominal_vals) else np.nan
+
+        records.append(row)
+
+    computed_df = pd.DataFrame(records)
+
+    coh_flat = _flatten_cols(cohort_voxel_df)
+    comp_flat = _flatten_cols(computed_df)
+
+    keys_for_index = [k for k in keys_present if k in coh_flat.columns]
+    if not keys_for_index:
+        raise KeyError("No common key columns found between computed and cohort dataframes.")
+
+    comp_idx = comp_flat.set_index(keys_for_index)
+    coh_idx = coh_flat.set_index(keys_for_index)
+    common_index = comp_idx.index.intersection(coh_idx.index)
+    comp_idx = comp_idx.loc[common_index]
+    coh_idx = coh_idx.loc[common_index]
+
+    numeric_cols = sorted(set(comp_idx.columns).intersection(set(coh_idx.columns)) - set(keys_for_index))
+    summary_rows = []
+    mismatches: List[pd.DataFrame] = []
+
+    for col in numeric_cols:
+        comp_series = pd.to_numeric(comp_idx[col], errors="coerce")
+        coh_series = pd.to_numeric(coh_idx[col], errors="coerce")
+        delta = (comp_series - coh_series).abs()
+        tol = atol + rtol * coh_series.abs()
+        mask = delta > tol
+        n_mismatch = int(mask.sum())
+
+        summary_rows.append({
+            "metric": col,
+            "max_abs_diff": float(delta.max(skipna=True)),
+            "mean_abs_diff": float(delta.mean(skipna=True)),
+            "n_mismatched": n_mismatch,
+        })
+
+        if n_mismatch:
+            tmp = pd.DataFrame({
+                col: comp_series[mask],
+                f"{col}__ref": coh_series[mask],
+                "abs_diff": delta[mask],
+            })
+            tmp = tmp.reset_index()
+            tmp.insert(0, "metric", col)
+            mismatches.append(tmp)
+
+    summary_df = pd.DataFrame(summary_rows).sort_values("max_abs_diff", ascending=False)
+
+    mismatches_df = pd.concat(mismatches, ignore_index=True) if mismatches else pd.DataFrame()
+    if not mismatches_df.empty and len(mismatches_df) > max_mismatch_rows:
+        mismatches_df = mismatches_df.sort_values("abs_diff", ascending=False).head(max_mismatch_rows)
+
+    if verbose:
+        print("Cross-check voxelwise stats (top by max_abs_diff):")
+        print(summary_df.head(10))
+        if not mismatches_df.empty:
+            print(f"Found {len(mismatches_df)} mismatched rows (showing up to {max_mismatch_rows}).")
+            print(mismatches_df.head())
+        else:
+            print("No mismatches beyond tolerance detected.")
+
+    return summary_df, mismatches_df
 
 
 def create_eff_size_dataframe(result_df, patient_id_col, bx_index_col, bx_id_col, voxel_index_col, dose_col, eff_size="cohen", paired_bool=False):

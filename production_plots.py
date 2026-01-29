@@ -49,10 +49,25 @@ MPL_FONT_RC = {
     "axes.unicode_minus": True,
 }
 
-mpl.rcParams.update(MPL_FONT_RC)
+# Keep a clean, white canvas with black axes (match GPR_production_plots style)
+MPL_FACE_RC = {
+    "axes.facecolor": "white",
+    "figure.facecolor": "white",
+    "axes.edgecolor": "black",
+    "axes.labelcolor": "black",
+    "xtick.color": "black",
+    "ytick.color": "black",
+}
+
+mpl.rcParams.update(MPL_FONT_RC | MPL_FACE_RC)
 
 # (Optional) make seaborn respect these too
-sns.set_theme(rc=MPL_FONT_RC)
+sns.set_theme(style="white", rc=MPL_FONT_RC | MPL_FACE_RC)
+
+# Shared colors for consistent styling across production figures
+PRIMARY_LINE_COLOR = "#0b3b8a"  # deep blue
+OVERLAY_LINE_COLOR = "#4a4a4a"   # neutral gray
+GRID_COLOR = "#b8b8b8"
 
 
 

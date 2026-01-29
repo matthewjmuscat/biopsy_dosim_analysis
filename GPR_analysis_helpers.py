@@ -7,18 +7,11 @@ from pathlib import Path
 
 
 
-def compute_semivariogram_regular(df, voxel_size_mm=1.0, use_simulated=None, max_lag_voxels=None):
+def compute_semivariogram_regular(df, voxel_size_mm=1.0, max_lag_voxels=None):
     """
-    df: all_voxel_wise_dose_df filtered to a single biopsy (one Bx ID).
-    Assumes every trial has same set/order of Voxel index.
+    Compute the empirical semivariogram for one already-filtered biopsy table.
+    Assumes df contains only the trials/voxels you want (no in-function filtering).
     """
-    # Optional filter: use only simulated trials or include nominal t=0 as well
-    if use_simulated is True:
-        df = df[df['Simulated bool'] == True]
-    elif use_simulated is False:
-        df = df[df['Simulated bool'] == False]
-    # else: use all
-
     # Pivot to matrix: rows = trials, cols = voxel index (ordered along the core)
     M = df.pivot_table(index='MC trial num', columns='Voxel index', values='Dose (Gy)', aggfunc='first')
     M = M.sort_index(axis=1)  # ensure voxel order
@@ -47,11 +40,35 @@ def compute_semivariogram_regular(df, voxel_size_mm=1.0, use_simulated=None, max
     })
     return out
 
-def semivariogram_by_biopsy(all_df, voxel_size_mm=1.0, max_lag_voxels=None, use_simulated=None):
+# -------------------------------------------------------------
+# semivariogram_by_biopsy:
+#   - Groups the trial-wise voxel table by (Patient ID, Bx index).
+#   - For each biopsy, computes the empirical semivariogram γ(h) via
+#     compute_semivariogram_regular, then appends biopsy metadata and counts.
+#   - Returns a single concatenated DataFrame for downstream GP fitting/plots.
+#   - Assumes all_df has already been filtered upstream (e.g., by Simulated type).
+# -------------------------------------------------------------
+def semivariogram_by_biopsy(
+    all_df,
+    voxel_size_mm: float = 1.0,
+    max_lag_voxels=None,
+):
     """
     Compute semivariogram for each biopsy (grouped by Patient ID and Bx index).
-    Returns one concatenated DataFrame with metadata columns attached.
+    Assumes the input table is already filtered to the desired Simulated type(s)
+    and trials; no filtering is performed here. Returns one concatenated
+    DataFrame with metadata columns attached.
+
+    Parameters
+    ----------
+    all_df : pd.DataFrame
+        Trial-wise voxel table (already filtered).
+    voxel_size_mm : float
+        Physical size per voxel (used to convert lag_voxels -> h_mm).
+    max_lag_voxels : int | None
+        Maximum voxel lag to compute; None uses all available.
     """
+
     results = []
     group_cols = ['Patient ID', 'Bx index']
 
@@ -59,7 +76,6 @@ def semivariogram_by_biopsy(all_df, voxel_size_mm=1.0, max_lag_voxels=None, use_
         sv = compute_semivariogram_regular(
             g,
             voxel_size_mm=voxel_size_mm,
-            use_simulated=use_simulated,
             max_lag_voxels=max_lag_voxels
         )
 
@@ -95,6 +111,102 @@ def semivariogram_by_biopsy(all_df, voxel_size_mm=1.0, max_lag_voxels=None, use_
     return pd.concat(results, ignore_index=True)
 
 
+# -------------------------------------------------------------
+# GP run + metrics aggregation (cohort-level helper)
+# -------------------------------------------------------------
+def run_gp_and_collect_metrics(
+    all_voxel_wise_dose_df: pd.DataFrame,
+    semivariogram_df: pd.DataFrame,
+    output_dir,
+    *,
+    target_stat: str = "median",
+    nu: float = 1.5,
+):
+    """
+    Runs the per-biopsy GP (posterior + hyperparams) on an already-filtered
+    trial-wise voxel table, computes per-biopsy metrics, and writes cohort
+    summary CSVs to output_dir. Returns (results_dict, metrics_df,
+    cohort_summary_dict, by_patient_df).
+
+    Assumes:
+    - all_voxel_wise_dose_df and semivariogram_df are filtered to the same
+      Simulated type subset upstream.
+    - Grouping keys: Patient ID, Bx index.
+    """
+    # Local import to avoid circular dependency
+    import GPR_analysis_pipeline_functions as gpr_pf
+
+    results = {}
+    for (pid, bx_idx), _ in all_voxel_wise_dose_df.groupby(["Patient ID", "Bx index"]):
+        res = gpr_pf.run_gp_for_biopsy(
+            all_voxel_wise_dose_df,
+            semivariogram_df,
+            patient_id=pid,
+            bx_index=bx_idx,
+            target_stat=target_stat,
+            nu=nu,
+        )
+        results[(pid, bx_idx)] = res
+        print(f"Processed Patient ID: {pid}, Bx index: {bx_idx}")
+
+    # Per-biopsy metrics table
+    rows = []
+    for (pid, bx_idx), res in results.items():
+        row = gpr_pf.compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df)
+        rows.append(row)
+    metrics_df = pd.DataFrame(rows)
+    print("Per-biopsy metrics (head):")
+    print(metrics_df.head())
+
+    # Save metrics
+    metrics_csv_path = output_dir.joinpath("cohort_per_biopsy_metrics.csv")
+    metrics_df.to_csv(metrics_csv_path, index=False)
+    print(f"Saved per-biopsy metrics to: {metrics_csv_path}")
+
+    # Cohort summary numbers
+    cohort_summary = {
+        "n_biopsies": int(len(metrics_df)),
+        "mean_uncertainty_ratio": float(metrics_df["mean_ratio"].mean()),
+        "median_uncertainty_ratio": float(metrics_df["median_ratio"].median()),
+        "mean_integrated_ratio": float(metrics_df["integ_ratio"].mean()),
+        "pct_biopsies_ge20pct_reduction": float(
+            (metrics_df["pct_vox_ge_20"] > 50).mean() * 100.0
+        ),  # >50% of voxels get ≥20% reduction
+        "pct_reduction_mean_sd_mean": float(metrics_df["pct_reduction_mean_sd"].mean()),
+        "pct_reduction_mean_sd_std": float(metrics_df["pct_reduction_mean_sd"].std(ddof=1)),
+        "pct_reduction_mean_sd_median": float(metrics_df["pct_reduction_mean_sd"].median()),
+        "pct_reduction_mean_sd_iqr": float(
+            metrics_df["pct_reduction_mean_sd"].quantile(0.75)
+            - metrics_df["pct_reduction_mean_sd"].quantile(0.25)
+        ),
+        "pct_reduction_integ_sd_mean": float(metrics_df["pct_reduction_integ_sd"].mean()),
+        "pct_reduction_integ_sd_std": float(metrics_df["pct_reduction_integ_sd"].std(ddof=1)),
+        "pct_reduction_integ_sd_median": float(metrics_df["pct_reduction_integ_sd"].median()),
+        "pct_reduction_integ_sd_iqr": float(
+            metrics_df["pct_reduction_integ_sd"].quantile(0.75)
+            - metrics_df["pct_reduction_integ_sd"].quantile(0.25)
+        ),
+        "median_length_scale_mm": float(metrics_df["ell"].median()),
+        "median_nugget": float(metrics_df["nugget"].median()),
+        "median_sv_rmse": float(metrics_df["sv_rmse"].median()),
+    }
+    print("Cohort summary:", cohort_summary)
+    pd.Series(cohort_summary).to_csv(output_dir.joinpath("cohort_summary_numbers.csv"))
+
+    # Patient-level rollups
+    by_patient = (
+        metrics_df.groupby("Patient ID")
+        .agg(
+            n_bx=("Bx index", "nunique"),
+            mean_ratio_mean=("mean_ratio", "mean"),
+            mean_ratio_sd=("mean_ratio", "std"),
+            ell_median=("ell", "median"),
+        )
+        .reset_index()
+    )
+    by_patient.to_csv(output_dir.joinpath("patient_level_rollups.csv"), index=False)
+
+    return results, metrics_df, cohort_summary, by_patient
 
 
 # ---------------------------------------
@@ -241,99 +353,5 @@ def plot_variogram_for_biopsy(
     return sv
 
 
-def plot_variogram_from_df(
-    semivariogram_df: pd.DataFrame,
-    patient_id,
-    bx_index,
-    *,
-    overlay_df: pd.DataFrame | None = None,  # optional precomputed overlay with columns ['h_mm', 'median_absdiff', 'mean_absdiff'] (any subset ok)
-    include_title_meta: bool = True,
-    save_path: str | Path | None = None,     # directory or full file path
-    file_name: str | None = None,            # if dir provided, use this file name (ext optional)
-    return_path: bool = False,               # return saved path for downstream use
-    show: bool = False,                 # NEW: default to headless
-
-) -> pd.DataFrame | tuple[pd.DataFrame, str | None]:
-    """
-    Plot an empirical variogram for one biopsy using an already computed semivariogram_df.
-
-    Expects semivariogram_df to contain rows for many biopsies with at least:
-      ['Patient ID', 'Bx index', 'h_mm', 'semivariance'].
-    If overlay_df is provided, it should already be filtered to the same biopsy or be filterable.
-    """
-    if not show:
-        plt.ioff()
-
-    required_cols = {'Patient ID', 'Bx index', 'h_mm', 'semivariance'}
-    missing = required_cols - set(semivariogram_df.columns)
-    if missing:
-        raise ValueError(f"semivariogram_df missing columns: {sorted(missing)}")
-
-    # filter to the requested biopsy
-    mask = (semivariogram_df['Patient ID'] == patient_id) & (semivariogram_df['Bx index'] == bx_index)
-    sv = semivariogram_df.loc[mask].copy().sort_values('h_mm')
-    if sv.empty:
-        raise ValueError(f"No semivariogram rows for Patient ID={patient_id}, Bx index={bx_index}")
-
-    # prepare overlay if provided
-    ov = None
-    if overlay_df is not None and not overlay_df.empty:
-        # If overlay_df contains multiple biopsies, filter similarly (ignore if cols absent)
-        ov = overlay_df.copy()
-        if 'Patient ID' in ov.columns and 'Bx index' in ov.columns:
-            ov = ov[(ov['Patient ID'] == patient_id) & (ov['Bx index'] == bx_index)]
-        if not ov.empty and 'h_mm' in ov.columns:
-            ov = ov.sort_values('h_mm')
-
-    sns.set_context("talk")
-    fig, ax = plt.subplots(figsize=(7.0, 4.5))
-
-    sns.lineplot(data=sv, x='h_mm', y='semivariance', ax=ax,
-                    marker='o', linewidth=2, label='Semivariogram γ(h)')
-
-    if ov is not None and not ov.empty:
-        if 'median_absdiff' in ov.columns:
-            sns.lineplot(data=ov, x='h_mm', y='median_absdiff', ax=ax,
-                            marker='s', linewidth=1.8, linestyle='--', label='Median |Δdose|')
-        if 'mean_absdiff' in ov.columns:
-            sns.lineplot(data=ov, x='h_mm', y='mean_absdiff', ax=ax,
-                            marker='^', linewidth=1.8, linestyle=':', label='Mean |Δdose|')
-
-    if include_title_meta:
-        bits = [f"Patient {patient_id}", f"Biopsy {bx_index}"]
-        for c in ['Bx ID', 'Simulated type', 'Simulated bool']:
-            if c in sv.columns:
-                vals = sv[c].dropna().unique()
-                if len(vals) == 1:
-                    bits.append(f"{c}: {vals[0]}")
-        ax.set_title(" | ".join(bits))
-
-    ax.set_xlabel("Separation distance h (mm)")
-    ax.set_ylabel("γ(h)  (semivariance)")
-    ax.grid(True, alpha=0.25)
-    ax.legend(frameon=False)
-    plt.tight_layout()
-
-    saved_path = None
-    if save_path is not None:
-        save_path = Path(save_path)
-        if save_path.suffix:
-            out_path = save_path
-        else:
-            save_path.mkdir(parents=True, exist_ok=True)
-            if file_name is None:
-                file_name = f"variogram_patient{patient_id}_bx{bx_index}.png"
-            if Path(file_name).suffix == "":
-                file_name += ".png"
-            out_path = save_path / file_name
-        fig.savefig(out_path, dpi=300, bbox_inches="tight")
-        saved_path = str(out_path)
-
-    if show:
-        plt.show()
-
-    plt.close(fig)
-
-    return (sv, saved_path) if return_path else sv
-
-
+# NOTE: plot_variogram_from_df has been moved to GPR_production_plots.plot_variogram_from_df
+# and should be imported/used directly from there.
