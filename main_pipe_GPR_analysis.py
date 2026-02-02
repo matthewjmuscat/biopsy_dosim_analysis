@@ -15,16 +15,24 @@ import helper_funcs
 import GPR_analysis_helpers
 import numpy as np 
 import GPR_analysis_pipeline_functions
-import GPR_analysis_plotting_functions_manual_methods
 import GPR_production_plots
 import GPR_kernel_sensitivity
 
 
 def main():
+    def _print_section(title: str) -> None:
+        line = "=" * 80
+        print(f"\n{line}\n{title}\n{line}")
 
 
     # filter by simulated types
     simulated_types = ['Real']  # options: 'Real', 'Centroid DIL' 'Optimal DIL'
+
+    # plotting / analysis gates (speed control)
+    run_semivariogram_plots = False
+    run_patient_plots = True
+    run_kernel_sensitivity_flag = False
+    run_cohort_plots = True
 
 
 
@@ -41,6 +49,7 @@ def main():
 
 
 
+    _print_section("GPR PIPELINE: DATA LOADING")
     ### Set main output path ###
     #main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-18,11,24")
     main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-Jan-04-2026 Time-11,55,49")
@@ -53,6 +62,7 @@ def main():
     cohort_csvs_directory = csv_directory.joinpath("Cohort")
     
     
+    _print_section("LOAD: Voxel-wise dose tables")
     ### Load all individual bx csvs and concatenate ### (START)
 
     mc_sim_results_path = csv_directory.joinpath("MC simulation")  # Ensure the directory is a Path object
@@ -95,6 +105,7 @@ def main():
 
 
 
+    _print_section("LOAD: Cohort global dosimetry by voxel")
     # Cohort global dosimetry by voxel
     cohort_global_dosimetry_by_voxel_path = cohort_csvs_directory.joinpath("Cohort: Global dosimetry by voxel.csv")  # Ensure the directory is a Path object
     # this is a multiindex dataframe
@@ -206,6 +217,7 @@ def main():
 
 
 
+    _print_section("FILTER: Simulated types")
     # filter dataframes by simulated types
     if simulated_types is not None:
         all_voxel_wise_dose_df = all_voxel_wise_dose_df[
@@ -250,6 +262,7 @@ def main():
 
 
 
+    _print_section("QC: Voxelwise stats cross-check")
     # ---------------------------------------    # Cross-check voxelwise stats vs cohort summary
     # ---------------------------------------
     cross_summary_df, cross_mismatches_df = helper_funcs.cross_check_voxelwise_statistics(
@@ -284,6 +297,7 @@ def main():
 
 
 
+    _print_section("SEMIVARIOGRAM: Compute per-biopsy")
     # ---------------------------------------    # Semivariogram analysis
     # ---------------------------------------
 
@@ -310,135 +324,141 @@ def main():
 
 
 
-    for patient_id, bx_index in semivariogram_df.groupby(['Patient ID', 'Bx index']).groups.keys():
-        print(f"Plotting semivariogram for Patient ID: {patient_id}, Bx index: {bx_index}")
+    if run_semivariogram_plots:
+        _print_section("SEMIVARIOGRAM: Plot per-biopsy")
+        for patient_id, bx_index in semivariogram_df.groupby(['Patient ID', 'Bx index']).groups.keys():
+            print(f"Plotting semivariogram for Patient ID: {patient_id}, Bx index: {bx_index}")
 
-        patient_dir = pt_sp_figures_dir.joinpath(patient_id)
-        os.makedirs(patient_dir, exist_ok=True)
-        
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
+            sv_dir = patient_dir.joinpath("semivariograms")
+            os.makedirs(sv_dir, exist_ok=True)
 
-        # Plot the semivariogram for each biopsy (production-quality)
-        GPR_production_plots.plot_variogram_from_df(
-            semivariogram_df,
-            patient_id,
-            bx_index,
-            overlay_df=None,  # optional precomputed overlay with columns ['h_mm', 'median_absdiff', 'mean_absdiff'] (any subset ok)
-            include_title_meta=False,  # paper-ready: keep title off, caption will hold metadata
-            label_fontsize=16,
-            tick_labelsize=14,
-            title_fontsize=16,
-            legend_fontsize=13,
-            save_path=patient_dir,     # directory or full file path stem
-            file_name=f"semivariogram_patient_{patient_id}_bx_{bx_index}",  # base name, extension handled by save_formats
-            save_formats=("pdf", "svg"),     # defaults to vector formats for publication; add "png" if needed
-            dpi=400,
-        )
-        print(f"Saved semivariogram plot for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
+            # Plot the semivariogram for each biopsy (production-quality)
+            GPR_production_plots.plot_variogram_from_df(
+                semivariogram_df,
+                patient_id,
+                bx_index,
+                overlay_df=None,  # optional precomputed overlay with columns ['h_mm', 'median_absdiff', 'mean_absdiff'] (any subset ok)
+                include_title_meta=False,  # paper-ready: keep title off, caption will hold metadata
+                label_fontsize=16,
+                tick_labelsize=14,
+                title_fontsize=16,
+                legend_fontsize=13,
+                save_path=sv_dir,     # directory for semivariograms per patient
+                file_name=f"semivariogram_patient_{patient_id}_bx_{bx_index}",  # base name, extension handled by save_formats
+                save_formats=("pdf", "svg"),     # defaults to vector formats for publication; add "png" if needed
+                dpi=400,
+            )
+            print(f"Saved semivariogram plot for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
     
-    print('test')
 
 
+    _print_section("GP: Run per-biopsy + metrics")
     # Run per-biopsy Matérn GP on the filtered cohort, derive per-biopsy metrics,
     # and write cohort-level summary/rollup CSVs (metrics, summary numbers, patient rollups).
-    results, metrics_df, cohort_summary, by_patient = GPR_analysis_helpers.run_gp_and_collect_metrics(
+    position_mode = "begin"  # use voxel begin positions for plotting/GP (options: "center", "begin")
+    results, metrics_df, cohort_summary_df, by_patient = GPR_analysis_helpers.run_gp_and_collect_metrics(
         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
         semivariogram_df=semivariogram_df,
         output_dir=output_dir,
         target_stat="median",  # or "mean"
         nu=1.5,                # try 1.5 and 2.5 in sensitivity
+        position_mode=position_mode,
     )
 
     # Optional kernel sensitivity block (kept minimal to avoid clutter)
-    run_kernel_sensitivity_flag = True
     if run_kernel_sensitivity_flag:
+        _print_section("KERNEL SENSITIVITY (optional)")
+        kernel_sens_dir = output_dir.joinpath("kernel_sensitivity")
+        kernel_sens_dir.mkdir(parents=True, exist_ok=True)
         GPR_kernel_sensitivity.run_kernel_sensitivity(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
             semivariogram_df=semivariogram_df,
-            output_dir=output_dir,
+            output_dir=kernel_sens_dir,
             target_stat="median",
+            position_mode=position_mode,
         )
 
 
-    for patient_id, bx_index in semivariogram_df.groupby(['Patient ID','Bx index']).groups.keys():
-        patient_dir = pt_sp_figures_dir.joinpath(patient_id)
-        os.makedirs(patient_dir, exist_ok=True)
+    if run_patient_plots:
+        _print_section("PLOTS: Patient-level figures")
+        for patient_id, bx_index in semivariogram_df.groupby(['Patient ID','Bx index']).groups.keys():
+            patient_dir = pt_sp_figures_dir.joinpath(patient_id)
+            os.makedirs(patient_dir, exist_ok=True)
 
-        res = results[(patient_id, bx_index)]
+            res = results[(patient_id, bx_index)]
 
-        # 1) GP profile (production styling)
-        GPR_production_plots.plot_gp_profile_production(
-            res, patient_id, bx_index,
-            save_dir=patient_dir,
-            file_name_base=f"gp_profile_patient_{patient_id}_bx_{bx_index}",
-            file_types=("pdf", "svg"),
-            ci_level="both",
+            # Production-grade patient-level figures
+            GPR_production_plots.make_patient_level_gpr_plots(
+                all_voxel_wise_dose_df,
+                semivariogram_df,
+                patient_id,
+                bx_index,
+                res,
+                save_dir=patient_dir,
+                save_formats=("pdf", "svg"),
+                show_titles=False,
+                font_scale=1.0,
+            )
+
+            # Paired figures with aligned axes (semivariogram+profile, reduction+ratio)
+            pair_dir = patient_dir.joinpath("paired_panels")
+            os.makedirs(pair_dir, exist_ok=True)
+            GPR_production_plots.plot_variogram_and_profile_pair(
+                semivariogram_df,
+                patient_id,
+                bx_index,
+                res,
+                save_dir=pair_dir,
+                file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}",
+                save_formats=("pdf", "svg"),
+            )
+            GPR_production_plots.plot_uncertainty_pair(
+                res,
+                patient_id,
+                bx_index,
+                save_dir=pair_dir,
+                file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}",
+                save_formats=("pdf", "svg"),
+            )
+            # give the list of plots produced in this print statement
+            print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
+
+
+
+
+    if run_cohort_plots:
+        _print_section("PLOTS: Cohort-level figures")
+        # Cohort plots
+
+        GPR_production_plots.cohort_plots_production(metrics_df,
+                     cohort_output_figures_dir, save_formats=("pdf","svg"))
+
+
+        # linear regression of paired SDs between methods
+        stats_path = output_dir.joinpath("cohort_mean_sd_regression_stats.csv")
+        reg_stats = GPR_analysis_pipeline_functions.fit_mean_sd_regressions(metrics_df, save_csv_path=stats_path)
+
+        GPR_production_plots.plot_mean_sd_scatter_with_fits_production(
+            metrics_df, reg_stats,
+            save_dir=cohort_output_figures_dir,
+            file_name_base="cohort_mean_sd_scatter_with_fits",
+            save_formats=("pdf","svg"),
         )
 
-        # 2) Noise profile
-        GPR_production_plots.plot_noise_profile_production(
-            res, patient_id, bx_index,
-            save_dir=patient_dir,
-            file_name_base=f"noise_profile_patient_{patient_id}_bx_{bx_index}",
-            file_types=("pdf", "svg"),
+        GPR_production_plots.plot_mean_sd_bland_altman_production(
+            metrics_df,
+            save_dir=cohort_output_figures_dir,
+            file_name_base="cohort_mean_sd_bland_altman",
+            save_formats=("pdf","svg"),
+            source_csv_path=output_dir.joinpath("gpr_per_biopsy_metrics.csv"),
+            show_annotation=False,
         )
 
-        # 3) Uncertainty reduction
-        GPR_production_plots.plot_uncertainty_reduction_production(
-            res, patient_id, bx_index,
-            save_dir=patient_dir,
-            file_name_base=f"uncertainty_reduction_patient_{patient_id}_bx_{bx_index}",
-            file_types=("pdf", "svg"),
-        )
-        GPR_production_plots.plot_uncertainty_ratio_production(
-            res, patient_id, bx_index,
-            save_dir=patient_dir,
-            file_name_base=f"uncertainty_ratio_patient_{patient_id}_bx_{bx_index}",
-            file_types=("pdf", "svg"),
-        )
 
-        # 4) Residuals
-        GPR_production_plots.plot_residuals_production(
-            res, patient_id, bx_index,
-            save_dir=patient_dir,
-            file_name_base=f"residuals_patient_{patient_id}_bx_{bx_index}",
-            file_types=("pdf", "svg"),
-        )
-
-        # 5) Variogram overlay (kernel-aware)
-        GPR_production_plots.plot_variogram_overlay_production(
-            semivariogram_df, patient_id, bx_index, res["hyperparams"],
-            save_dir=patient_dir,
-            file_name_base=f"variogram_overlay_patient_{patient_id}_bx_{bx_index}",
-            file_types=("pdf", "svg"),
-        )
-        
-        print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
-
-    print('test')
-
-
-
-    # Cohort plots
-
-    GPR_production_plots.cohort_plots_production(metrics_df,
-                 cohort_output_figures_dir, file_types=("pdf","svg"))
-
-    print('test')
-
-    # linear regression of paired SDs between methods
-    stats_path = output_dir.joinpath("cohort_mean_sd_regression_stats.csv")
-    reg_stats = GPR_analysis_pipeline_functions.fit_mean_sd_regressions(metrics_df, save_csv_path=stats_path)
-
-    GPR_production_plots.plot_mean_sd_scatter_with_fits_production(
-        metrics_df, reg_stats,
-        save_dir=cohort_output_figures_dir,
-        file_name_base="cohort_mean_sd_scatter_with_fits",
-        file_types=("pdf","svg"),
-    )
-
-
-    print('test')
-
+    # print programme complete and pause and wait for enter to exit
+    input("GPR analysis pipeline complete. Press Enter to exit.")
 
 if __name__ == "__main__":
     main()

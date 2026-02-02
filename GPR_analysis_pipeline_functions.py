@@ -83,7 +83,8 @@ def build_voxel_targets_and_noise(
     patient_id: str,
     bx_index: int,
     target_stat: Literal["median","mean"] = "median",
-    variance_clip_min: float = 1e-6
+    variance_clip_min: float = 1e-6,
+    position_mode: Literal["center","begin"] = "center",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     """
     Returns:
@@ -94,16 +95,21 @@ def build_voxel_targets_and_noise(
     """
     df_bx = all_voxel_wise_dose_df.query("`Patient ID` == @patient_id and `Bx index` == @bx_index")
 
-    # Position along the core: use voxel center from begin/end; fallback to Z if needed.
+    # Position along the core: choose center or begin based on position_mode
     if {"Voxel begin (Z)","Voxel end (Z)"}.issubset(df_bx.columns):
         pos = df_bx.groupby("Voxel index").agg(
-            x_mm=("Voxel begin (Z)", "first"),  # we'll replace with center below
+            x_mm_begin=("Voxel begin (Z)", "first"),
             x_mm_end=("Voxel end (Z)", "first"),
         )
-        pos["x_mm"] = 0.5 * (pos["x_mm"] + pos["x_mm_end"])
+        if position_mode == "begin":
+            pos["x_mm"] = pos["x_mm_begin"]
+        else:
+            pos["x_mm"] = 0.5 * (pos["x_mm_begin"] + pos["x_mm_end"])
     else:
         # If only 'Z (Bx frame)' available, use its mean per voxel
-        pos = df_bx.groupby("Voxel index").agg(x_mm=("Z (Bx frame)", "mean"))
+        z_col = "Z (Bx frame)"
+        agg_fn = "mean" if position_mode != "begin" else "min"
+        pos = df_bx.groupby("Voxel index").agg(x_mm=(z_col, agg_fn))
 
     # Targets and MC variance per voxel
     agg_fn = "median" if target_stat == "median" else "mean"
@@ -271,6 +277,7 @@ def run_gp_for_biopsy(
     nu: float = 1.5,
     grid_mm: Optional[np.ndarray] = None,
     kernel_spec: Tuple[str, Optional[float]] | None = None,
+    position_mode: Literal["center","begin"] = "center",
 ) -> Dict[str, object]:
     """
     Orchestrates: targets+noise -> variogram fit -> GP posterior on grid.
@@ -278,7 +285,8 @@ def run_gp_for_biopsy(
     """
     # Step 1: voxel targets and heteroscedastic noise
     X, y, var_n, per_voxel = build_voxel_targets_and_noise(
-        all_voxel_wise_dose_df, patient_id, bx_index, target_stat=target_stat
+        all_voxel_wise_dose_df, patient_id, bx_index,
+        target_stat=target_stat, position_mode=position_mode
     )
 
     # Step 2: variogram fit → kernel hyperparams
@@ -374,6 +382,7 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
     median_ratio = float(np.nanmedian(ratio_f)) if len(ratio_f) else np.nan
     iqr_ratio    = float(np.nanpercentile(ratio_f, 75) - np.nanpercentile(ratio_f, 25)) if len(ratio_f) else np.nan
     pct_vox_ge_20 = float(np.nanmean(ratio_f >= 1.25) * 100) if len(ratio_f) else np.nan  # ≥20% reduction ~ ratio>=1.25
+    pct_vox_ge_50 = float(np.nanmean(ratio_f >= 1.5) * 100) if len(ratio_f) else np.nan
 
 
     # Integrated uncertainty (sum of SD * spacing) — crude trapezoid = spacing * sum(SD)
@@ -446,19 +455,28 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
         else:
             inferred_label = getattr(hyp, "kernel")
 
+    nugget_fraction = float(nugget / (nugget + sigma_f2)) if (sigma_f2 + nugget) > 0 else np.nan
+
     row = dict(
         **{"Patient ID": pid, "Bx index": bx_idx, "n_voxels": int(len(X)), "spacing_mm": spacing},
         mean_indep_sd=mean_indep_sd,
         mean_gp_sd=mean_gp_sd,
+        mean_sd_mc=mean_indep_sd,
+        mean_sd_gp=mean_gp_sd,
         mean_ratio=mean_ratio,
         median_ratio=median_ratio,
         iqr_ratio=iqr_ratio,
         pct_vox_ge_20=pct_vox_ge_20,
+        pct_vox_ge_50=pct_vox_ge_50,
         integ_indep_sd=integ_indep_sd,
         integ_gp_sd=integ_gp_sd,
+        int_sd_mc=integ_indep_sd,
+        int_sd_gp=integ_gp_sd,
         integ_ratio=integ_ratio,
         pct_reduction_mean_sd=pct_reduction_mean_sd,
         pct_reduction_integ_sd=pct_reduction_integ_sd,
+        delta_mean_percent=pct_reduction_mean_sd,
+        delta_int_percent=pct_reduction_integ_sd,
         pct_reduction_from_ratio=pct_reduction_from_ratio,
         mae_resid=mae_resid,
         rmse_resid=rmse_resid,
@@ -466,8 +484,9 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
         std_resstd=std_resstd,
         skew_resstd=skew_resstd,
         kurt_resstd=kurt_resstd,
-        ell=ell, sigma_f2=sigma_f2, nugget=nugget, nu=nu_param,
-        sv_rmse=sv_rmse
+        ell=ell, sigma_f2=sigma_f2, nugget=nugget, tau2=nugget, nu=nu_param,
+        nugget_fraction=nugget_fraction,
+        sv_rmse=sv_rmse,
     )
     if inferred_label:
         row["kernel_label"] = inferred_label
@@ -573,9 +592,6 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
-
-
 
 
 

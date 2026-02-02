@@ -3,6 +3,8 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from pathlib import Path
+from typing import Literal
+from typing import Literal
 
 
 
@@ -123,6 +125,7 @@ def run_gp_and_collect_metrics(
     nu: float = 1.5,
     kernel_spec=None,
     kernel_label: str | None = None,
+    position_mode: Literal["center","begin"] = "center",
 ):
     """
     Runs the per-biopsy GP (posterior + hyperparams) on an already-filtered
@@ -148,6 +151,7 @@ def run_gp_and_collect_metrics(
             target_stat=target_stat,
             nu=nu,
             kernel_spec=kernel_spec,
+            position_mode=position_mode,
         )
         results[(pid, bx_idx)] = res
         print(f"Processed Patient ID: {pid}, Bx index: {bx_idx}")
@@ -162,7 +166,7 @@ def run_gp_and_collect_metrics(
     print(metrics_df.head())
 
     # Save metrics
-    metrics_csv_path = output_dir.joinpath("cohort_per_biopsy_metrics.csv")
+    metrics_csv_path = output_dir.joinpath("gpr_per_biopsy_metrics.csv")
     metrics_df.to_csv(metrics_csv_path, index=False)
     print(f"Saved per-biopsy metrics to: {metrics_csv_path}")
 
@@ -195,8 +199,10 @@ def run_gp_and_collect_metrics(
     }
     if kernel_label:
         cohort_summary["kernel_label"] = kernel_label
+    cohort_summary_df = pd.DataFrame([cohort_summary])
+    cohort_summary_path = output_dir.joinpath("gpr_cohort_summary.csv")
+    cohort_summary_df.to_csv(cohort_summary_path, index=False)
     print("Cohort summary:", cohort_summary)
-    pd.Series(cohort_summary).to_csv(output_dir.joinpath("cohort_summary_numbers.csv"))
 
     # Patient-level rollups
     by_patient = (
@@ -211,9 +217,10 @@ def run_gp_and_collect_metrics(
     )
     if kernel_label:
         by_patient["kernel_label"] = kernel_label
-    by_patient.to_csv(output_dir.joinpath("patient_level_rollups.csv"), index=False)
+    by_patient_path = output_dir.joinpath("gpr_by_patient_summary.csv")
+    by_patient.to_csv(by_patient_path, index=False)
 
-    return results, metrics_df, cohort_summary, by_patient
+    return results, metrics_df, cohort_summary_df, by_patient
 
 
 def run_gp_and_collect_metrics_for_matern(

@@ -2136,14 +2136,6 @@ MultiIndex([(                   'Patient ID',      ''),
         "V150 ≥ 50%":  r"\mathrm{mm}",
     }
 
-    """
-    per_label_secondary_annotation = {
-        "D2 ≥ 32 Gy":  r"Secondary predictor: $\hat{g}_1$ | Core nominal dose gradient ($\mathrm{Gy\ mm^{-1}}$)",
-        "D50 ≥ 27 Gy": r"Secondary predictor: $\hat{g}_2$ | DIL Spherical disproportion ($\mathrm{Dimless}$)",
-        "D98 ≥ 20 Gy": r"Secondary predictor: $\hat{g}_3$ | Core nominal dose gradient ($\mathrm{Gy\ mm^{-1}}$)",
-        "V150 ≥ 50%":  r"Secondary predictor: $\hat{g}_4$ | Rectum mean NN distance ($\mathrm{mm}$)",
-    }
-    """
     per_label_secondary_annotation = {
         "D2 ≥ 32 Gy": (
             r"Secondary predictor: "
@@ -2166,17 +2158,6 @@ MultiIndex([(                   'Patient ID',      ''),
             r"(rectum mean NN distance, $\mathrm{mm}$)"
         ),
     }
-
-
-
-    """
-    per_label_secondary_annotation = {
-        "D2 ≥ 32 Gy":  r"Secondary predictor: $\hat{g}_1$ | REDACTED ($\mathrm{Gy\ mm^{-1}}$)",
-        "D50 ≥ 27 Gy": r"Secondary predictor: $\hat{g}_2$ | REDACTED ($\mathrm{Dimless}$)",
-        "D98 ≥ 20 Gy": r"Secondary predictor: $\hat{g}_3$ | REDACTED ($\mathrm{Gy\ mm^{-1}}$)",
-        "V150 ≥ 50%":  r"Secondary predictor: $\hat{g}_4$ | REDACTED ($\mathrm{mm}$)",
-    }
-    """
 
     per_label_stats_box_corner = {
             #"V150 ≥ 50%": "top-left",   # move that box to top-left for panel D
