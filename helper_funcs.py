@@ -7,6 +7,29 @@ import re
 from scipy.stats import skew, kurtosis, gaussian_kde
 
 
+def print_banner(
+    title: str,
+    subtitle: str | None = None,
+    items: dict | list[tuple[str, str]] | None = None,
+    width: int = 80,
+    fill_char: str = "=",
+) -> None:
+    """Print a simple terminal banner to delineate pipeline stages."""
+    line = fill_char * width
+    print(line)
+    print(title.center(width))
+    if subtitle:
+        print(subtitle.center(width))
+    if items:
+        if isinstance(items, dict):
+            iterable = items.items()
+        else:
+            iterable = items
+        for k, v in iterable:
+            print(f"{k}: {v}")
+    print(line)
+
+
 def cross_check_voxelwise_statistics(
     mc_voxel_df: pd.DataFrame,
     cohort_voxel_df: pd.DataFrame,

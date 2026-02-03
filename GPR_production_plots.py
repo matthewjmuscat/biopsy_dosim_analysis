@@ -104,20 +104,55 @@ def _save_figure(fig, base_path: Path | str, formats=("pdf", "svg"), tight_layou
     return out_paths
 
 
-def _fd_bins(data: np.ndarray, min_bins: int = 10, max_bins: int = 30) -> int:
+def _fd_bins(
+    data: np.ndarray,
+    min_bins: int | None = 10,
+    max_bins: int | None = 30,
+    verbose: bool = True,
+) -> int:
     data = np.asarray(data)
     data = data[np.isfinite(data)]
     n = data.size
     if n == 0:
-        return min_bins
+        if verbose:
+            print("[FD bins] empty data → using min_bins")
+        return min_bins if min_bins is not None else 1
     iqr = np.subtract(*np.percentile(data, [75, 25]))
     if iqr > 0:
         bin_width = 2 * iqr / np.cbrt(n)
         if bin_width > 0:
-            bins = int(np.clip((data.max() - data.min()) / bin_width, min_bins, max_bins))
-            return max(min_bins, bins)
+            raw_bins = (data.max() - data.min()) / bin_width
+            low = min_bins if min_bins is not None else -np.inf
+            high = max_bins if max_bins is not None else np.inf
+            bins = int(np.clip(raw_bins, low, high))
+            bins = max(1, bins)
+            if verbose:
+                clamp_note = ""
+                if min_bins is not None and bins == min_bins:
+                    clamp_note = " [CLAMPED to min]"
+                elif max_bins is not None and bins == max_bins:
+                    clamp_note = " [CLAMPED to max]"
+                print(
+                    f"[FD bins] n={n}, range={data.min():.3g}–{data.max():.3g}, "
+                    f"IQR={iqr:.3g}, bin_width={bin_width:.3g}, "
+                    f"raw_bins≈{raw_bins:.1f} → bins={bins}{clamp_note}"
+                )
+            return bins
     # fallback sqrt rule
-    bins = int(np.clip(np.sqrt(n), min_bins, max_bins))
+    raw_bins = np.sqrt(n)
+    low = min_bins if min_bins is not None else -np.inf
+    high = max_bins if max_bins is not None else np.inf
+    bins = int(np.clip(raw_bins, low, high))
+    bins = max(1, bins)
+    if verbose:
+        clamp_note = ""
+        if min_bins is not None and bins == min_bins:
+            clamp_note = " [CLAMPED to min]"
+        elif max_bins is not None and bins == max_bins:
+            clamp_note = " [CLAMPED to max]"
+        print(
+            f"[FD bins] fallback sqrt: n={n}, IQR={iqr:.3g} → sqrt(n)={raw_bins:.1f} → bins={bins}{clamp_note}"
+        )
     return bins
 
 
@@ -955,10 +990,10 @@ def plot_standardized_residuals_hist_production(
         res_std,
         bins=bins,
         density=True,
-        alpha=0.55,
+        alpha=0.5,
         color=PRIMARY_LINE_COLOR,
-        edgecolor="0.4",
-        linewidth=0.4,
+        edgecolor="black",
+        linewidth=0.5,
         histtype="stepfilled",
     )
     # rug
@@ -1425,8 +1460,8 @@ def cohort_plots_production(
         bins = _fd_bins(data, min_bins=10, max_bins=30)
         hist_counts, hist_edges = np.histogram(data, bins=bins)
         bin_width = float(np.nanmean(np.diff(hist_edges))) if hist_edges.size > 1 else np.nan
-        ax.hist(data, bins=bins, alpha=0.6, color=PRIMARY_LINE_COLOR, edgecolor="0.4", linewidth=0.4, histtype="stepfilled")
-        ax.hist(data, bins=bins, histtype="step", color="0.4", linewidth=0.4)
+        ax.hist(data, bins=bins, alpha=0.5, color=PRIMARY_LINE_COLOR, edgecolor="black", linewidth=0.5, histtype="stepfilled")
+        ax.hist(data, bins=bins, histtype="step", color="0.4", linewidth=0.5)
         ax.set_xlabel(xlabel, fontsize=14)
         ax.set_ylabel("Number of biopsies", fontsize=14)
         med = float(np.nanmedian(data)) if data.size else np.nan

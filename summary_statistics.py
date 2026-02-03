@@ -7,6 +7,8 @@ from typing import List, Optional, Iterable, Tuple
 from pathlib import Path
 import pingouin as pg
 
+# Global KDE evaluation grid size (shared with plotting)
+KDE_GRID_SIZE = 10000
 
 def generate_summary_csv(output_dir, csv_name, df, col_pairs=None, exclude_columns=None):
     """
@@ -236,7 +238,7 @@ def compute_summary_with_argmax(df: pd.DataFrame,
             data = group[var].dropna().values
             if len(data) >= 2:
                 kde = gaussian_kde(data)
-                xs = np.linspace(data.min(), data.max(), 1000)
+                xs = np.linspace(data.min(), data.max(), KDE_GRID_SIZE)
                 pdf = kde(xs)
                 mode = xs[np.argmax(pdf)]
             elif len(data) == 1:
@@ -275,7 +277,7 @@ def compute_summary_non_multiindex(
     value_vars: List[str],
     output_dir: Optional[str] = None,
     csv_name: Optional[str] = None,
-    kde_grid_size: int = 1000
+    kde_grid_size: int = KDE_GRID_SIZE
 ) -> pd.DataFrame:
     """
     Compute summary stats on the given value_vars across the entire DataFrame,
@@ -292,7 +294,7 @@ def compute_summary_non_multiindex(
     csv_name : str, optional
         Filename for the CSV (must be provided if output_dir is).
     kde_grid_size : int
-        Number of points for evaluating the KDE on [min, max]. Default 1000.
+        Number of points for evaluating the KDE on [min, max]. Default KDE_GRID_SIZE.
 
     Returns
     -------
@@ -1976,7 +1978,7 @@ def summarize_voxel_distributions(df, output_dir, csv_name="voxel_summary.csv", 
         else:
             try:
                 kde = gaussian_kde(values)
-                xs = np.linspace(values.min(), values.max(), 1000)
+                xs = np.linspace(values.min(), values.max(), KDE_GRID_SIZE)
                 mode = xs[np.argmax(kde(xs))]
             except LinAlgError:
                 mode = stats["median"]

@@ -33,7 +33,9 @@ from typing import Iterable, Optional, Tuple, Literal, Sequence, Dict
 import statsmodels.api as sm
 from scipy.stats import spearmanr
 import re 
-from matplotlib.ticker import StrMethodFormatter
+from matplotlib.ticker import StrMethodFormatter, AutoMinorLocator, NullLocator
+import inspect
+from contextlib import contextmanager
 
 
 
@@ -69,9 +71,311 @@ PRIMARY_LINE_COLOR = "#0b3b8a"  # deep blue
 OVERLAY_LINE_COLOR = "#4a4a4a"   # neutral gray
 GRID_COLOR = "#b8b8b8"
 
+# Default export formats for production plots in this module
+DEFAULT_SAVE_FORMATS = ("pdf", "svg")
+
+# Shared KDE evaluation grid size (kept in sync with summary_statistics)
+KDE_GRID_SIZE = 2000
+
+
+_ORIG_SAVEFIG = mpl.figure.Figure.savefig
+_SAVEFIG_CONTEXT = {"formats": None, "seen": None}
+_SAVEFIG_PATCHED = False
+_ORIG_PLT_SAVEFIG = plt.savefig
+
+# Freedman–Diaconis bin selection (bounded)
+def _fd_bins_local(
+    data: np.ndarray,
+    min_bins: int | None = 10,
+    max_bins: int | None = 30,
+    verbose: bool = True,
+) -> int:
+    data = np.asarray(data)
+    data = data[np.isfinite(data)]
+    n = data.size
+    if n == 0:
+        if verbose:
+            print("[FD bins] empty data → using min_bins")
+        return min_bins if min_bins is not None else 1
+    iqr = np.subtract(*np.percentile(data, [75, 25]))
+    if iqr > 0:
+        bin_width = 2 * iqr / np.cbrt(data.size)
+        if bin_width > 0:
+            raw_bins = (data.max() - data.min()) / bin_width
+            low = min_bins if min_bins is not None else -np.inf
+            high = max_bins if max_bins is not None else np.inf
+            bins = int(np.clip(raw_bins, low, high))
+            bins = max(1, bins)
+            if verbose:
+                clamp_note = ""
+                if min_bins is not None and bins == min_bins:
+                    clamp_note = " [CLAMPED to min]"
+                elif max_bins is not None and bins == max_bins:
+                    clamp_note = " [CLAMPED to max]"
+                print(
+                    f"[FD bins] n={n}, range={data.min():.3g}–{data.max():.3g}, "
+                    f"IQR={iqr:.3g}, bin_width={bin_width:.3g}, "
+                    f"raw_bins≈{raw_bins:.1f} → bins={bins}{clamp_note}"
+                )
+            return bins
+    # fallback sqrt rule
+    bins_raw = np.sqrt(data.size)
+    low = min_bins if min_bins is not None else -np.inf
+    high = max_bins if max_bins is not None else np.inf
+    bins = int(np.clip(bins_raw, low, high))
+    bins = max(1, bins)
+    if verbose:
+        clamp_note = ""
+        if min_bins is not None and bins == min_bins:
+            clamp_note = " [CLAMPED to min]"
+        elif max_bins is not None and bins == max_bins:
+            clamp_note = " [CLAMPED to max]"
+        print(
+            f"[FD bins] fallback sqrt: n={n}, IQR={iqr:.3g} → sqrt(n)={bins_raw:.1f} → bins={bins}{clamp_note}"
+        )
+    return bins
+
+
+def _label_is_numeric(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _axis_is_categorical_x(ax: mpl.axes.Axes) -> bool:
+    """
+    Heuristic to decide if x is categorical (box/violin/cat):
+    - FixedLocator with a modest number of ticks -> categorical.
+    - OR majority of labels are non-numeric.
+    """
+    if getattr(ax, "_force_numeric_x_minor", False):
+        return False
+
+    loc = getattr(ax.xaxis, "major_locator", None)
+    if isinstance(loc, mpl.ticker.FixedLocator):
+        try:
+            if len(loc.locs) <= 50:
+                return True
+        except Exception:
+            pass
+
+    labels = [tick.get_text().strip() for tick in ax.get_xticklabels()]
+    labels = [l for l in labels if l]  # drop empties
+    if not labels:
+        return False
+    numeric_like = sum(1 for l in labels if _label_is_numeric(l))
+    return numeric_like < (0.5 * len(labels))
+
+
+def _apply_global_tick_style(fig: mpl.figure.Figure):
+    """
+    Add outward major + minor ticks to x/y axes for all axes in the figure.
+    Skip x-minor ticks for categorical x-axes (e.g., box/violin/cat plots).
+    """
+    for ax in fig.get_axes():
+        # Only plain matplotlib axes (skip 3D/ternary/etc. if present)
+        if not isinstance(ax, mpl.axes.Axes):
+            continue
+
+        suppress_x_minor = getattr(ax, "_suppress_x_minor", False)
+        x_is_categorical = _axis_is_categorical_x(ax)
+
+        # Major ticks: outward, only left/bottom
+        ax.tick_params(
+            axis="both",
+            which="major",
+            direction="out",
+            length=6,
+            width=1.0,
+            bottom=True,
+            top=False,
+            left=True,
+            right=False,
+        )
+
+        # Minor ticks: always for y; for x only when numeric
+        try:
+            ax.yaxis.set_minor_locator(AutoMinorLocator())
+        except Exception:
+            pass
+        if not x_is_categorical and not suppress_x_minor:
+            try:
+                ax.xaxis.set_minor_locator(AutoMinorLocator())
+            except Exception:
+                pass
+        else:
+            ax.xaxis.set_minor_locator(NullLocator())
+
+        # Apply minor tick styling
+        ax.tick_params(
+            axis="y",
+            which="minor",
+            direction="out",
+            length=3,
+            width=0.8,
+            left=True,
+            right=False,
+        )
+        if not x_is_categorical:
+            ax.tick_params(
+                axis="x",
+                which="minor",
+                direction="out",
+                length=3,
+                width=0.8,
+                bottom=True,
+                top=False,
+            )
+        elif suppress_x_minor:
+            ax.tick_params(
+                axis="x",
+                which="minor",
+                bottom=False,
+                top=False,
+            )
+
+        # Ensure bottom/left spines and ticks are visible (some funcs disable them)
+        for spine in ("bottom", "left"):
+            if spine in ax.spines:
+                ax.spines[spine].set_visible(True)
+        # Explicitly hide top/right tick marks
+        ax.tick_params(axis="x", bottom=True, top=False)
+        ax.tick_params(axis="y", left=True, right=False)
+
+
+def _patched_plt_savefig(*args, **kwargs):
+    fig = plt.gcf()
+    _apply_global_tick_style(fig)
+    return _ORIG_PLT_SAVEFIG(*args, **kwargs)
+
+
+@contextmanager
+def _save_formats_context(formats: Sequence[str] | None):
+    old_formats = _SAVEFIG_CONTEXT.get("formats")
+    old_seen = _SAVEFIG_CONTEXT.get("seen")
+    if formats is None:
+        fmt_list = None
+    else:
+        fmt_list = [str(f).lower().lstrip(".") for f in formats]
+    _SAVEFIG_CONTEXT["formats"] = fmt_list
+    _SAVEFIG_CONTEXT["seen"] = set()
+    try:
+        yield
+    finally:
+        _SAVEFIG_CONTEXT["formats"] = old_formats
+        _SAVEFIG_CONTEXT["seen"] = old_seen
+
+
+def _patched_savefig(self, fname, *args, **kwargs):
+    formats = _SAVEFIG_CONTEXT.get("formats")
+    if not formats:
+        _apply_global_tick_style(self)
+        return _ORIG_SAVEFIG(self, fname, *args, **kwargs)
+    if isinstance(fname, (str, Path)):
+        base = Path(fname)
+        if base.suffix:
+            base = base.with_suffix("")
+        seen = _SAVEFIG_CONTEXT.get("seen")
+        if seen is not None and str(base) in seen:
+            return None
+        if seen is not None:
+            seen.add(str(base))
+        results = []
+        _apply_global_tick_style(self)
+        for fmt in formats:
+            out = base.with_suffix(f".{fmt}")
+            kw = dict(kwargs)
+            kw.pop("format", None)
+            kw["format"] = fmt
+            results.append(_ORIG_SAVEFIG(self, out, *args, **kw))
+        return results
+    _apply_global_tick_style(self)
+    return _ORIG_SAVEFIG(self, fname, *args, **kwargs)
+
+
+def _ensure_savefig_patch():
+    global _SAVEFIG_PATCHED
+    if _SAVEFIG_PATCHED:
+        return
+    mpl.figure.Figure.savefig = _patched_savefig
+    plt.savefig = _patched_plt_savefig
+    _SAVEFIG_PATCHED = True
+
+
+def _setup_matplotlib_defaults(
+    *,
+    font_scale: float = 1.0,
+    seaborn_style: str = "white",
+    seaborn_context: str = "paper",
+):
+    """Apply consistent, publication-style defaults (match GPR production plots)."""
+    mpl.rcParams.update(MPL_FONT_RC | MPL_FACE_RC)
+    sns.set_theme(style=seaborn_style, context=seaborn_context, rc=MPL_FONT_RC | MPL_FACE_RC)
+    if font_scale is not None:
+        sns.set_context(seaborn_context, font_scale=font_scale)
+
+
+def _save_figure(
+    fig,
+    base_path: Path,
+    *,
+    formats: Sequence[str] = DEFAULT_SAVE_FORMATS,
+    dpi: int = 300,
+    bbox_inches: str = "tight",
+    pad_inches: float = 0.02,
+):
+    """Save a figure to multiple formats, returning the list of paths."""
+    saved_paths: list[Path] = []
+    _apply_global_tick_style(fig)
+    for fmt in formats:
+        fmt = fmt.lower().lstrip(".")
+        out = base_path.with_suffix(f".{fmt}")
+        _ORIG_SAVEFIG(fig, out, format=fmt, dpi=dpi, bbox_inches=bbox_inches, pad_inches=pad_inches)
+        saved_paths.append(out)
+    return saved_paths
+
 
 
 plt.ioff()
+
+
+def _wrap_plot_function(func):
+    sig = inspect.signature(func)
+    has_save_formats = "save_formats" in sig.parameters
+
+    def _wrapped(*args, **kwargs):
+        save_formats = kwargs.get("save_formats", DEFAULT_SAVE_FORMATS)
+        _setup_matplotlib_defaults(
+            font_scale=kwargs.get("font_scale", 1.0),
+            seaborn_style=kwargs.get("seaborn_style", "white"),
+            seaborn_context=kwargs.get("seaborn_context", "paper"),
+        )
+        _ensure_savefig_patch()
+        with _save_formats_context(save_formats):
+            if not has_save_formats:
+                kwargs.pop("save_formats", None)
+            return func(*args, **kwargs)
+
+    _wrapped.__wrapped__ = func
+    _wrapped._save_formats_wrapped = True  # type: ignore[attr-defined]
+    return _wrapped
+
+
+def _wrap_all_plot_functions():
+    for name, obj in list(globals().items()):
+        if not callable(obj):
+            continue
+        if name.startswith("_"):
+            continue
+        if getattr(obj, "__module__", None) != __name__:
+            continue
+        if getattr(obj, "_save_formats_wrapped", False):
+            continue
+        globals()[name] = _wrap_plot_function(obj)
+
+
 
 def production_plot_axial_dose_distribution_quantile_regression_by_patient_matplotlib(sp_patient_all_structure_shifts_pandas_data_frame,
                                                                                       dose_output_nominal_and_all_MC_trials_pandas_data_frame,
@@ -3429,7 +3733,16 @@ def histogram_and_fit(df, dists_to_try=None, bin_size=1, dose_col='Dose (Gy)', s
         plt.grid(axis='y', linestyle='--', linewidth=0.5, alpha=0.7)
 
 
-    plt.legend()
+    leg = plt.legend(
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.82),
+        frameon=True,
+        framealpha=1.0,
+        facecolor="white",
+        edgecolor="black",
+    )
+    if leg:
+        leg.set_zorder(10)
 
     # Save or display the plot
     if save_path:
@@ -3467,13 +3780,23 @@ def histogram_and_fit_v2(
     show_minor_ticks=False,
     vertical_minor_gridlines=False,
     horizontal_minor_gridlines=False,
-    legend_fontsize=11,
-    stats_box_fontsize=11,
+    legend_fontsize=14,
+    stats_box_fontsize=14,
     param_precision=3,
     stat_precision=1,
     # NEW:
     axis_label_fontsize=16,
     tick_label_fontsize=14,
+    annotate_fontsize=None,  # override stats box text size if provided
+    use_fd_bins: bool = True,
+    fd_min_bins: int | None = 10,
+    fd_max_bins: int | None = None,
+    auto_xrange: bool = True,
+    default_dose_xrange: tuple[float, float] = (0.0, 60.0),
+    default_grad_xrange: tuple[float, float] = (0.0, 40.0),
+    show_mode_line: bool = False,
+    include_min_max: bool = False,
+    stats_display: Literal["list", "matched"] = "matched",
 ):
     """
     Histograms the values of the specified column, fits multiple distributions,
@@ -3500,6 +3823,13 @@ def histogram_and_fit_v2(
         stat_precision: decimal places for mean/std/quantiles, etc.
         axis_label_fontsize: fontsize for x/y axis labels.
         tick_label_fontsize: fontsize for tick labels on both axes.
+        use_fd_bins: if True, choose bin count via Freedman–Diaconis (bounded by fd_min_bins/fd_max_bins). If False, use bin_size.
+        fd_min_bins / fd_max_bins: bounds on bin count when use_fd_bins is True; pass None to remove that bound.
+        auto_xrange: if True and xrange is None, apply default axes ranges (dose vs gradient) for publication.
+        default_dose_xrange / default_grad_xrange: fallback x-limits when auto_xrange is used.
+        show_mode_line: draw a vertical line at the KDE mode (off by default).
+        include_min_max: include min/max in stats box (default False hides them).
+        stats_display: "list" (compact comma lists, default) or "matched" ("μ: val" style for first two lines).
 
     """
     # Extract quantity values
@@ -3633,8 +3963,16 @@ def histogram_and_fit_v2(
     )
 
     # --- Generate data for the best fit distribution ---
-    x_min = xrange[0] if xrange is not None else doses.min()
-    x_max = xrange[1] if xrange is not None else doses.max()
+    if xrange is not None:
+        x_min, x_max = xrange
+    elif auto_xrange:
+        if "grad" in dose_col.lower():
+            x_min, x_max = default_grad_xrange
+        else:
+            x_min, x_max = default_dose_xrange
+    else:
+        x_min, x_max = doses.min(), doses.max()
+
     x = np.linspace(x_min, x_max, 1000)
 
     if best_dist == 'truncnorm':
@@ -3642,8 +3980,24 @@ def histogram_and_fit_v2(
     else:
         pdf = distributions[best_dist].pdf(x, *best_fit)
 
-    # --- Bin edges based on bin size ---
-    bin_edges = np.arange(start=x_min, stop=x_max + bin_size, step=bin_size)
+
+    if use_fd_bins:
+        bins = _fd_bins_local(doses, fd_min_bins, fd_max_bins)
+    else:
+        bin_edges = np.arange(start=x_min, stop=x_max + bin_size, step=bin_size)
+        bins = bin_edges
+
+    # Bin stats for annotation
+    if isinstance(bins, int):
+        bin_count = bins
+        data_range = x_max - x_min
+        bin_width_val = data_range / bins if bins > 0 else float("nan")
+    else:
+        bin_edges = np.asarray(bins)
+        bin_count = len(bin_edges) - 1
+        bin_width_val = np.diff(bin_edges).mean() if len(bin_edges) > 1 else float("nan")
+
+    bin_width_unit_suffix = f" {quantity_unit_tex}" if quantity_unit_tex else ""
 
     # --- Plot setup ---
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -3651,11 +4005,13 @@ def histogram_and_fit_v2(
     # Histogram
     ax.hist(
         doses,
-        bins=bin_edges,
+        bins=bins,
         density=True,
-        alpha=0.7,
+        alpha=0.5,
         color='C0',
-        edgecolor='white',
+        edgecolor='black',
+        linewidth=0.5,
+        histtype="stepfilled",
         label='Histogram of values',
     )
 
@@ -3678,16 +4034,12 @@ def histogram_and_fit_v2(
         x, pdf,
         'r-',
         linewidth=2.0,
-        label=(
-            f'Best fit (AIC): {best_dist}\n'
-            f'KS: {best_stat:.2f}\n'
-            f'{fit_param_str}'
-        ),
+        label=(f'Best fit (AIC): {best_dist}'),
     )
 
     # --- KDE mode computation ---
     kde = gaussian_kde(doses)
-    xs = np.linspace(doses.min(), doses.max(), 1000)  # or pass kde_grid_size in
+    xs = np.linspace(doses.min(), doses.max(), KDE_GRID_SIZE)  # or pass kde_grid_size in
     kde_pdf = kde(xs)
     kde_mode = xs[np.argmax(kde_pdf)]
 
@@ -3707,7 +4059,7 @@ def histogram_and_fit_v2(
 
     # For vertical lines & legend
     quantile_labels_tex = [r"$Q_{5}$", r"$Q_{25}$", r"$Q_{50}$", r"$Q_{75}$", r"$Q_{95}$"]
-    quantile_colors = ['red', 'blue', 'black', 'blue', 'red']
+    quantile_colors = ['#007f7f', 'blue', 'black', 'blue', '#007f7f']  # teal for Q5/Q95, blue for Q25/Q75, black median
 
     # For the annotation box: one unit tag per group of stats
     if quantity_unit_tex:
@@ -3721,23 +4073,54 @@ def histogram_and_fit_v2(
     # --- Optional stats annotation box ---
     if show_stats_box:
         # Line 1: central tendency + range, with one unit tag at the end
-        line1 = (
-            r'$\mu, \sigma, \mathrm{mode}, \mathrm{min}, \mathrm{max}$'
-            f'{unit_group_suffix}: '
-            f'{mean:.{stat_precision}f}, '
-            f'{std:.{stat_precision}f}, '
-            #f'{argmax_x:.{stat_precision}f}, ' # swapped out for kde based mode to match csv file 
-            f'{kde_mode:.{stat_precision}f}, '
-            f'{min_val:.{stat_precision}f}, '
-            f'{max_val:.{stat_precision}f}'
-        )
+        if stats_display == "matched":
+            unit_label = ""  # unit appended once at end of line
+            line1_parts = [
+                rf"$\mu$: {mean:.{stat_precision}f}",
+                rf"$\sigma$: {std:.{stat_precision}f}",
+                rf"$\mathrm{{mode}}$: {kde_mode:.{stat_precision}f}",
+            ]
+            if include_min_max:
+                line1_parts += [
+                    rf"$\min$: {min_val:.{stat_precision}f}",
+                    rf"$\max$: {max_val:.{stat_precision}f}",
+                ]
+            line1 = ", ".join(line1_parts) + unit_group_suffix
 
-        # Line 2: quantiles, again with a single unit tag
-        line2 = (
-            r'$Q_{5}, Q_{25}, Q_{50}, Q_{75}, Q_{95}$'
-            f'{unit_group_suffix}: '
-            + ', '.join(f'{q:.{stat_precision}f}' for q in quantiles)
-        )
+            # Line 2 quantiles; unit only on first item
+            q_labels = ["Q5", "Q25", "Q50", "Q75", "Q95"]
+            q_parts = []
+            for idx, (lbl, qv) in enumerate(zip(q_labels, quantiles)):
+                sub = lbl.replace("Q", "")
+                q_parts.append(rf"$Q_{{{sub}}}$: {qv:.{stat_precision}f}")
+            line2 = ", ".join(q_parts) + unit_group_suffix
+
+        else:  # "list" (original compact format)
+            header_parts = [r'\mu', r'\sigma', r'\mathrm{mode}']
+            stats_line_items = [
+                f'{mean:.{stat_precision}f}',
+                f'{std:.{stat_precision}f}',
+                f'{kde_mode:.{stat_precision}f}',
+            ]
+            if include_min_max:
+                header_parts += [r'\mathrm{min}', r'\mathrm{max}']
+                stats_line_items += [
+                    f'{min_val:.{stat_precision}f}',
+                    f'{max_val:.{stat_precision}f}',
+                ]
+
+            line1 = (
+                r'$' + ', '.join(header_parts) + r'$'
+                f'{unit_group_suffix}: '
+                + ', '.join(stats_line_items)
+            )
+
+            # Line 2: quantiles, again with a single unit tag
+            line2 = (
+                r'$Q_{5}, Q_{25}, Q_{50}, Q_{75}, Q_{95}$'
+                f'{unit_group_suffix}: '
+                + ', '.join(f'{q:.{stat_precision}f}' for q in quantiles)
+            )
 
         # Line 3: counts (dimensionless)
         counts_parts = []
@@ -3748,26 +4131,59 @@ def histogram_and_fit_v2(
         counts_parts.append(r'$N_{\mathrm{data\ points}}$: ' + f'{num_rows_ie_num_total_points}')
         line3 = ', '.join(counts_parts)
 
-        stats_text = line1 + "\n" + line2 + "\n" + line3
+        # Line 4: binning details
+        line4 = (
+            r'$N_{\mathrm{bins}}$: ' + f'{bin_count}, '
+            + 'bin width: ' + f'{bin_width_val:.3f}{bin_width_unit_suffix}'
+        )
 
-        ax.text(
+        # Line 5: fit family + KS + parameters (compact)
+        line5 = (
+            f'Fit - KS: {best_stat:.2f}, '
+            f'{fit_param_str}'
+        )
+
+        stats_text = line1 + "\n" + line2 + "\n" + line3 + "\n" + line4 + "\n" + line5
+
+        ann = ax.text(
             0.98, 0.98, stats_text,
             transform=ax.transAxes,
-            fontsize=stats_box_fontsize,
+            fontsize=annotate_fontsize if annotate_fontsize is not None else stats_box_fontsize,
             verticalalignment='top',
             horizontalalignment='right',
             bbox=dict(boxstyle='round,pad=0.3',
                       edgecolor='black',
                       facecolor='white',
-                      alpha=0.9),
+                      alpha=1.0),
         )
 
 
     # --- Vertical quantile lines (colors + labels consistent with legend) ---
+    _label_used_for_color = {}
+    teal_q_color = "#007f7f"
     for q, color, label_tex in zip(quantiles, quantile_colors, quantile_labels_tex):
+        # group symmetric quantiles into single legend entries
+        if color == "red" or color == teal_q_color:
+            legend_label = r"$Q_{5}, Q_{95}$"
+        elif color == "blue":
+            legend_label = r"$Q_{25}, Q_{75}$"
+        else:  # black => median
+            legend_label = label_tex
+
+        if color in _label_used_for_color:
+            legend_label = "_nolegend_"
+        else:
+            _label_used_for_color[color] = True
+
         ax.axvline(
-            q, color=color, linestyle='--', linewidth=0.9,
-            label=label_tex
+            q, color=color, linestyle='-', linewidth=0.9,
+            label=legend_label
+        )
+    # Optional mode line (KDE mode, same value shown in stats box)
+    if show_mode_line:
+        ax.axvline(
+            kde_mode, color='forestgreen', linestyle='-', linewidth=1.1,
+            label='mode'
         )
 
     # --- Labels and title ---
@@ -3814,8 +4230,30 @@ def histogram_and_fit_v2(
     for spine in ax.spines.values():
         spine.set_linewidth(1.0)
 
-    # Legend
-    ax.legend(fontsize=legend_fontsize)
+    # Legend (match annotation box styling & alignment with a fixed vertical gap)
+    legend_gap = 0.00375  # gap in axes fraction between annotation box bottom and legend top
+    legend_x = 0.98       # hard-align right edge with annotation anchor
+    try:
+        fig.canvas.draw()  # ensure renderer exists for accurate bbox
+        renderer = fig.canvas.get_renderer()
+        ann_bbox_axes = ann.get_window_extent(renderer=renderer).transformed(ax.transAxes.inverted())
+        legend_y = max(0.02, ann_bbox_axes.y0 - legend_gap)
+    except Exception:
+        legend_y = 0.82  # fallback if renderer not available
+
+    leg = ax.legend(
+        fontsize=legend_fontsize,
+        frameon=True,
+        framealpha=1.0,
+        facecolor="white",
+        edgecolor="black",
+        borderpad=0.3,
+        loc="upper right",
+        bbox_to_anchor=(legend_x, legend_y),
+        bbox_transform=ax.transAxes,
+    )
+    if leg:
+        leg.set_zorder(10)
 
     # Major ticks: outward, visible on all sides
     ax.tick_params(
@@ -6676,8 +7114,9 @@ def dvh_boxplot_pretty(
         if data.empty:
             return
 
-        sns.set_style(seaborn_style)
-        sns.set_context(seaborn_context, font_scale=font_scale)
+        _rc = {**MPL_FONT_RC, **MPL_FACE_RC}
+        sns.set_theme(style=seaborn_style, rc=_rc)
+        sns.set_context(seaborn_context, font_scale=font_scale, rc=_rc)
 
         # Decide order (if not given, use sorted unique)
         if metric_order is None:
@@ -7406,6 +7845,8 @@ def plot_dose_vs_length_with_summary_cohort_v2(
     pair_curves_ylim_quantile: float = 1.0,   # 1.0 = include max; try 0.995 to ignore extreme outliers
     ylim_top_pad: float = 0.05,              # 5% headroom (you already effectively do this)
 
+    # NEW: tick control
+    disable_x_minor_ticks: bool = False,
 ):
     import os
     import numpy as np
@@ -7476,6 +7917,10 @@ def plot_dose_vs_length_with_summary_cohort_v2(
         ax.get_yaxis().get_offset_text().set_visible(False)
 
     ax.tick_params(axis="both", which="both", labelsize=tick_label_font_size)
+    if disable_x_minor_ticks:
+        ax.xaxis.set_minor_locator(mpl.ticker.NullLocator())
+        ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+        ax._suppress_x_minor = True  # hint for global tick styler to keep x-minor off
 
     # ---- y-limits ----
     if y_min_fixed is not None:
@@ -7940,7 +8385,8 @@ def production_plot_dose_ridge_plot_by_voxel_with_tissue_class_coloring_no_dose_
     norm = Normalize(vmin=0, vmax=1)
     sm = ScalarMappable(norm=norm, cmap=cmap)
 
-    sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC, "axes.facecolor": (0, 0, 0, 0)}
+    sns.set_theme(style="white", rc=_rc)
 
     def annotate_and_color_v2(x, color, label, **kwargs):
         label_float = float(label)
@@ -8075,7 +8521,8 @@ def plot_dose_ridge_for_single_biopsy(
 
 
     plt.ioff()
-    sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC, "axes.facecolor": (0, 0, 0, 0)}
+    sns.set_theme(style="white", rc=_rc)
 
     dose_df = misc_tools.convert_categorical_columns(dose_df, ['Voxel index', 'Dose (Gy)'], [int, float])
     coloring_enabled = binom_df is not None
@@ -8298,7 +8745,8 @@ def plot_dose_ridge_cohort_by_voxel(
 ):
 
     plt.ioff()
-    sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC, "axes.facecolor": (0, 0, 0, 0)}
+    sns.set_theme(style="white", rc=_rc)
 
     voxel_ids = dose_df['Voxel index'].unique()
     palette = {v: 'black' for v in voxel_ids}
@@ -8479,7 +8927,7 @@ def plot_biopsy_deltas_line(
     # y-label based on metric
     y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str else 'Delta (Gy)'
 
-    sns.set(style='whitegrid')
+    sns.set(style='white')
     ax = sns.lineplot(data=tidy, x='x', y='Value', hue='Delta', linewidth=2)
     ax.set_xlabel(x_label, fontsize=axes_label_fontsize)
     ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
@@ -8659,7 +9107,7 @@ def plot_biopsy_deltas_line_both_signed_and_abs(
 
 
     # --- plot (color by j, linestyle by Signed/Absolute)
-    sns.set(style='whitegrid')
+    sns.set(style='white')
 
     dash_signed   = _as_dashpattern(linestyle_signed)
     dash_absolute = _as_dashpattern(linestyle_absolute)
@@ -8785,7 +9233,7 @@ def plot_biopsy_deltas_line_multi(
     from matplotlib.lines import Line2D
     from pathlib import Path
 
-    sns.set(style='whitegrid')
+    sns.set(style='white')
 
     is_gradient = ('grad' in zero_level_index_str.lower())
     delta_type_text = r'G' if is_gradient else r'D'
@@ -9321,7 +9769,8 @@ def plot_dual_boxplots_by_voxel_for_biopsies(
     """
 
     # ---------------- seaborn look ----------------
-    sns.set_theme(style=seaborn_style, context=seaborn_context)
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC}
+    sns.set_theme(style=seaborn_style, context=seaborn_context, rc=_rc)
     colors = sns.color_palette(palette, n_colors=max(1, len(biopsies)))
 
     # ---------------- helpers ----------------
@@ -9650,7 +10099,8 @@ def plot_biopsy_voxel_dualboxes(
     """
 
     # ---------- seaborn theme ----------
-    sns.set_theme(style=seaborn_style, context=seaborn_context)
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC}
+    sns.set_theme(style=seaborn_style, context=seaborn_context, rc=_rc)
     colors = sns.color_palette(palette, n_colors=max(1, len(biopsies)))
 
     # ---------- helpers ----------
@@ -10003,7 +10453,8 @@ def plot_voxel_dualboxes_by_biopsy_lanes(
       inside each lane: for each biopsy in `biopsies`:
          [ Δ (solid) ] --pair_gap--> [ |Δ| (dashed) ] --biopsy_gap--> next biopsy pair
     """
-    sns.set_theme(style=seaborn_style, context=seaborn_context)
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC}
+    sns.set_theme(style=seaborn_style, context=seaborn_context, rc=_rc)
     colors = sns.color_palette(palette, n_colors=max(1, len(biopsies)))
 
     # ----- helpers -----
@@ -10110,7 +10561,8 @@ def plot_voxel_dualboxes_by_biopsy_lanes(
     rel_offsets_abs    = [s + box_width + pair_gap for s in biopsy_pair_starts]
 
     # begin plotting
-    sns.set_style(seaborn_style)
+    _rc = {**MPL_FONT_RC, **MPL_FACE_RC}
+    sns.set_theme(style=seaborn_style, context=seaborn_context, rc=_rc)
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
     whis = 1.5 if whisker_mode == 'iqr1.5' else (5, 95)
@@ -10290,7 +10742,7 @@ def plot_cohort_deltas_boxplot_by_voxel(
     x_order = sorted(tidy['x'].unique())
     y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str else 'Delta (Gy)'
 
-    sns.set(style='whitegrid')
+    sns.set(style='white')
     ax = sns.boxplot(
         data=tidy,
         x='x',
@@ -10458,7 +10910,7 @@ def plot_cohort_deltas_boxplot_by_voxel(
     svg_path = Path(save_dir) / f"{fig_name}.svg"
     png_path = Path(save_dir) / f"{fig_name}.png"
 
-    sns.set(style='whitegrid')
+    sns.set(style='white')
 
     if include_abs and abs_as_hue and tidy_abs is not None:
         # Facet by Δ kind, hue = Signed vs Absolute
@@ -10721,7 +11173,7 @@ def plot_cohort_deltas_boxplot(
     y_label = 'Delta (Gy/mm)' if 'grad' in zero_level_index_str.lower() else 'Delta (Gy)'
 
     # plot
-    sns.set(style='whitegrid')
+    sns.set(style='white')
     if include_abs and abs_as_hue and tidy_abs is not None:
         ax = sns.boxplot(data=tidy_plot, x='Delta', y='Value', hue='Kind', order=x_order, hue_order=hue_order, showfliers=False)
         if show_points:
@@ -10970,7 +11422,7 @@ def plot_delta_vs_gradient(
     ncols = min(facet_cols, n)
     nrows = int(np.ceil(n / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(aspect*height*ncols, height*nrows), squeeze=False)
-    sns.set(style="whitegrid")
+    sns.set(style="white")
 
     # optional regression helpers
     try:
@@ -11268,7 +11720,7 @@ def _plot_delta_vs_gradient_pkg_core(
     ncols = min(facet_cols, n) if n > 0 else 1
     nrows = int(np.ceil(n / ncols)) if n > 0 else 1
     fig, axes = plt.subplots(nrows, ncols, figsize=(aspect*height*ncols, height*nrows), squeeze=False)
-    sns.set(style="whitegrid")
+    sns.set(style="white")
 
     # collect stats for CSV
     stats_rows = []
@@ -11596,326 +12048,6 @@ def plot_signed_delta_vs_gradient_pkg_batch(
 
 
 
-def production_plot_path1_threshold_qa_summary(
-    df: pd.DataFrame,
-    metric_col: str = "metric",
-    threshold_col: str = "threshold",
-    qa_class_col: str = "qa_class",
-    p_pass_col: str = "p_pass",
-    n_trials_col: str = "n_trials",
-    figsize=(8, 8),
-    dpi: int = 300,
-    seaborn_style: str = "whitegrid",
-    seaborn_context: str = "paper",
-    font_scale: float = 1.2,
-    metric_order=None,
-    qa_class_order=None,
-    save_dir: Path | str | None = None,
-    file_name: str = "Fig_path1_threshold_qa_summary.png",
-    fig=None,
-    axes=None,
-    prob_pass_low_cut: float = 0.05,
-    prob_pass_high_cut: float = 0.95,
-    show_title: bool = True,
-    annotate_percents: bool = True,
-    percent_fmt: str = "{:.0f}%",
-    min_count_inside: int = 2,
-    min_frac_inside: float = 0.08,
-    # NOTE: keeping the name, but now means "legend above and wide"
-    legend_outside: bool = True,
-):
-    """
-    Path-1 QA overview figure.
-    - DVH metric labels use mathtext (e.g., D_{2%}, V_{150%})
-    - stacked bar order can put Confident pass on top
-    - legend can be wide + above the plot, with QA definitions
-    """
-    plt.ioff()
-    required_cols = {metric_col, threshold_col, qa_class_col, p_pass_col, n_trials_col}
-    missing = required_cols - set(df.columns)
-    if missing:
-        raise ValueError(f"Input df is missing required columns: {sorted(missing)}")
-
-    import matplotlib as mpl
-    from matplotlib.patches import Patch
-
-    with mpl.rc_context(
-        {
-            "text.usetex": False,
-            "mathtext.fontset": "stix",
-            "font.family": "STIXGeneral",
-            "axes.unicode_minus": True,
-        }
-    ):
-        df_plot = df.copy()
-
-        def _norm_qa(c):
-            c_str = str(c).strip().lower()
-            if "confident" in c_str and "pass" in c_str:
-                return "Confident pass"
-            if "confident" in c_str and "fail" in c_str:
-                return "Confident fail"
-            if "border" in c_str:
-                return "Borderline"
-            return str(c)
-
-        df_plot["_qa_class_plot"] = df_plot[qa_class_col].map(_norm_qa)
-
-        # --- DVH math label helpers ---
-        def _metric_math(m: str) -> str:
-            s = str(m)
-            if s.startswith("D_") and "%" in s:
-                sub = s.split("D_")[1].split("%")[0].strip()
-                return rf"$D_{{{sub}\%}}$"
-            if s.startswith("V_") and "%" in s:
-                sub = s.split("V_")[1].split("%")[0].strip()
-                return rf"$V_{{{sub}\%}}$"
-            return rf"$\mathrm{{{s}}}$"
-
-        def _metric_is_percent(m: str) -> bool:
-            s = str(m)
-            return s.startswith("V_") and "%" in s
-
-        def _thr_str(thr) -> str:
-            return f"{int(thr)}" if isinstance(thr, (int, np.integer)) else f"{thr:g}"
-
-        def _make_criterion(row) -> str:
-            m = row[metric_col]
-            t = _thr_str(row[threshold_col])
-            mm = _metric_math(m)
-            if _metric_is_percent(m):
-                return rf"{mm}$\ \geq\ {t}\%$"
-            else:
-                return rf"{mm}$\ \geq\ {t}\,\mathrm{{Gy}}$"
-
-        df_plot["criterion_pretty"] = df_plot.apply(_make_criterion, axis=1)
-
-        if metric_order is None:
-            metric_order = ["D_2% (Gy)", "D_50% (Gy)", "D_98% (Gy)", "V_150% (%)"]
-            metric_order = [m for m in metric_order if m in df_plot[metric_col].unique()]
-
-        criterion_order: list[str] = []
-        for m in metric_order:
-            sub = df_plot[df_plot[metric_col] == m]
-            if not sub.empty:
-                criterion_order.append(_make_criterion(sub.iloc[0]))
-        if not criterion_order:
-            criterion_order = list(df_plot["criterion_pretty"].unique())
-
-        if qa_class_order is None:
-            # keep this order for legend ordering (pass first)
-            qa_class_order = ["Confident pass", "Borderline", "Confident fail"]
-            qa_class_order = [c for c in qa_class_order if c in df_plot["_qa_class_plot"].unique()]
-            for c in sorted(df_plot["_qa_class_plot"].unique()):
-                if c not in qa_class_order:
-                    qa_class_order.append(c)
-
-        # IMPORTANT: stack order (bottom -> top). We want Confident pass on TOP.
-        # So draw it last.
-        stack_order = [c for c in ["Confident fail", "Borderline", "Confident pass"] if c in qa_class_order]
-        # include any unexpected classes at the bottom by default
-        for c in qa_class_order:
-            if c not in stack_order:
-                stack_order.insert(0, c)
-
-        qa_palette = {
-            "Confident pass": "#66c2a5",
-            "Borderline": "#fc8d62",
-            "Confident fail": "#8da0cb",
-        }
-
-        # legend labels with definitions
-        hi = float(prob_pass_high_cut)
-        lo = float(prob_pass_low_cut)
-        legend_label = {
-            "Confident pass": rf"Confident pass ($p_{{b,r}}\geq {hi:.2f}$)",
-            "Borderline":     rf"Borderline ($ {lo:.2f}<p_{{b,r}}<{hi:.2f}$)",
-            "Confident fail": rf"Confident fail ($p_{{b,r}}\leq {lo:.2f}$)",
-        }
-
-        with sns.axes_style(seaborn_style), sns.plotting_context(seaborn_context, font_scale=font_scale):
-            if fig is None or axes is None:
-                fig, axes = plt.subplots(
-                    2, 1, figsize=figsize, dpi=dpi, sharex=False,
-                    gridspec_kw={"height_ratios": [1, 1.2]},
-                )
-            ax_bar, ax_box = axes
-
-            counts = (
-                df_plot.groupby(["criterion_pretty", "_qa_class_plot"])
-                .size()
-                .unstack("_qa_class_plot")
-                .reindex(index=criterion_order)
-                .fillna(0)
-            )
-
-            # ensure all columns exist
-            for c in qa_class_order:
-                if c not in counts.columns:
-                    counts[c] = 0
-            counts = counts[qa_class_order]
-            totals = counts.sum(axis=1).to_numpy()
-
-            default_palette = sns.color_palette("Set2", n_colors=len(qa_class_order))
-            class_colors = {cls: qa_palette.get(cls, default_palette[i]) for i, cls in enumerate(qa_class_order)}
-
-            bottoms = np.zeros(len(counts))
-            x = np.arange(len(counts.index))
-
-            # ---- stacked bar (using stack_order) ----
-            for cls in stack_order:
-                vals = counts[cls].values
-                bars = ax_bar.bar(
-                    x, vals, bottom=bottoms,
-                    color=class_colors.get(cls, "0.7"),
-                    edgecolor="black",
-                    linewidth=0.8,
-                    label=cls,  # (we will build our own legend handles)
-                )
-
-                if annotate_percents:
-                    for xi, (rect, v, btm, tot) in enumerate(zip(bars, vals, bottoms, totals)):
-                        if tot <= 0 or v <= 0:
-                            continue
-                        pct = 100.0 * float(v) / float(tot)
-                        txt = percent_fmt.format(pct) + f", {v:.0f}"
-
-                        y_mid = float(btm) + float(v) / 2.0
-                        x_mid = rect.get_x() + rect.get_width() / 2.0
-                        inside_ok = (int(v) >= int(min_count_inside)) and ((v / tot) >= float(min_frac_inside))
-
-                        if inside_ok:
-                            ax_bar.text(
-                                x_mid, y_mid, txt,
-                                ha="center", va="center",
-                                fontsize="small", color="black", zorder=20
-                            )
-                        else:
-                            # spread outside labels a bit
-                            is_bottom = (cls == stack_order[0])
-                            is_top = (cls == stack_order[-1])
-                            dx = (-0.18 if is_bottom else (0.18 if is_top else 0.0))
-                            dy = 0.6 + 0.25 * (xi % 2)
-                            ax_bar.annotate(
-                                txt,
-                                xy=(x_mid, y_mid),
-                                xytext=(x_mid + dx, float(btm) + float(v) + dy),
-                                ha="center", va="bottom",
-                                fontsize="small",
-                                bbox=dict(
-                                    boxstyle="round,pad=0.15",
-                                    facecolor="white",
-                                    edgecolor="black",
-                                    alpha=0.9,
-                                ),
-                                arrowprops=dict(arrowstyle="-", lw=0.8, color="black"),
-                                zorder=30,
-                            )
-
-                bottoms = bottoms + vals
-
-            ax_bar.set_ylabel("Number of biopsies")
-
-            # multi-line labels: criterion on line 1, n_b on line 2
-            xticklabels = [
-                f"{crit}\n$n_b={int(t)}$"
-                for crit, t in zip(counts.index, totals)
-            ]
-
-            ax_bar.set_xticks(x)
-            ax_bar.set_xticklabels(xticklabels, rotation=0)
-
-
-
-            if show_title:
-                ax_bar.set_title("Path-1 per-biopsy threshold QA classification", fontsize="medium")
-
-            ymax = max(1.0, float(totals.max()) * 1.15)
-            ax_bar.set_ylim(0, ymax)
-
-            # ---- Legend: wide + above ----
-            # Build handles in desired legend order (pass, borderline, fail)
-            handles = []
-            labels = []
-            for cls in ["Confident pass", "Borderline", "Confident fail"]:
-                if cls in qa_class_order:
-                    handles.append(Patch(facecolor=class_colors.get(cls, "0.7"), edgecolor="black"))
-                    labels.append(legend_label.get(cls, cls))
-            # add any unexpected classes
-            for cls in qa_class_order:
-                if cls not in ("Confident pass", "Borderline", "Confident fail"):
-                    handles.append(Patch(facecolor=class_colors.get(cls, "0.7"), edgecolor="black"))
-                    labels.append(cls)
-
-            if legend_outside and handles:
-                leg = fig.legend(
-                    handles, labels,
-                    loc="upper center",
-                    bbox_to_anchor=(0.5, 0.99),   # <-- was 1.02
-                    ncol=min(len(labels), 3),
-                    frameon=True,
-                    framealpha=0.95,
-                    fontsize="small",
-                    borderaxespad=0.2,
-                )
-
-                leg.get_frame().set_facecolor("white")
-                leg.get_frame().set_edgecolor("black")
-
-            # ---- Bottom panel: box + jitter ----
-            df_plot["criterion_pretty"] = pd.Categorical(
-                df_plot["criterion_pretty"], categories=criterion_order, ordered=True
-            )
-
-            sns.boxplot(
-                data=df_plot, x="criterion_pretty", y=p_pass_col, ax=ax_box,
-                whis=(5, 95), width=0.6, fliersize=0,
-                color="white", linewidth=0.8,
-            )
-
-            sns.stripplot(
-                data=df_plot, x="criterion_pretty", y=p_pass_col,
-                hue="_qa_class_plot",
-                hue_order=[c for c in ["Confident pass", "Borderline", "Confident fail"] if c in qa_class_order],
-                dodge=False, jitter=True, size=4, alpha=0.8,
-                ax=ax_box, palette=class_colors, zorder=10,
-            )
-
-            ax_box.axhline(prob_pass_high_cut, linestyle="--", linewidth=0.8, color="black")
-            ax_box.axhline(prob_pass_low_cut, linestyle="--", linewidth=0.8, color="black")
-
-            ax_box.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
-            ax_box.set_xlabel("Threshold criterion")
-            ax_box.set_ylim(-0.05, 1.05)
-            ax_box.tick_params(axis="x", labelrotation=0)
-
-            # Use the same multi-line labels (criterion + n_b) on the boxplot
-            ax_box.set_xticks(np.arange(len(xticklabels)))
-            ax_box.set_xticklabels(xticklabels, rotation=0)
-
-
-
-            if ax_box.get_legend() is not None:
-                ax_box.get_legend().remove()
-
-            ax_bar.text(-0.05, 1.02, "A", transform=ax_bar.transAxes,
-                        fontsize="large", fontweight="bold", va="bottom")
-            ax_box.text(-0.05, 1.02, "B", transform=ax_box.transAxes,
-                        fontsize="large", fontweight="bold", va="bottom")
-
-            # layout: leave room for top legend
-            if legend_outside:
-                fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
-            else:
-                fig.tight_layout()
-
-            if save_dir is not None:
-                save_dir = Path(save_dir)
-                save_dir.mkdir(parents=True, exist_ok=True)
-                fig.savefig(save_dir / file_name, dpi=dpi, bbox_inches="tight")
-
-        return fig, (ax_bar, ax_box)
-
 
 
 def production_plot_path1_threshold_qa_summary_v2(
@@ -12048,7 +12180,8 @@ def production_plot_path1_threshold_qa_summary_v2(
             "Confident fail": rf"Confident fail ($p_{{b,r}}\leq {lo:.2f}$)",
         }
 
-        with sns.axes_style(seaborn_style), sns.plotting_context(seaborn_context, font_scale=font_scale):
+        rc_fonts = {**MPL_FONT_RC, **MPL_FACE_RC}
+        with sns.axes_style(seaborn_style, rc=rc_fonts), sns.plotting_context(seaborn_context, font_scale=font_scale, rc=rc_fonts):
             if fig is None or axes is None:
                 fig, axes = plt.subplots(
                     2, 1, figsize=figsize, dpi=dpi, sharex=False,
@@ -12083,6 +12216,9 @@ def production_plot_path1_threshold_qa_summary_v2(
             ax_bar.set_axisbelow(True)
             #ax_bar.yaxis.grid(True, linestyle=":", linewidth=0.5, color="0.8")
             ax_bar.xaxis.grid(False)
+            # Disable y-axis minor ticks on bar panel only
+            ax_bar.yaxis.set_minor_locator(mpl.ticker.NullLocator())
+            ax_bar.tick_params(axis="y", which="minor", left=False, right=False)
 
             # ---- stacked bar ----
             for cls in stack_order:
@@ -12109,6 +12245,8 @@ def production_plot_path1_threshold_qa_summary_v2(
                         x_mid = rect.get_x() + rect.get_width() / 2.0
                         inside_ok = (int(v) >= int(min_count_inside)) and ((v / tot) >= float(min_frac_inside))
 
+                        label_font = 16
+
                         if inside_ok:
                             ax_bar.text(
                                 x_mid,
@@ -12116,7 +12254,7 @@ def production_plot_path1_threshold_qa_summary_v2(
                                 txt,
                                 ha="center",
                                 va="center",
-                                fontsize="x-small",   # STYLE
+                                fontsize=label_font,
                                 color="black",
                                 zorder=20,
                             )
@@ -12132,7 +12270,7 @@ def production_plot_path1_threshold_qa_summary_v2(
                                 xytext=(x_mid + dx, float(btm) + float(v) + dy),
                                 ha="center",
                                 va="bottom",
-                                fontsize="x-small",
+                                fontsize=label_font,
                                 bbox=dict(
                                     boxstyle="round,pad=0.15",
                                     facecolor="white",
@@ -12660,7 +12798,8 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
             if coef_threshold_col is None:
                 coef_threshold_col = threshold_col
 
-        with sns.axes_style(seaborn_style), sns.plotting_context(seaborn_context, font_scale=font_scale):
+        rc_fonts = {**MPL_FONT_RC, **MPL_FACE_RC}
+        with sns.axes_style(seaborn_style, rc=rc_fonts), sns.plotting_context(seaborn_context, font_scale=font_scale, rc=rc_fonts):
             if fig is None or axes is None:
                 fig, axes = plt.subplots(
                     nrows, ncols,
@@ -12877,7 +13016,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                     loc="upper center",
                     bbox_to_anchor=(0.5, 1.02),
                     ncol=min(len(labels), 4),
-                    frameon=True, framealpha=0.95,
+                        frameon=True, framealpha=1.0,
                     fontsize="small",
                 )
                 leg.get_frame().set_facecolor("white")
@@ -13233,8 +13372,9 @@ def production_plot_path1_logit_margin_plus_grad_families(
             n_cols = 3
             n_rows = int(np.ceil(n_panels / n_cols))
 
-        with sns.axes_style(seaborn_style), sns.plotting_context(
-            seaborn_context, font_scale=font_scale
+        rc_fonts = {**MPL_FONT_RC, **MPL_FACE_RC}
+        with sns.axes_style(seaborn_style, rc=rc_fonts), sns.plotting_context(
+            seaborn_context, font_scale=font_scale, rc=rc_fonts
         ):
             fig, axes = plt.subplots(
                 n_rows,
@@ -13338,16 +13478,17 @@ def production_plot_path1_logit_margin_plus_grad_families(
                 # panel letter
                 letter_idx = idx + letter_offset
                 if 0 <= letter_idx < len(panel_letters):
-                    ax.text(
-                        0.02,
-                        0.98,
-                        panel_letters[letter_idx],
-                        transform=ax.transAxes,
-                        fontsize="large",
-                        fontweight="bold",
-                        va="top",
-                        ha="left",
-                    )
+                                ax.text(
+                                    -0.06,
+                                    1.02,
+                                    panel_letters[letter_idx],
+                                    transform=ax.transAxes,
+                                    fontsize="large",
+                                    fontweight="bold",
+                                    va="top",
+                                    ha="left",
+                                    clip_on=False,
+                                )
 
                 # optional fit-metrics box
                 if annotate_fit_stats:
@@ -13431,7 +13572,7 @@ def production_plot_path1_logit_margin_plus_grad_families(
                     bbox_to_anchor=(0.5, 1.02),
                     ncol=min(len(handles), 4),
                     frameon=True,
-                    framealpha=0.95,
+                    framealpha=1.0,
                     fontsize="small",
                     title=r"QA class, gradient families, and margin-only fit",
                     title_fontsize="small",
@@ -13932,8 +14073,9 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
             n_cols = 3
             n_rows = int(np.ceil(n_panels / n_cols))
 
-        with sns.axes_style(seaborn_style), sns.plotting_context(
-            seaborn_context, font_scale=font_scale
+        rc_fonts = {**MPL_FONT_RC, **MPL_FACE_RC}
+        with sns.axes_style(seaborn_style, rc=rc_fonts), sns.plotting_context(
+            seaborn_context, font_scale=font_scale, rc=rc_fonts
         ):
             fig, axes = plt.subplots(
                 n_rows,
@@ -14169,14 +14311,15 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                 letter_idx = idx + letter_offset
                 if 0 <= letter_idx < len(panel_letters):
                     ax.text(
-                        0.02,
-                        0.98,
+                        -0.06,
+                        1.02,
                         panel_letters[letter_idx],
                         transform=ax.transAxes,
                         fontsize="large",
                         fontweight="bold",
                         va="top",
                         ha="left",
+                        clip_on=False,
                     )
 
                                 # per-panel secondary legend (if per_label_* used)
@@ -14194,7 +14337,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                         title=panel_legend_title,
                         title_fontsize=panel_legend_title_fontsize,
                         frameon=True,
-                        framealpha=0.95,
+                        framealpha=1.0,
                     )
 
                     leg_panel.get_frame().set_facecolor("white")
@@ -14236,6 +14379,9 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                                 box_w = annotation_box_width_fraction
                                 pad = 0.02
                                 xa = max(bbox_ax.x0 - box_w - pad, 0.02)
+                                # nudge rightwards (except panel D custom elsewhere)
+                                if lbl != "V150 ≥ 50%":
+                                    xa = min(xa + 0.05, 0.92)
                                 ya = bbox_ax.y0
                             except Exception:
                                 xa, ya = _choose_fitbox_loc(
@@ -14262,7 +14408,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                                 boxstyle="round,pad=0.25",
                                 facecolor="white",
                                 edgecolor="black",
-                                alpha=0.9,
+                                alpha=1.0,
                             ),
                             zorder=15,
                         )
@@ -14287,7 +14433,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                     bbox_to_anchor=(0.5, 1.02),
                     ncol=min(len(handles_global), 4),
                     frameon=True,
-                    framealpha=0.95,
+                    framealpha=1.0,
                     fontsize="small",
                     title=r"QA class and margin-only fit",
                     title_fontsize="small",
@@ -14752,7 +14898,7 @@ def plot_log1p_median_delta_vs_predictors_pkg(
         figsize=(aspect * height * ncols, height * nrows),
         squeeze=False,
     )
-    sns.set(style="whitegrid")
+    sns.set(style="white")
 
     # y-axis uses the same notation helper as the other delta plots
     y_label = _y_label_for(y_col, label_style, j_symbol, idx_sub)
@@ -14955,7 +15101,7 @@ def plot_delta_vs_predictors_pkg(
         figsize=(aspect * height * ncols, height * nrows),
         squeeze=False,
     )
-    sns.set(style="whitegrid")
+    sns.set(style="white")
 
     stats_rows: list[dict] = []
 
@@ -15089,6 +15235,7 @@ def plot_delta_vs_predictors_pkg_generalized(
         aspect: float = 1.6,
         facet_cols: int = 2,
         title: str | None = None,
+        show_minor_grid: bool = True,
         # label style
         label_style: str = "latex",
         idx_sub: tuple[str, str] = ("b", "v"),
@@ -15100,8 +15247,17 @@ def plot_delta_vs_predictors_pkg_generalized(
             "Nominal dose grad (Gy/mm)",
             # maybe distance, maybe not
         ),
+        save_formats: Sequence[str] = DEFAULT_SAVE_FORMATS,
+        font_scale: float = 1.0,
+        seaborn_style: str = "white",
+        seaborn_context: str = "paper",
     ):
     df = long_df.copy()
+    _setup_matplotlib_defaults(
+        font_scale=font_scale,
+        seaborn_style=seaborn_style,
+        seaborn_context=seaborn_context,
+    )
 
     # ---------- handle delta kinds ----------
     if delta_kind_label is not None:
@@ -15151,7 +15307,6 @@ def plot_delta_vs_predictors_pkg_generalized(
         figsize=(aspect * height * ncols, height * nrows),
         squeeze=False,
     )
-    sns.set(style="whitegrid")
 
     stats_rows: list[dict] = []
 
@@ -15213,7 +15368,7 @@ def plot_delta_vs_predictors_pkg_generalized(
         ax.tick_params(axis="both", labelsize=tick_label_fontsize)
 
         # legend: now has one entry per bias type
-        leg = ax.legend(title=None, frameon=True)
+        leg = ax.legend(title=None, frameon=True, framealpha=1.0)
         if leg:
             for txt in leg.get_texts():
                 txt.set_fontsize(max(legend_fontsize - 1, 8))
@@ -15222,6 +15377,19 @@ def plot_delta_vs_predictors_pkg_generalized(
                     txt_str = txt.get_text()
                     if txt_str in delta_kind_label_map:
                         txt.set_text(delta_kind_label_map[txt_str])
+
+        # Ensure minor ticks on (per-panel) so they survive into saved fig
+        try:
+            ax.xaxis.set_minor_locator(AutoMinorLocator())
+        except Exception:
+            pass
+        try:
+            ax.yaxis.set_minor_locator(AutoMinorLocator())
+        except Exception:
+            pass
+        ax.tick_params(axis="both", which="minor", direction="out", length=3, width=0.8)
+        ax._force_numeric_x_minor = True  # hint for global save-time hook
+        ax.minorticks_on()
 
         # ---------- per-group stats ----------
         group_stats: list[tuple[str, dict]] = []
@@ -15268,12 +15436,12 @@ def plot_delta_vs_predictors_pkg_generalized(
         fig.suptitle(title, fontsize=axes_label_fontsize)
         fig.subplots_adjust(top=0.90)
 
-    ## add major gridlines
+    # gridlines (light, publication-style)
     for ax in axes.flat:
-        ax.grid(visible=True, which="major", linestyle="-", linewidth=0.5)
-    ## add minor gridlines
         ax.minorticks_on()
-        ax.grid(visible=True, which="minor", linestyle="--", linewidth=0.25, alpha=0.7)
+        ax.grid(visible=True, which="major", linestyle="-", linewidth=0.6, color=GRID_COLOR, alpha=0.6)
+        if show_minor_grid:
+            ax.grid(visible=True, which="minor", linestyle="--", linewidth=0.4, color=GRID_COLOR, alpha=0.35)
 
     """
     #set x limit to start at 0, and y limit to for from 0 to max y range + 10% for all plots
@@ -15285,25 +15453,22 @@ def plot_delta_vs_predictors_pkg_generalized(
     out_dir = Path(save_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    svg = out_dir / f"{file_prefix}.svg"
-    png = out_dir / f"{file_prefix}.png"
-    pdf = out_dir / f"{file_prefix}.pdf"      # <--- NEW
+    base_name = Path(file_prefix).stem
+    base_path = out_dir / base_name
 
     fig.tight_layout()
-
-    # high-quality exports
-    for path, fmt, dpi in [
-        (svg, "svg", 300),
-        (png, "png", 300),
-        (pdf, "pdf", 600),   # 600 dpi for raster bits in the PDF
-    ]:
-        fig.savefig(
-            path,
-            format=fmt,
-            dpi=dpi,
-            bbox_inches="tight",
-            pad_inches=0.02,
-        )
+    saved_paths = _save_figure(
+        fig,
+        base_path,
+        formats=save_formats,
+        dpi=600 if "pdf" in [f.lower().lstrip(".") for f in save_formats] else 300,
+        bbox_inches="tight",
+        pad_inches=0.02,
+    )
+    saved_map = {p.suffix.lstrip("."): p for p in saved_paths}
+    svg = saved_map.get("svg")
+    png = saved_map.get("png")
+    pdf = saved_map.get("pdf")
 
     plt.close(fig)
 
@@ -15314,3 +15479,7 @@ def plot_delta_vs_predictors_pkg_generalized(
         stats_df.to_csv(csv_path, index=False)
 
     return svg, png, pdf, csv_path, stats_df   # <--- include pdf in return
+
+
+# Apply save-formats wrapper to all plot functions in this module
+_wrap_all_plot_functions()
