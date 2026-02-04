@@ -7,3 +7,8 @@
 *.csv
 *.pdf
 output_data/
+output_data_GPR_analysis/
+chatgpt digests/
+__pycache__/
+.vscode/
+.VSCodeCounter/
