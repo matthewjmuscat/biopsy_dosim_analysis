@@ -46,6 +46,7 @@ def run_kernel_sensitivity(
             ("matern", 1.5, "matern_nu_1_5"),
             ("matern", 2.5, "matern_nu_2_5"),
             ("rbf", None, "rbf"),
+            ("exp", None, "exp"),
         ]
 
     kernel_specs = list(kernel_specs)
@@ -64,10 +65,11 @@ def run_kernel_sensitivity(
             semivariogram_df=semivariogram_df,
             output_dir=output_dir,
             target_stat=target_stat,
-            nu=kernel_param if kernel_name == "matern" else 1.5,
+            nu=kernel_param if kernel_name == "matern" else None,
             kernel_spec=(kernel_name, kernel_param),
             kernel_label=kernel_label,
             position_mode=position_mode,
+            save_csv=False,
         )
 
         # Save kernel-specific metrics
@@ -94,28 +96,38 @@ def run_kernel_sensitivity(
 
     # Plots
     try:
-        gpr_plots.plot_kernel_sensitivity_boxplot(
-            combined_metrics,
-            value_col="ell",
-            y_label=r"$\ell$ (mm)",
-            save_dir=figs_dir,
-            file_name_base="kernel_sensitivity_ell",
-            file_types=file_types,
-            show_title=False,
-        )
+        for index, plot_type in enumerate((("histogram"), ("histogram", "kde"), ("kde"))):
+            gpr_plots.plot_kernel_sensitivity_histogram(
+                combined_metrics,
+                value_col="ell",
+                y_label=r"$\ell$ (mm)",
+                save_dir=figs_dir,
+                file_name_base=f"kernel_sensitivity_ell_{index}",
+                file_types=file_types,
+                show_title=False,
+                modes=plot_type,
+                kde_bw_scale=None, # it will use Scott's rule by default
+                legend_fontsize =12,
+            )
+        print("Plotted kernel sensitivity ell boxplot. Save figures to", figs_dir)
     except Exception as e:
         print(f"Warning: could not plot ell boxplot: {e}")
 
     try:
-        gpr_plots.plot_kernel_sensitivity_boxplot(
-            combined_metrics,
-            value_col="mean_ratio",
-            y_label="Mean uncertainty reduction ratio",
-            save_dir=figs_dir,
-            file_name_base="kernel_sensitivity_mean_ratio",
-            file_types=file_types,
-            show_title=False,
-        )
+        for index, plot_type in enumerate((("histogram"), ("histogram", "kde"), ("kde"))):
+            gpr_plots.plot_kernel_sensitivity_histogram(
+                combined_metrics,
+                value_col="mean_ratio",
+                y_label="Mean uncertainty reduction ratio",
+                save_dir=figs_dir,
+                file_name_base=f"kernel_sensitivity_mean_ratio_{index}",
+                file_types=file_types,
+                show_title=False,
+                modes=plot_type,
+                kde_bw_scale=None, # it will use Scott's rule by default
+                legend_fontsize =12,     
+            )
+        print("Plotted kernel sensitivity mean_ratio boxplot. Save figures to", figs_dir)
     except Exception as e:
         print(f"Warning: could not plot mean_ratio boxplot: {e}")
 
@@ -131,7 +143,37 @@ def run_kernel_sensitivity(
             file_types=file_types,
             show_title=False,
         )
+        print("Plotted kernel sensitivity ratio scatter plot. Save figures to", figs_dir)
     except Exception as e:
         print(f"Warning: could not plot scatter: {e}")
+
+    try:
+        gpr_plots.plot_kernel_sensitivity_mean_sd_with_fits(
+            combined_metrics,
+            save_dir=figs_dir,
+            file_name_base="kernel_sensitivity_mean_sd_scatter_with_fits",
+            file_types=file_types,
+        )
+        print("Plotted kernel sensitivity mean/SD fits. Save figures to", figs_dir)
+    except Exception as e:
+        print(f"Warning: could not plot kernel sensitivity mean/SD fits: {e}")
+
+    try:
+        for index, plot_type in enumerate((("histogram"), ("histogram", "kde"), ("kde"))):
+            gpr_plots.plot_kernel_sensitivity_histogram(
+                combined_metrics,
+                value_col="sv_rmse",
+                y_label=r"Semivariogram RMSE",
+                save_dir=figs_dir,
+                file_name_base=f"kernel_sensitivity_sv_rmse_{index}",
+                file_types=file_types,
+                show_title=False,
+                modes=plot_type,
+                kde_bw_scale=None, # it will use Scott's rule by default
+                legend_fontsize =12,
+            )
+        print("Plotted kernel sensitivity sv_rmse histogram. Save figures to", figs_dir)
+    except Exception as e:
+        print(f"Warning: could not plot sv_rmse histogram: {e}")
 
     return combined_metrics
