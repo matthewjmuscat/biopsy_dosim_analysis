@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use("Agg")  # force non-interactive backend to avoid popping windows
+
 import pandas as pd 
 import load_files
 from pathlib import Path
@@ -31,8 +34,24 @@ def main():
     # plotting / analysis gates (speed control)
     run_semivariogram_plots = False
     run_patient_plots = True
-    run_kernel_sensitivity_flag = False
+    run_kernel_sensitivity_flag = True
     run_cohort_plots = True
+
+    # Baseline kernel selection (change here to switch kernels globally)
+    #   ("matern", 1.5) -> Matérn ν = 3/2 (default)
+    #   ("matern", 2.5) -> Matérn ν = 5/2
+    #   ("rbf", None)   -> RBF / squared-exponential
+    #   ("exp", None)   -> Exponential (approximately Matérn ν = 0.5)
+    BASE_KERNEL_SPEC = ("matern", 1.5)
+    _KERNEL_LABEL_MAP = {
+        ("matern", 1.5): "matern_nu_1_5",
+        ("matern", 2.5): "matern_nu_2_5",
+        ("rbf", None): "rbf",
+        ("exp", None): "exp",
+    }
+    if BASE_KERNEL_SPEC not in _KERNEL_LABEL_MAP:
+        raise ValueError(f"Unsupported BASE_KERNEL_SPEC {BASE_KERNEL_SPEC}. Update _KERNEL_LABEL_MAP to include it.")
+    BASE_KERNEL_LABEL = _KERNEL_LABEL_MAP[BASE_KERNEL_SPEC]
 
 
 
@@ -358,12 +377,15 @@ def main():
     # Run per-biopsy Matérn GP on the filtered cohort, derive per-biopsy metrics,
     # and write cohort-level summary/rollup CSVs (metrics, summary numbers, patient rollups).
     position_mode = "begin"  # use voxel begin positions for plotting/GP (options: "center", "begin")
+    nu_arg = BASE_KERNEL_SPEC[1] if BASE_KERNEL_SPEC[0] == "matern" else None
     results, metrics_df, cohort_summary_df, by_patient = GPR_analysis_helpers.run_gp_and_collect_metrics(
         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
         semivariogram_df=semivariogram_df,
         output_dir=output_dir,
         target_stat="median",  # or "mean"
-        nu=1.5,                # try 1.5 and 2.5 in sensitivity
+        nu=nu_arg,
+        kernel_spec=BASE_KERNEL_SPEC,
+        kernel_label=BASE_KERNEL_LABEL,
         position_mode=position_mode,
     )
 

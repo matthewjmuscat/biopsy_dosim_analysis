@@ -122,10 +122,11 @@ def run_gp_and_collect_metrics(
     output_dir,
     *,
     target_stat: str = "median",
-    nu: float = 1.5,
+    nu: float | None = None,
     kernel_spec=None,
     kernel_label: str | None = None,
     position_mode: Literal["center","begin"] = "center",
+    save_csv: bool = True,
 ):
     """
     Runs the per-biopsy GP (posterior + hyperparams) on an already-filtered
@@ -140,6 +141,14 @@ def run_gp_and_collect_metrics(
     """
     # Local import to avoid circular dependency
     import GPR_analysis_pipeline_functions as gpr_pf
+
+    # Validate Matérn ν availability when needed
+    if kernel_spec is not None:
+        if len(kernel_spec) != 2:
+            raise ValueError("kernel_spec must be a 2-tuple: (kernel_name, param_or_None)")
+        kname, kparam = kernel_spec
+        if kname == "matern" and kparam is None and nu is None:
+            raise ValueError("Matérn kernel requires ν; provide it via kernel_spec[1] or nu.")
 
     results = {}
     for (pid, bx_idx), _ in all_voxel_wise_dose_df.groupby(["Patient ID", "Bx index"]):
@@ -166,9 +175,10 @@ def run_gp_and_collect_metrics(
     print(metrics_df.head())
 
     # Save metrics
-    metrics_csv_path = output_dir.joinpath("gpr_per_biopsy_metrics.csv")
-    metrics_df.to_csv(metrics_csv_path, index=False)
-    print(f"Saved per-biopsy metrics to: {metrics_csv_path}")
+    if save_csv:
+        metrics_csv_path = output_dir.joinpath("gpr_per_biopsy_metrics.csv")
+        metrics_df.to_csv(metrics_csv_path, index=False)
+        print(f"Saved per-biopsy metrics to: {metrics_csv_path}")
 
     # Cohort summary numbers
     cohort_summary = {
@@ -200,9 +210,10 @@ def run_gp_and_collect_metrics(
     if kernel_label:
         cohort_summary["kernel_label"] = kernel_label
     cohort_summary_df = pd.DataFrame([cohort_summary])
-    cohort_summary_path = output_dir.joinpath("gpr_cohort_summary.csv")
-    cohort_summary_df.to_csv(cohort_summary_path, index=False)
-    print("Cohort summary:", cohort_summary)
+    if save_csv:
+        cohort_summary_path = output_dir.joinpath("gpr_cohort_summary.csv")
+        cohort_summary_df.to_csv(cohort_summary_path, index=False)
+        print("Cohort summary:", cohort_summary)
 
     # Patient-level rollups
     by_patient = (
@@ -217,35 +228,12 @@ def run_gp_and_collect_metrics(
     )
     if kernel_label:
         by_patient["kernel_label"] = kernel_label
-    by_patient_path = output_dir.joinpath("gpr_by_patient_summary.csv")
-    by_patient.to_csv(by_patient_path, index=False)
+    if save_csv:
+        by_patient_path = output_dir.joinpath("gpr_by_patient_summary.csv")
+        by_patient.to_csv(by_patient_path, index=False)
 
     return results, metrics_df, cohort_summary_df, by_patient
 
-
-def run_gp_and_collect_metrics_for_matern(
-    all_voxel_wise_dose_df: pd.DataFrame,
-    semivariogram_df: pd.DataFrame,
-    output_dir,
-    *,
-    target_stat: str = "median",
-    nu: float = 1.5,
-    kernel_label: str | None = None,
-):
-    """
-    Convenience wrapper to run GP/metrics for a specific Matérn ν and tag outputs.
-    """
-    if kernel_label is None:
-        kernel_label = f"matern_nu_{str(nu).replace('.', '_')}"
-    return run_gp_and_collect_metrics(
-        all_voxel_wise_dose_df=all_voxel_wise_dose_df,
-        semivariogram_df=semivariogram_df,
-        output_dir=output_dir,
-        target_stat=target_stat,
-        nu=nu,
-        kernel_spec=("matern", nu),
-        kernel_label=kernel_label,
-    )
 
 
 # ---------------------------------------
