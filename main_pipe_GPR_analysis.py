@@ -28,6 +28,24 @@ def main():
         print(f"\n{line}\n{title}\n{line}")
 
 
+    # For grids of patient-level plots
+    patient_bx_list = [
+        ("189 (F2)", 0),
+        ("200 (F2)", 0),
+        ("201 (F2)", 1),
+        ("198 (F2)", 0),]
+    grid_ncols = 2  # columns for multi-patient grid plots
+    grid_label_map = {("189 (F2)", 0): "Biopsy 3",
+                      ("200 (F2)", 0): "Biopsy 4",
+                      ("201 (F2)", 1): "Biopsy 5",
+                      ("198 (F2)", 0): "Biopsy 6"}  # optional: {(patient_id, bx_index): "Custom label"}
+    
+    # Per biopsy label maps
+    per_biopsy_label_map = {("188 (F2)", 0): "Biopsy 1",
+                        ("201 (F2)", 0): "Biopsy 2",
+    }
+                        
+
     # filter by simulated types
     simulated_types = ['Real']  # options: 'Real', 'Centroid DIL' 'Optimal DIL'
 
@@ -36,13 +54,14 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_flag = True
     run_cohort_plots = True
+   
 
     # Baseline kernel selection (change here to switch kernels globally)
     #   ("matern", 1.5) -> Matérn ν = 3/2 (default)
     #   ("matern", 2.5) -> Matérn ν = 5/2
     #   ("rbf", None)   -> RBF / squared-exponential
     #   ("exp", None)   -> Exponential (approximately Matérn ν = 0.5)
-    BASE_KERNEL_SPEC = ("matern", 1.5)
+    BASE_KERNEL_SPEC = ("rbf", None) # turns out RBF is best based on sensitivity analysis
     _KERNEL_LABEL_MAP = {
         ("matern", 1.5): "matern_nu_1_5",
         ("matern", 2.5): "matern_nu_2_5",
@@ -405,28 +424,80 @@ def main():
 
     if run_patient_plots:
         _print_section("PLOTS: Patient-level figures")
+
+        # Create grid directory
+        grid_dir = pt_sp_figures_dir.joinpath("grids")
+        grid_dir.mkdir(parents=True, exist_ok=True)
+
+        # print banner about grids
+        print("=" * 80)
+        print("Generating grid plots across selected biopsies")
+
+        # Grid figures across selected biopsies for GP profiles
+        print(f"    [plots] GP profile grid for {patient_bx_list}")
+        print(f"    [plots] Grid number is {len(patient_bx_list)}")
+        
+        GPR_production_plots.plot_gp_profiles_grid(
+            gp_results=results,
+            patient_bx_list=patient_bx_list,
+            save_path=grid_dir / "gp_profiles_grid",
+            ncols=grid_ncols,
+            label_map=grid_label_map,
+            metrics_df=metrics_df,
+            save_formats=("pdf", "svg"),
+            dpi=400,
+        )
+
+        # Grid figures across selected biopsies for semivariogram overlays
+        print(f"    [plots] Semivariogram with fits grid for {patient_bx_list}")
+        print(f"    [plots] Grid number is {len(patient_bx_list)}")
+        GPR_production_plots.plot_variogram_overlays_grid(
+            semivariogram_df=semivariogram_df,
+            gp_results=results,
+            patient_bx_list=patient_bx_list,
+            save_path=grid_dir / "variogram_overlays_grid",
+            ncols=grid_ncols,
+            label_map=grid_label_map,
+            metrics_df=metrics_df,
+            save_formats=("pdf", "svg"),
+            dpi=400,
+        )
+
+        # print a small banner
+        print("=" * 80)
+        print("Generating individual patient/biopsy-level plots and pairs")
+        print("=" * 80)
+        print("\n")
+
         for patient_id, bx_index in semivariogram_df.groupby(['Patient ID','Bx index']).groups.keys():
+            # print a small banner
+            print("=" * 80)
+            print(f"Generating patient-level plots for Patient ID: {patient_id}, Bx index: {bx_index}")
+
             patient_dir = pt_sp_figures_dir.joinpath(patient_id)
             os.makedirs(patient_dir, exist_ok=True)
 
             res = results[(patient_id, bx_index)]
 
             # Production-grade patient-level figures
+            print(f"    [plots] GP profile/residuals/diagnostics for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.make_patient_level_gpr_plots(
-                all_voxel_wise_dose_df,
-                semivariogram_df,
-                patient_id,
-                bx_index,
-                res,
-                save_dir=patient_dir,
-                save_formats=("pdf", "svg"),
-                show_titles=False,
-                font_scale=1.0,
-            )
+               all_voxel_wise_dose_df,
+               semivariogram_df,
+               patient_id,
+               bx_index,
+               res,
+               save_dir=patient_dir,
+               save_formats=("pdf", "svg"),
+               show_titles=False,
+               font_scale=1.0,
+               title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+           )
 
             # Paired figures with aligned axes (semivariogram+profile, reduction+ratio)
             pair_dir = patient_dir.joinpath("paired_panels")
             os.makedirs(pair_dir, exist_ok=True)
+            print(f"    [plots] Paired semivariogram+profile for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_variogram_and_profile_pair(
                 semivariogram_df,
                 patient_id,
@@ -435,7 +506,10 @@ def main():
                 save_dir=pair_dir,
                 file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}",
                 save_formats=("pdf", "svg"),
+                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
             )
+            print(f"    [plots] Paired uncertainty reduction/ratio for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_uncertainty_pair(
                 res,
                 patient_id,
@@ -443,10 +517,16 @@ def main():
                 save_dir=pair_dir,
                 file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}",
                 save_formats=("pdf", "svg"),
+                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
             )
             # give the list of plots produced in this print statement
             print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
+            
+            # print a small banner
+            print("=" * 80)
 
+        
 
 
 
