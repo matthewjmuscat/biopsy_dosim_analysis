@@ -74,6 +74,15 @@ def _fs_annot(val=None):
 
 def _fs_title(val=None):
     return val if val is not None else TITLE_FONTSIZE
+
+
+def _format_nugget(val: float) -> str:
+    """Format nugget to show small nonzero values instead of 0.00."""
+    if not np.isfinite(val):
+        return "nan"
+    if 0 < abs(val) < 0.01:
+        return f"{val:.2e}"
+    return f"{val:.2f}"
 PRIMARY_LINE_COLOR = "#0b3b8a"  # deep blue for main semivariogram
 OVERLAY_LINE_COLOR = "#000000"   # neutral gray for overlays
 GRID_COLOR = "#b8b8b8"
@@ -97,7 +106,11 @@ KERNEL_LABEL_MAP = {
 plt.ioff()
 
 # Global figure size for single-panel per-biopsy plots
-PER_BIOPSY_FIGSIZE = (6.4, 4.0)
+PER_BIOPSY_WIDE_FIGSIZE = (6.4, 4.0)
+PER_BIOPSY_SQUARE_FIGSIZE = (5.6, 5.6)
+GRID_PER_BIOPSY_FIGSIZE = (6.4, 5.4) # this controls the size of the each subplot 
+PAIR_PER_BIOPSY_FIGSIZE = (6.4, 6.4) # this controls the size of the entire two panel figure
+COHORT_WIDE_FIGSIZE = (6.4, 4.0)
 COHORT_SQUARE_FIGSIZE = (5.6, 5.6)
 DEFAULT_SAVE_FORMATS = ("pdf", "svg")
 
@@ -398,6 +411,7 @@ def _finalize_legend_and_header(
     labels: list | None = None,
     row_major: bool = False,
     legend_width_mode: str = "figure",  # "figure", "axes", or "subplot"
+    expand_figure: bool = True,         # if False, keep figure size and shrink axes instead
 ) -> float:
     """
     Place legend above the axes (horizontal rows) and header beneath it, both outside
@@ -434,21 +448,23 @@ def _finalize_legend_and_header(
     # Wrap header if it is wider than axes
     header_text = header
     if header_text and renderer is not None:
-        axes_width = ax.get_window_extent(renderer=renderer).width
-        if _measure_text_width(header_text) > axes_width:
-            parts = [p.strip() for p in header_text.split(",")]
-            if len(parts) > 1:
-                lines = []
-                current = parts[0]
-                for part in parts[1:]:
-                    candidate = current + ", " + part
-                    if _measure_text_width(candidate) <= axes_width:
-                        current = candidate
-                    else:
-                        lines.append(current)
-                        current = part
-                lines.append(current)
-                header_text = "\n".join(lines)
+        # Avoid wrapping mathtext strings (they often contain commas inside $...$).
+        if "$" not in header_text:
+            axes_width = ax.get_window_extent(renderer=renderer).width
+            if _measure_text_width(header_text) > axes_width:
+                parts = [p.strip() for p in header_text.split(",")]
+                if len(parts) > 1:
+                    lines = []
+                    current = parts[0]
+                    for part in parts[1:]:
+                        candidate = current + ", " + part
+                        if _measure_text_width(candidate) <= axes_width:
+                            current = candidate
+                        else:
+                            lines.append(current)
+                            current = part
+                    lines.append(current)
+                    header_text = "\n".join(lines)
 
     # Cache original axes/figure sizes for later resizing.
     ax_pos = ax.get_position()
@@ -531,15 +547,22 @@ def _finalize_legend_and_header(
             lb = legend.get_window_extent(renderer=renderer).transformed(ax.transAxes.inverted())
             legend_top = lb.y1
 
-    # Expand figure height to accommodate legend/header without shrinking axes.
+    # Reserve space for legend/header
     extra_axes = max(0.0, legend_top - 1.0)
     extra_in = extra_axes * ax_h_in + 0.01  # extra padding for legend/header separation
     if extra_in > 0:
-        new_fig_h = fig_h + extra_in
-        fig.set_size_inches(fig_w, new_fig_h, forward=True)
-        new_bottom = ax_bottom_in / new_fig_h
-        new_height = ax_h_in / new_fig_h
-        ax.set_position([ax_pos.x0, new_bottom, ax_pos.width, new_height])
+        if expand_figure:
+            # Grow the figure to keep axes height unchanged
+            new_fig_h = fig_h + extra_in
+            fig.set_size_inches(fig_w, new_fig_h, forward=True)
+            new_bottom = ax_bottom_in / new_fig_h
+            new_height = ax_h_in / new_fig_h
+            ax.set_position([ax_pos.x0, new_bottom, ax_pos.width, new_height])
+        else:
+            # Keep figure size fixed; shrink axes height to make room
+            reduce_frac = min(ax_pos.height - 0.02, extra_in / fig_h)
+            new_height = max(0.05, ax_pos.height - reduce_frac)
+            ax.set_position([ax_pos.x0, ax_pos.y0, ax_pos.width, new_height])
     return max(0.6, 1.0 - (extra_in / (fig_h + extra_in)) - 0.02)
 
 
@@ -792,6 +815,12 @@ def _apply_per_biopsy_ticks(ax):
     ax.tick_params(axis="both", which="major", length=5, width=0.9, bottom=True, left=True)
     ax.tick_params(axis="both", which="minor", length=3, width=0.6, bottom=True, left=True)
     ax.tick_params(axis="both", which="both", direction="out", top=False, right=False)
+
+
+def _grid_shape(n_items: int, n_cols: int) -> tuple[int, int]:
+    n_cols = max(1, n_cols)
+    n_rows = int(np.ceil(n_items / n_cols))
+    return n_rows, n_cols
 
 
 
@@ -1060,7 +1089,8 @@ def plot_gp_profile_production(
     save_formats=("pdf", "svg"),
     ci_level="both",
     title_on=True,
-    figsize=PER_BIOPSY_FIGSIZE,
+    title_label: str | None = None,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
@@ -1073,6 +1103,8 @@ def plot_gp_profile_production(
     sd_star = gp_res["sd_star"]
     X = gp_res["X"]
     y = gp_res["y"]
+    mu_X = gp_res.get("mu_X", np.array([]))
+    sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -1102,7 +1134,11 @@ def plot_gp_profile_production(
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+    mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
+    metrics_str = (
+        rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+        rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+    )
     # Reorder legend entries: mu, 68% band, 95% band, 1σ, 2σ
     handles, labels = ax.get_legend_handles_labels()
     order_keys = [
@@ -1121,16 +1157,17 @@ def plot_gp_profile_production(
         ax,
         header=metrics_str,
         ncol=len(handles) if ordered else 2,
-        header_loc="center",
+        header_loc="right",
         header_fontsize=None,
         handles=handles if ordered else None,
         labels=labels if ordered else None,
         row_major=True,
     )
 
+    title_txt = title_label if title_label else (f"P{patient_id} Bx{bx_index}" if title_on else None)
+    if title_txt:
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
-    if title_on:
-        fig.suptitle(f"GP profile — Patient {patient_id}, Bx {bx_index}", y=1.02, fontsize=_fs_title())
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
 
 
@@ -1142,7 +1179,7 @@ def plot_noise_profile_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
@@ -1178,12 +1215,13 @@ def plot_uncertainty_reduction_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
     dpi: int = 400,
     title_on: bool = False,
+    title_label: str | None = None,
     show: bool = False,
     label_fontsize: int | None = None,
     legend_fontsize: int | None = None,
@@ -1207,10 +1245,11 @@ def plot_uncertainty_reduction_production(
     int_gp = float(np.nansum(sd_X) * spacing)
     red_pct = 100.0 * (1 - int_gp / int_mc) if int_mc > 0 else np.nan
     metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {red_pct:.1f}\%$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="center", header_fontsize=_fs_legend(legend_fontsize))
+    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=_fs_legend(legend_fontsize))
+    title_txt = title_label if title_label else (f"P{patient_id} Bx{bx_index}" if title_on else None)
+    if title_txt:
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
-    if title_on:
-        fig.suptitle(f"Uncertainty reduction — Patient {patient_id}, Bx {bx_index}", y=1.02, fontsize=_fs_title())
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
 
@@ -1223,12 +1262,13 @@ def plot_uncertainty_ratio_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
     dpi: int = 400,
     title_on: bool = False,
+    title_label: str | None = None,
     show: bool = False,
     label_fontsize: int | None = None,
 ):
@@ -1249,10 +1289,11 @@ def plot_uncertainty_ratio_production(
     _apply_per_biopsy_ticks(ax)
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
     metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=3, header_loc="center", header_fontsize=None)
+    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=3, header_loc="right", header_fontsize=None)
+    title_txt = title_label if title_label else (f"P{patient_id} Bx{bx_index}" if title_on else None)
+    if title_txt:
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
-    if title_on:
-        fig.suptitle(f"Uncertainty ratio — Patient {patient_id}, Bx {bx_index}", y=1.02, fontsize=_fs_title())
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
 
@@ -1265,7 +1306,7 @@ def plot_residuals_vs_z_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
@@ -1324,7 +1365,7 @@ def plot_standardized_residuals_hist_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
@@ -1401,7 +1442,7 @@ def plot_standardized_residuals_qq_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
@@ -1460,7 +1501,7 @@ def plot_standardized_residuals_ecdf_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
@@ -1547,7 +1588,8 @@ def plot_residuals_production(
     _apply_axis_style(axes[1])
     _apply_per_biopsy_ticks(axes[1])
     if title_on:
-        fig.suptitle(f"Diagnostics — Patient {patient_id}, Bx {bx_index}", fontsize=_fs_title())
+        ax0_title = f"P{patient_id} Bx{bx_index}"
+        axes[0].text(0.0, 1.02, ax0_title, transform=axes[0].transAxes, ha="left", va="bottom", fontsize=_fs_title())
     mean_rs = float(np.nanmean(res / np.maximum(sd_X, 1e-12)))
     std_rs = float(np.nanstd(res / np.maximum(sd_X, 1e-12)))
     axes[1].text(
@@ -1577,12 +1619,13 @@ def plot_variogram_overlay_production(
     save_dir: Path,
     file_name_base: str,
     save_formats=("pdf", "svg"),
-    figsize=PER_BIOPSY_FIGSIZE,
+    figsize=PER_BIOPSY_WIDE_FIGSIZE,
     font_scale: float = 1.0,
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
     dpi: int = 400,
     title_on: bool = False,
+    title_label: str | None = None,
     show: bool = False,
     add_sill: bool = False,
     add_nugget: bool = False,
@@ -1615,10 +1658,15 @@ def plot_variogram_overlay_production(
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     if metrics_str is None:
-        metrics_str = rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}}$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="center", header_fontsize=None)
-    if title_on:
-        fig.suptitle(f"Variogram overlay — Patient {patient_id}, Bx {bx_index}", y=1.02, fontsize=_fs_title())
+        metrics_str = (
+            rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}},\ "
+            rf"\hat{{\tau}}_b^2 = {_format_nugget(hyperparams.nugget)}\ \mathrm{{Gy}}^2$"
+        )
+    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None)
+    if title_label:
+        ax.set_title(title_label, loc="left", fontsize=_fs_title())
+    elif title_on:
+        ax.set_title(f"P{patient_id} Bx{bx_index}", loc="left", fontsize=_fs_title())
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show)
 
@@ -1639,16 +1687,19 @@ def plot_variogram_and_profile_pair(
     show: bool = False,
     add_sill: bool = False,
     add_nugget: bool = False,
+    title_label: str | None = None,
+    metrics_row: pd.Series | None = None,
 ):
     """
     Two-panel figure: semivariogram overlay (left) + GP profile (right),
     with aligned plot areas.
     """
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    nrows, ncols = 1, 2
     fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(PER_BIOPSY_FIGSIZE[0] * 2, PER_BIOPSY_FIGSIZE[1]),
+        nrows,
+        ncols,
+        figsize=(PAIR_PER_BIOPSY_FIGSIZE[0] * ncols, PAIR_PER_BIOPSY_FIGSIZE[1] * nrows),
         gridspec_kw={"wspace": 0.25},
     )
 
@@ -1679,8 +1730,15 @@ def plot_variogram_and_profile_pair(
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
-    metrics_left = rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {100.0 * (1 - np.nanmean(gp_res['sd_X']) / np.nanmean(np.sqrt(np.maximum(gp_res['var_n'], 0)))):.1f}\%$"
-    top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="center", header_fontsize=None, legend_width_mode="subplot")
+    ell_val = hyperparams.ell
+    nug_val = hyperparams.nugget
+    if metrics_row is not None:
+        ell_val = float(metrics_row.get("ell", ell_val))
+        nug_tmp = metrics_row.get("nugget", np.nan)
+        if pd.notna(nug_tmp):
+            nug_val = float(nug_tmp)
+    metrics_left = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+    top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
 
     # Right: GP profile
     ax = axes[1]
@@ -1689,6 +1747,8 @@ def plot_variogram_and_profile_pair(
     sd_star = gp_res["sd_star"]
     X = gp_res["X"]
     y = gp_res["y"]
+    mu_X = gp_res.get("mu_X", np.array([]))
+    sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
     ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$")
     ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
@@ -1718,17 +1778,24 @@ def plot_variogram_and_profile_pair(
     if ordered:
         handles, labels = zip(*ordered)
         handles, labels = list(handles), list(labels)
-    metrics_right = rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {100.0 * (1 - np.nanmean(gp_res['sd_X']) / np.nanmean(np.sqrt(np.maximum(gp_res['var_n'], 0)))):.1f}\%$"
+    mean_dose = float(np.nanmean(mu_X)) if mu_X.size else np.nan
+    shrink_pct = 100.0 * (1 - np.nanmean(sd_X) / np.nanmean(indep_sd)) if np.nanmean(indep_sd) > 0 else np.nan
+    if metrics_row is not None:
+        shrink_tmp = metrics_row.get("pct_reduction_mean_sd", np.nan)
+        if pd.notna(shrink_tmp):
+            shrink_pct = float(shrink_tmp)
+    metrics_right = rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink_pct:.1f}\%$"
     top_right = _finalize_legend_and_header(
         ax,
         header=metrics_right,
         ncol=len(handles),
-        header_loc="center",
+        header_loc="right",
         header_fontsize=None,
         handles=handles,
         labels=labels,
         row_major=True,
         legend_width_mode="subplot",
+        expand_figure=False,
     )
 
     # Align axes heights/positions
@@ -1739,7 +1806,227 @@ def plot_variogram_and_profile_pair(
     axes[0].set_position([pos_l.x0, new_y0, pos_l.width, new_h])
     axes[1].set_position([pos_r.x0, new_y0, pos_r.width, new_h])
 
+    # Per-axes titles (top-left, just above each subplot)
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    for ax in axes:
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
+    # Ensure no figure-level suptitle remains
+    fig = ax.figure
+    if hasattr(fig, "_suptitle") and fig._suptitle:
+        fig._suptitle.remove()
+        fig._suptitle = None
+
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
+
+
+# ----------------------------------------------------------------------
+# Grid wrappers for GP profiles and semivariogram overlays
+# ----------------------------------------------------------------------
+def plot_gp_profiles_grid(
+    gp_results: dict,
+    patient_bx_list: list[tuple],
+    *,
+    save_path: Path,
+    ncols: int = 2,
+    figsize_per: tuple[float, float] = GRID_PER_BIOPSY_FIGSIZE,
+    save_formats=("pdf", "svg"),
+    dpi: int = 400,
+    show: bool = False,
+    label_map: dict | None = None,
+    metrics_df: pd.DataFrame | None = None,
+):
+    """
+    Assemble multiple GP profile plots into a single grid figure.
+    gp_results: dict keyed by (patient_id, bx_index) from run_gp_and_collect_metrics.
+    patient_bx_list: list of (patient_id, bx_index) tuples in desired order.
+    """
+    _setup_matplotlib_defaults()
+    n_rows, n_cols = _grid_shape(len(patient_bx_list), ncols)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize_per[0] * n_cols, figsize_per[1] * n_rows))
+    axes = np.atleast_1d(axes).ravel()
+
+    shared_handles = None
+    shared_labels = None
+
+    for ax, (pid, bx) in zip(axes, patient_bx_list):
+        gp_res = gp_results.get((pid, bx))
+        if gp_res is None:
+            ax.text(0.5, 0.5, f"Missing {pid},{bx}", ha="center", va="center")
+            ax.axis("off")
+            continue
+        X_star = gp_res["X_star"]
+        mu_star = gp_res["mu_star"]
+        sd_star = gp_res["sd_star"]
+        X = gp_res["X"]
+        y = gp_res["y"]
+        indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
+
+        ax.plot(X_star, mu_star, lw=2.0, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$", zorder=3)
+        ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band", zorder=1)
+        ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band", zorder=2)
+        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$", zorder=4)
+        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.0, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$", zorder=5)
+        ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+        ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=_fs_label())
+        # Keep y-axis non-negative like single-profile plotter
+        ymin, ymax = ax.get_ylim()
+        if np.isfinite(ymax):
+            ax.set_ylim(bottom=0 if ymin < 0 else ymin, top=ymax)
+        elif ymin < 0:
+            ax.set_ylim(bottom=0)
+        _apply_axis_style(ax)
+        _apply_per_biopsy_ticks(ax)
+        title_txt = label_map.get((pid, bx)) if label_map else None
+        if not title_txt:
+            title_txt = f"P{pid} Bx{bx}"
+        ax.set_title(title_txt, fontsize=_fs_title(), loc="left")
+        # Annotate metrics using metrics_df when available
+        shrink = None
+        ell_val = gp_res["hyperparams"].ell
+        if metrics_df is not None:
+            mr = metrics_df[(metrics_df["Patient ID"] == pid) & (metrics_df["Bx index"] == bx)]
+            if not mr.empty:
+                if pd.notna(mr["pct_reduction_mean_sd"].iloc[0]):
+                    shrink = float(mr["pct_reduction_mean_sd"].iloc[0])
+                if pd.notna(mr["ell"].iloc[0]):
+                    ell_val = float(mr["ell"].iloc[0])
+        if shrink is None:
+            _, _, shrink = _compute_shrinkage_stats(gp_res)
+        mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
+        metrics_str = (
+            rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+            rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+        )
+        ax.text(
+            0.98, 1.04, metrics_str,
+            ha="right", va="bottom",
+            transform=ax.transAxes,
+            fontsize=_fs_legend(),
+            bbox=ANNOT_BBOX,
+        )
+        if shared_handles is None:
+            shared_handles, shared_labels = ax.get_legend_handles_labels()
+    # Hide any unused axes
+    for ax in axes[len(patient_bx_list):]:
+        ax.axis("off")
+    # Figure-level shared legend (if any handles found)
+    if shared_handles:
+        fig.legend(
+            shared_handles,
+            shared_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.04),  # aligned with GP profile grid legend
+            ncol=len(shared_handles),
+            frameon=False,
+            fancybox=False,
+            fontsize=_fs_legend(),
+        )
+    fig.tight_layout(rect=[0, 0, 1, 0.90])
+    out_base = Path(save_path)
+    out_base.parent.mkdir(parents=True, exist_ok=True)
+    _save_figure(fig, out_base, formats=save_formats, dpi=dpi, create_subdir_for_stem=False, show=show)
+    return out_base
+
+
+def plot_variogram_overlays_grid(
+    semivariogram_df: pd.DataFrame,
+    gp_results: dict,
+    patient_bx_list: list[tuple],
+    *,
+    save_path: Path,
+    ncols: int = 3,
+    figsize_per: tuple[float, float] = GRID_PER_BIOPSY_FIGSIZE,
+    save_formats=("pdf", "svg"),
+    dpi: int = 400,
+    show: bool = False,
+    add_sill: bool = False,
+    add_nugget: bool = False,
+    label_map: dict | None = None,
+    metrics_df: pd.DataFrame | None = None,
+):
+    """
+    Assemble multiple semivariogram overlays with fitted model into a grid figure.
+    """
+    _setup_matplotlib_defaults()
+    shared_handles = None
+    shared_labels = None
+    n_rows, n_cols = _grid_shape(len(patient_bx_list), ncols)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize_per[0] * n_cols, figsize_per[1] * n_rows))
+    axes = np.atleast_1d(axes).ravel()
+
+    for ax, (pid, bx) in zip(axes, patient_bx_list):
+        gp_res = gp_results.get((pid, bx))
+        if gp_res is None:
+            ax.text(0.5, 0.5, f"Missing {pid},{bx}", ha="center", va="center")
+            ax.axis("off")
+            continue
+        sv = semivariogram_df.query("`Patient ID`==@pid and `Bx index`==@bx").sort_values("h_mm")
+        h = sv["h_mm"].to_numpy(float)
+        gamma_hat = sv["semivariance"].to_numpy(float)
+        hyperparams = gp_res["hyperparams"]
+        kernel = getattr(hyperparams, "kernel", "matern")
+        if kernel == "rbf":
+            gamma_model = gpr_pf.rbf_semivariogram(h, hyperparams.sigma_f2, hyperparams.ell, 0.0) + hyperparams.nugget
+            label_model = r"Fitted $\gamma_b(h)$ (RBF)"
+        elif kernel == "exp":
+            gamma_model = gpr_pf.exp_semivariogram(h, hyperparams.sigma_f2, hyperparams.ell, 0.0) + hyperparams.nugget
+            label_model = r"Fitted $\gamma_b(h)$ (Exp)"
+        else:
+            gamma_model = gpr_pf.matern_semivariogram(h, hyperparams.sigma_f2, hyperparams.ell, 0.0, hyperparams.nu) + hyperparams.nugget
+            label_model = rf"Fitted $\gamma_b(h)$ (Matérn, $\nu={hyperparams.nu}$)"
+
+        ax.plot(h, gamma_hat, "o", ms=4, color=PRIMARY_LINE_COLOR, label=r"Empirical $\widehat{\gamma}_b(h)$")
+        ax.plot(h, gamma_model, "-", lw=2.0, color=OVERLAY_LINE_COLOR, label=label_model)
+        if add_sill:
+            ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+        if add_nugget:
+            ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+        ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
+        ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
+        _apply_axis_style(ax)
+        _apply_per_biopsy_ticks(ax)
+        title_txt = label_map.get((pid, bx)) if label_map else None
+        if not title_txt:
+            title_txt = f"P{pid} Bx{bx}"
+        ax.set_title(title_txt, fontsize=_fs_title(), loc="left")
+        ell_val = hyperparams.ell
+        nug_val = hyperparams.nugget
+        if metrics_df is not None:
+            mr = metrics_df[(metrics_df["Patient ID"] == pid) & (metrics_df["Bx index"] == bx)]
+            if not mr.empty:
+                if pd.notna(mr.get("ell", np.nan).iloc[0]):
+                    ell_val = float(mr["ell"].iloc[0])
+                if "nugget" in mr.columns and pd.notna(mr["nugget"].iloc[0]):
+                    nug_val = float(mr["nugget"].iloc[0])
+        metrics_str = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+        ax.text(
+            0.98, 1.04, metrics_str,
+            ha="right", va="bottom",
+            transform=ax.transAxes,
+            fontsize=_fs_legend(),
+            bbox=ANNOT_BBOX,
+        )
+        if shared_handles is None:
+            shared_handles, shared_labels = ax.get_legend_handles_labels()
+
+    for ax in axes[len(patient_bx_list):]:
+        ax.axis("off")
+    if shared_handles:
+        fig.legend(
+            shared_handles,
+            shared_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.04),
+            ncol=len(shared_handles),
+            frameon=False,
+            fancybox=False,
+            fontsize=_fs_legend(),
+        )
+    fig.tight_layout(rect=[0, 0, 1, 0.90])
+    out_base = Path(save_path)
+    out_base.parent.mkdir(parents=True, exist_ok=True)
+    _save_figure(fig, out_base, formats=save_formats, dpi=dpi, create_subdir_for_stem=False, show=show)
+    return out_base
 
 
 def plot_uncertainty_pair(
@@ -1755,16 +2042,19 @@ def plot_uncertainty_pair(
     seaborn_context: str = "paper",
     dpi: int = 400,
     show: bool = False,
+    title_label: str | None = None,
+    metrics_row: pd.Series | None = None,
 ):
     """
     Two-panel figure: uncertainty reduction (left) + uncertainty ratio (right),
     with aligned plot areas.
     """
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    nrows, ncols = 1, 2
     fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(PER_BIOPSY_FIGSIZE[0] * 2, PER_BIOPSY_FIGSIZE[1]),
+        nrows,
+        ncols,
+        figsize=(PAIR_PER_BIOPSY_FIGSIZE[0] * ncols, PAIR_PER_BIOPSY_FIGSIZE[1] * nrows),
         gridspec_kw={"wspace": 0.25},
     )
 
@@ -1785,8 +2075,18 @@ def plot_uncertainty_pair(
     int_mc = float(np.nansum(indep_sd) * spacing)
     int_gp = float(np.nansum(sd_X) * spacing)
     red_pct = 100.0 * (1 - int_gp / int_mc) if int_mc > 0 else np.nan
-    metrics_left = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {red_pct:.1f}\%$"
-    top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="center", header_fontsize=None, legend_width_mode="subplot")
+    mean_mc_sd = float(np.nanmean(indep_sd)) if indep_sd.size else np.nan
+    mean_gp_sd = float(np.nanmean(sd_X)) if sd_X.size else np.nan
+    if metrics_row is not None:
+        if "mean_indep_sd" in metrics_row and pd.notna(metrics_row["mean_indep_sd"]):
+            mean_mc_sd = float(metrics_row["mean_indep_sd"])
+        if "mean_gp_sd" in metrics_row and pd.notna(metrics_row["mean_gp_sd"]):
+            mean_gp_sd = float(metrics_row["mean_gp_sd"])
+    metrics_left = (
+        rf"$\overline{{\widehat{{\sigma}}}}_b = {mean_mc_sd:.2f}\ \mathrm{{Gy}},\ "
+        rf"\overline{{\sigma}}_b^{{\mathrm{{GP}}}} = {mean_gp_sd:.2f}\ \mathrm{{Gy}}$"
+    )
+    top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
 
     # Right: uncertainty ratio
     ax = axes[1]
@@ -1800,8 +2100,15 @@ def plot_uncertainty_pair(
     ax.set_ylabel(r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
-    metrics_right = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {100.0 * (1 - np.nanmean(sd_X) / np.nanmean(indep_sd)):.1f}\%$"
-    top_right = _finalize_legend_and_header(ax, header=metrics_right, ncol=3, header_loc="center", header_fontsize=None, legend_width_mode="subplot")
+    median_ratio = float(np.nanmedian(ratio)) if ratio.size else np.nan
+    frac_ge_1_5 = float(np.nanmean(ratio >= 1.5) * 100.0) if ratio.size else np.nan
+    if metrics_row is not None:
+        if "median_ratio" in metrics_row and pd.notna(metrics_row["median_ratio"]):
+            median_ratio = float(metrics_row["median_ratio"])
+        if "pct_vox_ge_50" in metrics_row and pd.notna(metrics_row["pct_vox_ge_50"]):
+            frac_ge_1_5 = float(metrics_row["pct_vox_ge_50"])
+    metrics_right = rf"$\mathrm{{median}}(R_{{b,v}}) = {median_ratio:.2f},\ f(R_{{b,v}}\geq 1.5) = {frac_ge_1_5:.1f}\%$"
+    top_right = _finalize_legend_and_header(ax, header=metrics_right, ncol=3, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
 
     # Align axes heights/positions
     pos_l = axes[0].get_position()
@@ -1810,6 +2117,15 @@ def plot_uncertainty_pair(
     new_h = min(pos_l.height, pos_r.height)
     axes[0].set_position([pos_l.x0, new_y0, pos_l.width, new_h])
     axes[1].set_position([pos_r.x0, new_y0, pos_r.width, new_h])
+
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    for ax in axes:
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
+    # Ensure no figure-level suptitle remains
+    fig = ax.figure
+    if hasattr(fig, "_suptitle") and fig._suptitle:
+        fig._suptitle.remove()
+        fig._suptitle = None
 
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
 
@@ -1829,7 +2145,7 @@ def cohort_plots_production(
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    def _hist(series, xlabel, fname, unit_label: str, var_label: str, figsize=PER_BIOPSY_FIGSIZE, bins_override: int | None = None):
+    def _hist(series, xlabel, fname, unit_label: str, var_label: str, figsize=COHORT_WIDE_FIGSIZE, bins_override: int | None = None):
         fig, ax = plt.subplots(figsize=figsize)
         data = series.dropna().to_numpy(dtype=float)
         # Bin count is selected via Freedman–Diaconis rule (_fd_bins); width is derived from data range.
@@ -1936,7 +2252,7 @@ def cohort_plots_production(
         fig.tight_layout()
         _save_figure(fig, save_dir / "cohort_boxplot_uncertainty_reduction", formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
 
-    fig, ax = plt.subplots(figsize=PER_BIOPSY_FIGSIZE)
+    fig, ax = plt.subplots(figsize=COHORT_WIDE_FIGSIZE)
     ax.scatter(metrics_df["mean_indep_sd"], metrics_df["mean_gp_sd"], s=24, alpha=0.85, color=PRIMARY_LINE_COLOR)
     lim_hi = float(np.nanmax([metrics_df["mean_indep_sd"].max(), metrics_df["mean_gp_sd"].max(), 0]))
     lims = [0, lim_hi * 1.05 if lim_hi > 0 else 1.0]
@@ -2223,7 +2539,7 @@ def plot_mean_sd_bland_altman_production(
     loa_low = mean_diff - 1.96 * sd_diff
     loa_high = mean_diff + 1.96 * sd_diff
 
-    fig, ax = plt.subplots(figsize=PER_BIOPSY_FIGSIZE)
+    fig, ax = plt.subplots(figsize=COHORT_WIDE_FIGSIZE)
     ax.scatter(A, D, s=24, alpha=0.85, color=PRIMARY_LINE_COLOR, label="Biopsies")
     ax.axhline(0.0, color="black", lw=1.0)
     ax.axhline(mean_diff, color=PRIMARY_LINE_COLOR, lw=1.6, alpha=0.9)
@@ -2297,6 +2613,7 @@ def make_patient_level_gpr_plots(
     show_titles: bool = False,
     add_sill_line: bool = False,
     add_nugget_line: bool = False,
+    title_label: str | None = None,
 ):
     """
     Generate all patient-level publication plots and save into concept-specific
@@ -2314,7 +2631,10 @@ def make_patient_level_gpr_plots(
         d.mkdir(parents=True, exist_ok=True)
 
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
-    overlay_metrics = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+    overlay_metrics = (
+        rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ "
+        rf"\hat{{\tau}}_b^2 = {_format_nugget(gp_res['hyperparams'].nugget)}\ \mathrm{{Gy}}^2$"
+    )
 
     plot_gp_profile_production(
         gp_res, patient_id, bx_index,
@@ -2322,6 +2642,7 @@ def make_patient_level_gpr_plots(
         file_name_base=f"gp_profile_patient_{patient_id}_bx_{bx_index}",
         save_formats=save_formats,
         title_on=show_titles,
+        title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
@@ -2332,6 +2653,7 @@ def make_patient_level_gpr_plots(
         file_name_base=f"uncertainty_reduction_patient_{patient_id}_bx_{bx_index}",
         save_formats=save_formats,
         title_on=show_titles,
+        title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
@@ -2342,6 +2664,7 @@ def make_patient_level_gpr_plots(
         file_name_base=f"uncertainty_ratio_patient_{patient_id}_bx_{bx_index}",
         save_formats=save_formats,
         title_on=show_titles,
+        title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
@@ -2398,6 +2721,7 @@ def make_patient_level_gpr_plots(
         file_name_base=f"variogram_overlay_patient_{patient_id}_bx_{bx_index}",
         save_formats=save_formats,
         title_on=show_titles,
+        title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
