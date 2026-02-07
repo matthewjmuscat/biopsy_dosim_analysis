@@ -16,6 +16,7 @@ import summary_statistics
 import pyarrow # imported for loading parquet files, although not referenced it is required
 import helper_funcs
 import GPR_analysis_helpers
+import GPR_calibration
 import numpy as np 
 import GPR_analysis_pipeline_functions
 import GPR_production_plots
@@ -52,7 +53,7 @@ def main():
     # plotting / analysis gates (speed control)
     run_semivariogram_plots = False
     run_patient_plots = True
-    run_kernel_sensitivity_flag = True
+    run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
    
 
@@ -71,6 +72,15 @@ def main():
     if BASE_KERNEL_SPEC not in _KERNEL_LABEL_MAP:
         raise ValueError(f"Unsupported BASE_KERNEL_SPEC {BASE_KERNEL_SPEC}. Update _KERNEL_LABEL_MAP to include it.")
     BASE_KERNEL_LABEL = _KERNEL_LABEL_MAP[BASE_KERNEL_SPEC]
+    # Consistent kernel colors across sensitivity plots
+    KERNEL_COLOR_MAP = {
+        "matern_nu_1_5": "#0b3b8a",  # blue
+        "matern_nu_2_5": "#c75000",  # orange
+        "rbf": "#2a9d8f",            # green
+        "exp": "#7a5195",            # purple
+    }
+
+
 
 
 
@@ -81,8 +91,6 @@ def main():
     # 4. Per-biopsy GP posterior
     # 5. Per-biopsy metrics
     # 6. Cohort aggregation and plots
-
-
 
 
 
@@ -254,6 +262,9 @@ def main():
 
 
 
+    # ---------------------------------------    
+    # # Filter dataframes by simulated types (optional)
+    # ---------------------------------------
 
     _print_section("FILTER: Simulated types")
     # filter dataframes by simulated types
@@ -276,7 +287,9 @@ def main():
 
 
 
-    # ---------------------------------------    # Create output directories
+    # ---------------------------------------    
+    # # Create output directories
+    # ---------------------------------------
 
     ## Create output directory
     # Output directory 
@@ -300,9 +313,11 @@ def main():
 
 
 
-    _print_section("QC: Voxelwise stats cross-check")
-    # ---------------------------------------    # Cross-check voxelwise stats vs cohort summary
+    # ---------------------------------------    
+    # # Cross-check voxelwise stats vs cohort summary
     # ---------------------------------------
+
+    _print_section("QC: Voxelwise stats cross-check")
     cross_summary_df, cross_mismatches_df = helper_funcs.cross_check_voxelwise_statistics(
         mc_voxel_df=all_voxel_wise_dose_df,
         cohort_voxel_df=cohort_global_dosimetry_by_voxel_df,
@@ -335,9 +350,18 @@ def main():
 
 
 
-    _print_section("SEMIVARIOGRAM: Compute per-biopsy")
-    # ---------------------------------------    # Semivariogram analysis
+
+
+
+
+
+    # ---------------------------------------    
+    # # Semivariogram analysis
     # ---------------------------------------
+
+
+    _print_section("SEMIVARIOGRAM: Compute per-biopsy")
+   
 
     semivariogram_df = GPR_analysis_helpers.semivariogram_by_biopsy(
         all_voxel_wise_dose_df,
@@ -361,7 +385,7 @@ def main():
 
 
 
-
+    # Plot semivariogram for each biopsy (optional can be skipped for speed, but useful for QC and visualization of spatial structure)
     if run_semivariogram_plots:
         _print_section("SEMIVARIOGRAM: Plot per-biopsy")
         for patient_id, bx_index in semivariogram_df.groupby(['Patient ID', 'Bx index']).groups.keys():
@@ -389,7 +413,22 @@ def main():
                 dpi=400,
             )
             print(f"Saved semivariogram plot for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
-    
+    else:
+        _print_section("SEMIVARIOGRAM: Plot per-biopsy (skipped)")
+
+
+
+
+
+
+
+
+
+
+
+    # ---------------------------------------    
+    # # GP + metrics
+    # ---------------------------------------
 
 
     _print_section("GP: Run per-biopsy + metrics")
@@ -408,19 +447,82 @@ def main():
         position_mode=position_mode,
     )
 
+
+
+
+
+
+
+
+
+
+    # ---------------------------------------    
+    # # kernel sensitivity and calibration
+    # ---------------------------------------
+
+
     # Optional kernel sensitivity block (kept minimal to avoid clutter)
-    if run_kernel_sensitivity_flag:
-        _print_section("KERNEL SENSITIVITY (optional)")
-        kernel_sens_dir = output_dir.joinpath("kernel_sensitivity")
-        kernel_sens_dir.mkdir(parents=True, exist_ok=True)
+
+    # create kernel sensitivity output directories
+    kernel_sens_dir = output_dir.joinpath("kernel_sensitivity")
+    kernel_sens_dir.mkdir(parents=True, exist_ok=True)
+    kernel_figs_dir = kernel_sens_dir.joinpath("figures")
+    kernel_csv_dir = kernel_sens_dir.joinpath("csv")
+    kernel_figs_dir.mkdir(parents=True, exist_ok=True)
+    kernel_csv_dir.mkdir(parents=True, exist_ok=True)
+
+    # I have created two paths here so be careful if changing code around calibration because depending on which path you take outputs could be different depending on whether youre
+    # careful about changing code. in particular the save paths of the csvs! Also be careful about selecting which bounds to use for heurisitic acceptable band for standardized residuals std and mean 
+    if run_kernel_sensitivity_and_calibtration_flag:
+        _print_section("KERNEL SENSITIVITY ANALYSIS")
         GPR_kernel_sensitivity.run_kernel_sensitivity(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
             semivariogram_df=semivariogram_df,
             output_dir=kernel_sens_dir,
+            figs_dir=kernel_figs_dir,
+            csv_dir=kernel_csv_dir,
             target_stat="median",
             position_mode=position_mode,
+            kernel_color_map=KERNEL_COLOR_MAP,
         )
+    else:
+        # I created a second path because I need the calibration to run for at least the baseline kernel in order to have calibration metrics and plots for the paper, but I want to be able to skip the rest of the sensitivity analysis if I dont need it to save time. 
+        # So this way I can skip the sensitivity analysis but still get the calibration outputs for the baseline kernel.
+        _print_section("KERNEL SENSITIVITY ANALYSIS (calibration only for baseline kernel)")
+        
+        calib_df_base = GPR_calibration.build_calibration_metrics(
+            results,
+            mean_bounds=(-1.0, 1.0),
+            sd_bounds=(0.5, 1.5),
+        )
+        calib_csv_base = kernel_csv_dir / f"calibration_metrics_{BASE_KERNEL_LABEL}.csv"
+        calib_df_base.to_csv(calib_csv_base, index=False)
+        calib_fig_dir_base = kernel_figs_dir / f"calibration_{BASE_KERNEL_LABEL}"
+        calib_fig_dir_base.mkdir(parents=True, exist_ok=True)
+        GPR_production_plots.calibration_plots_production(
+            calib_df=calib_df_base,
+            save_dir=calib_fig_dir_base,
+            save_formats=("pdf", "svg"),
+            mean_bounds=(-1.0, 1.0),
+            sd_bounds=(0.5, 1.5),
+            modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
+            kernel_color_map=KERNEL_COLOR_MAP,
+        )
+        print(f"[calibration] baseline kernel saved to {calib_csv_base} and {calib_fig_dir_base}")
 
+
+
+
+
+
+
+
+
+
+
+    # ---------------------------------------    
+    # # biopsy-level production plots
+    # ---------------------------------------
 
     if run_patient_plots:
         _print_section("PLOTS: Patient-level figures")
@@ -525,9 +627,17 @@ def main():
             
             # print a small banner
             print("=" * 80)
-
+    else:
+        _print_section("PLOTS: Patient-level figures (skipped)")
         
 
+
+
+
+
+    # ---------------------------------------    
+    # # cohort-level production plots
+    # ---------------------------------------
 
 
     if run_cohort_plots:
@@ -557,8 +667,16 @@ def main():
             source_csv_path=output_dir.joinpath("gpr_per_biopsy_metrics.csv"),
             show_annotation=False,
         )
+    else:
+        _print_section("PLOTS: Cohort-level figures (skipped)")
 
 
+
+
+
+
+    _print_section("GPR PIPELINE COMPLETE")
+    print('\n')
     # print programme complete and pause and wait for enter to exit
     input("GPR analysis pipeline complete. Press Enter to exit.")
 
