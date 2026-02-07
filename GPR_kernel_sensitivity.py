@@ -6,16 +6,20 @@ import pandas as pd
 
 import GPR_analysis_helpers as gpr_helpers
 import GPR_production_plots as gpr_plots
+import GPR_calibration
 
 
 def run_kernel_sensitivity(
     all_voxel_wise_dose_df: pd.DataFrame,
     semivariogram_df: pd.DataFrame,
     output_dir: Path,
+    figs_dir: Path,
+    csv_dir: Path,
     target_stat: str = "median",
     kernel_specs: Iterable[Tuple[str, float | None, str]] | None = None,
     file_types: tuple[str, ...] = ("pdf", "svg"),
     position_mode: str = "center",
+    kernel_color_map: dict[str, str] | None = None,
 ):
     """
     Run the GP+metrics pipeline for a list of kernels and aggregate results.
@@ -52,15 +56,11 @@ def run_kernel_sensitivity(
     kernel_specs = list(kernel_specs)
 
     all_metrics = []
-    output_dir = Path(output_dir)
-    figs_dir = output_dir / "figures"
-    csv_dir = output_dir / "csv"
-    figs_dir.mkdir(parents=True, exist_ok=True)
-    csv_dir.mkdir(parents=True, exist_ok=True)
+    all_calib = []
 
     for kernel_name, kernel_param, kernel_label in kernel_specs:
         print(f"Running kernel sensitivity for {kernel_label} ...")
-        _, metrics_df, cohort_summary_df, by_patient = gpr_helpers.run_gp_and_collect_metrics(
+        results, metrics_df, cohort_summary_df, by_patient = gpr_helpers.run_gp_and_collect_metrics(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
             semivariogram_df=semivariogram_df,
             output_dir=output_dir,
@@ -83,7 +83,30 @@ def run_kernel_sensitivity(
         cohort_summary_path = csv_dir / f"cohort_summary_{kernel_label}.csv"
         cohort_summary_df.to_csv(cohort_summary_path, index=False)
 
+        # Calibration metrics and figures per kernel
+        calib_df = GPR_calibration.build_calibration_metrics(
+            results,
+            mean_bounds=(-1.0, 1.0),
+            sd_bounds=(0.5, 1.5),
+        )
+        calib_df["kernel_label"] = kernel_label
+        calib_csv = csv_dir / f"calibration_metrics_{kernel_label}.csv"
+        calib_df.to_csv(calib_csv, index=False)
+        calib_fig_dir = figs_dir / f"calibration_{kernel_label}"
+        calib_fig_dir.mkdir(parents=True, exist_ok=True)
+        gpr_plots.calibration_plots_production(
+            calib_df=calib_df,
+            save_dir=calib_fig_dir,
+            save_formats=file_types,
+            mean_bounds=(-1.0, 1.0),
+            sd_bounds=(0.5, 1.5),
+            modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
+            kernel_color_map=kernel_color_map,
+        )
+        print(f"Saved calibration metrics to {calib_csv} and figures to {calib_fig_dir}")
+
         all_metrics.append(metrics_df)
+        all_calib.append(calib_df)
 
     if not all_metrics:
         print("No kernel specs provided; nothing to do.")
@@ -94,42 +117,70 @@ def run_kernel_sensitivity(
     combined_metrics.to_csv(combined_path, index=False)
     print(f"Saved combined kernel metrics to {combined_path}")
 
-    # Plots
+    # Combined calibration overlays across kernels
     try:
-        for index, plot_type in enumerate((("histogram"), ("histogram", "kde"), ("kde"))):
+        if all_calib:
+            combined_calib = pd.concat(all_calib, ignore_index=True)
+            calib_all_dir = figs_dir / "calibration_all"
+            calib_all_dir.mkdir(parents=True, exist_ok=True)
+            gpr_plots.calibration_plots_production(
+                calib_df=combined_calib,
+                save_dir=calib_all_dir,
+                save_formats=file_types,
+                mean_bounds=(-1.0, 1.0),
+                sd_bounds=(0.5, 1.5),
+                modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
+                hue_col="kernel_label",
+                kernel_color_map=kernel_color_map,
+            )
+            combined_calib_path = csv_dir / "calibration_metrics_all.csv"
+            combined_calib.to_csv(combined_calib_path, index=False)
+            print(f"Saved combined calibration metrics to {combined_calib_path} and overlay figures to {calib_all_dir}")
+    except Exception as e:
+        print(f"Warning: could not generate combined calibration overlays: {e}")
+
+    # Plots
+    mode_list = [("histogram",), ("histogram", "kde"), ("kde",)]
+
+    try:
+        for plot_type in mode_list:
+            suffix = "_".join(plot_type)
             gpr_plots.plot_kernel_sensitivity_histogram(
                 combined_metrics,
                 value_col="ell",
                 y_label=r"$\ell$ (mm)",
                 save_dir=figs_dir,
-                file_name_base=f"kernel_sensitivity_ell_{index}",
+                file_name_base=f"kernel_sensitivity_ell_{suffix}",
                 file_types=file_types,
                 show_title=False,
                 modes=plot_type,
                 kde_bw_scale=None, # it will use Scott's rule by default
                 legend_fontsize =12,
+                kernel_color_map=kernel_color_map,
             )
-        print("Plotted kernel sensitivity ell boxplot. Save figures to", figs_dir)
+        print("Plotted kernel sensitivity ell hist/KDE. Save figures to", figs_dir)
     except Exception as e:
-        print(f"Warning: could not plot ell boxplot: {e}")
+        print(f"Warning: could not plot ell histogram: {e}")
 
     try:
-        for index, plot_type in enumerate((("histogram"), ("histogram", "kde"), ("kde"))):
+        for plot_type in mode_list:
+            suffix = "_".join(plot_type)
             gpr_plots.plot_kernel_sensitivity_histogram(
                 combined_metrics,
                 value_col="mean_ratio",
                 y_label="Mean uncertainty reduction ratio",
                 save_dir=figs_dir,
-                file_name_base=f"kernel_sensitivity_mean_ratio_{index}",
+                file_name_base=f"kernel_sensitivity_mean_ratio_{suffix}",
                 file_types=file_types,
                 show_title=False,
                 modes=plot_type,
                 kde_bw_scale=None, # it will use Scott's rule by default
                 legend_fontsize =12,     
+                kernel_color_map=kernel_color_map,
             )
-        print("Plotted kernel sensitivity mean_ratio boxplot. Save figures to", figs_dir)
+        print("Plotted kernel sensitivity mean_ratio hist/KDE. Save figures to", figs_dir)
     except Exception as e:
-        print(f"Warning: could not plot mean_ratio boxplot: {e}")
+        print(f"Warning: could not plot mean_ratio histogram: {e}")
 
     try:
         gpr_plots.plot_kernel_sensitivity_scatter(
@@ -142,6 +193,7 @@ def run_kernel_sensitivity(
             file_name_base="kernel_sensitivity_ratio_scatter",
             file_types=file_types,
             show_title=False,
+            kernel_color_map=kernel_color_map,
         )
         print("Plotted kernel sensitivity ratio scatter plot. Save figures to", figs_dir)
     except Exception as e:
@@ -153,26 +205,28 @@ def run_kernel_sensitivity(
             save_dir=figs_dir,
             file_name_base="kernel_sensitivity_mean_sd_scatter_with_fits",
             file_types=file_types,
+            kernel_color_map=kernel_color_map,
         )
         print("Plotted kernel sensitivity mean/SD fits. Save figures to", figs_dir)
     except Exception as e:
         print(f"Warning: could not plot kernel sensitivity mean/SD fits: {e}")
 
     try:
-        for index, plot_type in enumerate((("histogram"), ("histogram", "kde"), ("kde"))):
+        for plot_type in mode_list:
+            suffix = "_".join(plot_type)
             gpr_plots.plot_kernel_sensitivity_histogram(
                 combined_metrics,
                 value_col="sv_rmse",
                 y_label=r"Semivariogram RMSE",
                 save_dir=figs_dir,
-                file_name_base=f"kernel_sensitivity_sv_rmse_{index}",
+                file_name_base=f"kernel_sensitivity_sv_rmse_{suffix}",
                 file_types=file_types,
                 show_title=False,
                 modes=plot_type,
                 kde_bw_scale=None, # it will use Scott's rule by default
                 legend_fontsize =12,
             )
-        print("Plotted kernel sensitivity sv_rmse histogram. Save figures to", figs_dir)
+        print("Plotted kernel sensitivity sv_rmse hist/KDE. Save figures to", figs_dir)
     except Exception as e:
         print(f"Warning: could not plot sv_rmse histogram: {e}")
 

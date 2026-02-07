@@ -840,6 +840,7 @@ def plot_kernel_sensitivity_histogram(
     legend_fontsize: int | None = None,
     modes: Sequence[str] = ("histogram",),
     kde_bw_scale: float | None = None,
+    kernel_color_map: dict[str, str] | None = None,
 ):
     """
     Histogram of a metric (e.g., ell, mean_ratio) grouped by kernel_label.
@@ -865,6 +866,16 @@ def plot_kernel_sensitivity_histogram(
     df["kernel_pretty"] = df["kernel_label"].map(KERNEL_LABEL_MAP).fillna(df["kernel_label"])
     kernels = list(pd.unique(df["kernel_pretty"].dropna()))
     data = [df.loc[df["kernel_pretty"] == k, value_col].dropna() for k in kernels]
+    # Map colors per kernel using provided map (by kernel_label) with palette fallback
+    fallback_colors = iter(KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1))
+    kernel_colors = {}
+    for k_pretty in kernels:
+        label_vals = df.loc[df["kernel_pretty"] == k_pretty, "kernel_label"]
+        base_label = label_vals.iloc[0] if not label_vals.empty else None
+        color = kernel_color_map.get(base_label) if kernel_color_map and base_label else None
+        if color is None:
+            color = next(fallback_colors)
+        kernel_colors[k_pretty] = color
     all_vals = pd.concat(data) if len(data) else pd.Series([], dtype=float)
     # Compute per-kernel FD bin widths, then share a common width across kernels
     kernel_bin_widths = []
@@ -894,7 +905,6 @@ def plot_kernel_sensitivity_histogram(
         fs_label = _fs_label(label_fontsize)
         fs_tick = _fs_tick(tick_fontsize)
         handles, labels = [], []
-        colors = KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1)
         # Pre-compute KDE bandwidth factor (shared)
         bw_method = None
         kde_bw_disp = None
@@ -917,7 +927,8 @@ def plot_kernel_sensitivity_histogram(
         else:
             bin_width = float(np.nanmean(np.diff(bins))) if len(bins) > 1 else 1.0
 
-        for k, vals, color in zip(kernels, data, colors):
+        for k, vals in zip(kernels, data):
+            color = kernel_colors[k]
             vals_arr = vals.to_numpy(dtype=float)
             vals_arr = vals_arr[np.isfinite(vals_arr)]
             if "histogram" in modes:
@@ -939,26 +950,22 @@ def plot_kernel_sensitivity_histogram(
                     kde = stats.gaussian_kde(vals_arr, bw_method=bw_method)
                     xs = np.linspace(vals_arr.min(), vals_arr.max(), 300)
                     yk = kde(xs) * len(vals_arr) * bin_width  # scale density to match count axis
-                    line, = ax.plot(xs, yk, color=color, lw=1.4, label=f"{k} KDE")
+                    line, = ax.plot(xs, yk, color=color, lw=1.4, label=f"{k}")
                     handles.append(line)
-                    labels.append(f"{k} KDE")
+                    labels.append(f"{k}")
                     if kde_bw_disp is None:
                         kde_bw_disp = float(kde.factor * np.std(vals_arr, ddof=1))
                 except Exception:
                     print(f"[kernel_sensitivity_histogram] KDE failed for {k}")
 
-    if file_name_base == "kernel_sensitivity_ell":
-        ax.set_xlabel(r"$\widehat{\ell}_b$ (mm)", fontsize=fs_label)
-        ax.set_ylabel("Count", fontsize=fs_label)
-    elif file_name_base == "kernel_sensitivity_mean_ratio":
-        ax.set_xlabel("Mean voxelwise shrinkage ratio", fontsize=fs_label)
-        ax.set_ylabel("Count", fontsize=fs_label)
-    elif file_name_base == "kernel_sensitivity_sv_rmse":
-        ax.set_xlabel(r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)", fontsize=fs_label)
-        ax.set_ylabel("Count", fontsize=fs_label)
-    else:
-        ax.set_xlabel("Value", fontsize=fs_label)
-        ax.set_ylabel("Count", fontsize=fs_label)
+    xlabels = {
+        "kernel_sensitivity_ell": r"$\widehat{\ell}_b$ (mm)",
+        "kernel_sensitivity_mean_ratio": r"Mean voxelwise shrinkage ratio $\overline{R}_{b,v}$",
+        "kernel_sensitivity_sv_rmse": r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)",
+    }
+    xlabel = xlabels.get(file_name_base, y_label if y_label else "Value")
+    ax.set_xlabel(xlabel, fontsize=fs_label)
+    ax.set_ylabel("Number of biopsies", fontsize=fs_label)
 
     ax.tick_params(axis="both", labelsize=fs_tick)
     _apply_axis_style(ax)
@@ -1012,6 +1019,7 @@ def plot_kernel_sensitivity_scatter(
     label_fontsize: int | None = None,
     tick_fontsize: int | None = None,
     title_fontsize: int | None = None,
+    kernel_color_map: dict[str, str] | None = None,
 ):
     """
     Scatter plot of two metrics colored by kernel_label.
@@ -1032,14 +1040,27 @@ def plot_kernel_sensitivity_scatter(
 
     df = metrics_df.copy()
     df["kernel_pretty"] = df["kernel_label"].map(KERNEL_LABEL_MAP).fillna(df["kernel_label"])
+    label_unique = list(df["kernel_label"].dropna().unique())
+    fallback_colors = iter(KERNEL_PALETTE * ((len(label_unique) // len(KERNEL_PALETTE)) + 1))
+    label_to_color = {}
+    for lab in label_unique:
+        color = kernel_color_map.get(lab) if kernel_color_map else None
+        if color is None:
+            color = next(fallback_colors)
+        label_to_color[lab] = color
+
     kernels = list(df["kernel_pretty"].dropna().unique())
-    color_cycle = KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1)
+    extra_colors = iter(KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1))
 
     fig, ax = plt.subplots(figsize=figsize)
     fs_label = _fs_label(label_fontsize)
     fs_tick = _fs_tick(tick_fontsize)
-    for k, color in zip(kernels, color_cycle):
+    for k in kernels:
         subset = df.loc[df["kernel_pretty"] == k]
+        base_label = subset["kernel_label"].iloc[0] if not subset.empty else None
+        color = label_to_color.get(base_label)
+        if color is None:
+            color = next(extra_colors)
         ax.scatter(
             subset[x_col],
             subset[y_col],
@@ -1313,6 +1334,7 @@ def plot_residuals_vs_z_production(
     dpi: int = 400,
     standardized: bool = False,
     xlim: tuple | None = None,
+    title_label: str | None = None,
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
@@ -1351,7 +1373,9 @@ def plot_residuals_vs_z_production(
     _apply_per_biopsy_ticks(ax)
     mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
     metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=1, header_loc="center", header_fontsize=None)
+    _finalize_legend_and_header(ax, header=metrics_str, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
@@ -1370,6 +1394,7 @@ def plot_standardized_residuals_hist_production(
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
     dpi: int = 400,
+    title_label: str | None = None,
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
@@ -1411,24 +1436,27 @@ def plot_standardized_residuals_hist_production(
     _apply_per_biopsy_ticks(ax)
     bin_width = float(np.nanmean(np.diff(edges))) if edges.size > 1 else np.nan
     s = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else np.nan
-    ann = "\n".join([
-        rf"$\mathrm{{mean}} = {m:.2f}\;\mathrm{{(red\,line)}}$",
+    ann = ", ".join([
+        rf"$\mathrm{{mean}} = {m:.2f}$",
         rf"$\mathrm{{SD}} = {s:.2f}$",
         rf"$\mathrm{{bin\ width}} = {bin_width:.3f}$",
     ])
-    ax.text(
-        0.98,
-        0.92,
-        ann,
-        ha="right",
-        va="top",
-        transform=ax.transAxes,
-        fontsize=_fs_legend(),
-        bbox=ANNOT_BBOX,
+    handles, labels = ax.get_legend_handles_labels()
+    _finalize_legend_and_header(
+        ax,
+        header=ann,
+        ncol=len(handles) if handles else 1,
+        header_loc="center",
+        header_fontsize=_fs_legend(),
+        handles=handles if handles else None,
+        labels=labels if labels else None,
+        legend_width_mode="axes",
+        expand_figure=False,
     )
     mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=1, header_loc="center", header_fontsize=None)
+    # Title top-left above plot
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
@@ -1447,6 +1475,7 @@ def plot_standardized_residuals_qq_production(
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
     dpi: int = 400,
+    title_label: str | None = None,
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
@@ -1487,7 +1516,9 @@ def plot_standardized_residuals_qq_production(
     _apply_per_biopsy_ticks(ax)
     mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
     metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="center", header_fontsize=None)
+    _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
@@ -1506,6 +1537,7 @@ def plot_standardized_residuals_ecdf_production(
     seaborn_style: str = "white",
     seaborn_context: str = "paper",
     dpi: int = 400,
+    title_label: str | None = None,
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
@@ -1526,7 +1558,9 @@ def plot_standardized_residuals_ecdf_production(
     _apply_per_biopsy_ticks(ax)
     mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
     metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="center", header_fontsize=None)
+    _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
     # layout handled by _finalize_legend_and_header (figure height expansion)
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
@@ -1546,6 +1580,7 @@ def plot_residuals_production(
     seaborn_context: str = "paper",
     dpi: int = 400,
     title_on: bool = True,
+    title_label: str | None = None,
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
@@ -1588,7 +1623,7 @@ def plot_residuals_production(
     _apply_axis_style(axes[1])
     _apply_per_biopsy_ticks(axes[1])
     if title_on:
-        ax0_title = f"P{patient_id} Bx{bx_index}"
+        ax0_title = title_label if title_label else f"P{patient_id} Bx{bx_index}"
         axes[0].text(0.0, 1.02, ax0_title, transform=axes[0].transAxes, ha="left", va="bottom", fontsize=_fs_title())
     mean_rs = float(np.nanmean(res / np.maximum(sd_X, 1e-12)))
     std_rs = float(np.nanstd(res / np.maximum(sd_X, 1e-12)))
@@ -2157,7 +2192,7 @@ def cohort_plots_production(
         ax.set_xlabel(xlabel, fontsize=_fs_label())
         ax.set_ylabel("Number of biopsies", fontsize=_fs_label())
         med = float(np.nanmedian(data)) if data.size else np.nan
-        ax.axvline(med, color="red", lw=0.9, ls="-")
+        ax.axvline(med, color="red", lw=0.9, ls="-", label="Median")
         unit_txt = f"\\ \\mathrm{{{unit_label}}}" if unit_label else ""
         # Format selection: median/bin width shown to two decimals (per request)
         if unit_label == "mm":
@@ -2171,24 +2206,26 @@ def cohort_plots_production(
             med_fmt = "{:.2f}"
         bw_txt = f"\\mathrm{{bin\\ width}} = {bw_fmt.format(bin_width)}{unit_txt}" if np.isfinite(bin_width) else "\\mathrm{bin\\ width}=nan"
         med_txt = (
-            f"\\mathrm{{median}}({var_label}) = {med_fmt.format(med)}{unit_txt} \\;\\text{{(red\\ line)}}"
+            f"\\mathrm{{median}}({var_label}) = {med_fmt.format(med)}{unit_txt}"
             if np.isfinite(med)
             else f"\\mathrm{{median}}({var_label})=nan"
         )
-        ann_lines = [
+        header_text = ", ".join([
             rf"$n={data.size}$",
             rf"${med_txt}$",
             rf"${bw_txt}$",
-        ]
-        ax.text(
-            0.98,
-            0.95,
-            "\n".join(ann_lines),
-            ha="right",
-            va="top",
-            transform=ax.transAxes,
-            fontsize=_fs_legend(),
-            bbox=ANNOT_BBOX,
+        ])
+        handles, labels = ax.get_legend_handles_labels()
+        _finalize_legend_and_header(
+            ax,
+            header=header_text,
+            ncol=len(handles) if handles else 1,
+            header_loc="center",
+            header_fontsize=_fs_legend(),
+            handles=handles if handles else None,
+            labels=labels if labels else None,
+            legend_width_mode="axes",
+            expand_figure=False,
         )
         ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=6))
         ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
@@ -2265,6 +2302,299 @@ def cohort_plots_production(
     fig.tight_layout()
     _save_figure(fig, save_dir / "cohort_mean_sd_scatter", formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
 
+
+# ----------------------------------------------------------------------
+# CALIBRATION PLOTS
+# ----------------------------------------------------------------------
+def calibration_plots_production(
+    calib_df: pd.DataFrame,
+    save_dir: Path,
+    save_formats=("pdf", "svg"),
+    font_scale: float = 1.0,
+    seaborn_style: str = "white",
+    seaborn_context: str = "paper",
+    dpi: int = 400,
+    mean_bounds: tuple[float, float] = (-1.0, 1.0),
+    sd_bounds: tuple[float, float] = (0.5, 1.5),
+    modes: Sequence[str] = ("histogram", "kde"),
+    modes_list: Sequence[Sequence[str] | str] | None = None,
+    kde_bw_scale: float | None = None,
+    hue_col: str | None = None,
+    kernel_color_map: dict[str, str] | None = None,
+):
+    """
+    Produce publication-ready calibration diagnostics from per-biopsy calibration metrics.
+    Expected columns in calib_df:
+      mean_resstd, std_resstd, pct_abs_le1, pct_abs_le2
+    """
+    _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    def _calib_hist(series, xlabel, fname, target_line, target_label, caption, modes_use, as_percent: bool = False):
+        # Optional grouping (e.g., overlay kernels)
+        groups = []
+        if hue_col and hue_col in calib_df.columns:
+            tmp = calib_df[[hue_col, series.name]].dropna().copy()
+            if hue_col == "kernel_label":
+                tmp["_hue_pretty"] = tmp[hue_col].map(KERNEL_LABEL_MAP).fillna(tmp[hue_col])
+                group_key = "_hue_pretty"
+            else:
+                group_key = hue_col
+            for key, sub in tmp.groupby(group_key):
+                arr = sub[series.name].to_numpy(dtype=float)
+                arr = arr[np.isfinite(arr)]
+                label_val = sub[hue_col].iloc[0] if not sub.empty else None
+                groups.append((str(key), arr, label_val))
+            # stable order
+            groups = sorted(groups, key=lambda t: t[0])
+        else:
+            arr = series.dropna().to_numpy(dtype=float)
+            arr = arr[np.isfinite(arr)]
+            groups.append(("All", arr, None))
+
+        pooled = np.concatenate([g[1] for g in groups]) if groups else np.array([])
+        fig, ax = plt.subplots(figsize=COHORT_WIDE_FIGSIZE)
+        bins = _fd_bins(pooled, min_bins=None, max_bins=None, context=fname) if pooled.size else 10
+        # mean bin width
+        if np.isscalar(bins):
+            data_min = float(np.nanmin(pooled)) if pooled.size else 0.0
+            data_max = float(np.nanmax(pooled)) if pooled.size else 1.0
+            span = data_max - data_min
+            bin_width = span / bins if (bins and span > 0) else 1.0
+        else:
+            bin_width = float(np.nanmean(np.diff(bins))) if len(bins) > 1 else 1.0
+
+        # KDE bandwidth (Scott's rule scaled)
+        kde_bw_disp = None
+        bw_method = None
+        if "kde" in modes_use and pooled.size:
+            try:
+                pooled_kde = stats.gaussian_kde(pooled[np.isfinite(pooled)])
+                base_factor = pooled_kde.factor
+                factor = kde_bw_scale if kde_bw_scale is not None else 1.0
+                pooled_bw = base_factor * factor
+                def _pooled_bw_method(kde_obj):
+                    return pooled_bw
+                bw_method = _pooled_bw_method
+                kde_bw_disp = pooled_bw * np.std(pooled[np.isfinite(pooled)], ddof=1)
+            except Exception:
+                bw_method = None
+                kde_bw_disp = None
+
+        modes_use = (modes_use,) if isinstance(modes_use, str) else modes_use
+        handles, labels = [], []
+        fallback_colors = iter(KERNEL_PALETTE * ((len(groups) // len(KERNEL_PALETTE)) + 1))
+        group_colors = []
+        for _, _, label_val in groups:
+            color = kernel_color_map.get(label_val) if kernel_color_map and label_val else None
+            if color is None:
+                color = next(fallback_colors)
+            group_colors.append(color)
+        for (glabel, gvals, _label), color in zip(groups, group_colors):
+            if "histogram" in modes_use:
+                h = ax.hist(
+                    gvals,
+                    bins=bins,
+                    histtype="step",
+                    color=color,
+                    edgecolor=color,
+                    linewidth=1.1,
+                    alpha=1.0,
+                    label=glabel,
+                )
+                if len(h) >= 3:
+                    handles.append(h[2][0]); labels.append(glabel)
+            if "kde" in modes_use and gvals.size:
+                try:
+                    kde = stats.gaussian_kde(gvals, bw_method=bw_method)
+                    xs = np.linspace(np.nanmin(gvals), np.nanmax(gvals), 300)
+                    yk = kde(xs) * len(gvals) * bin_width
+                    line, = ax.plot(xs, yk, color=color, lw=1.4, label=f"{glabel}")
+                    handles.append(line); labels.append(f"{glabel}")
+                except Exception:
+                    pass
+        if target_line is not None:
+            vline = ax.axvline(target_line, color="red", lw=1.0, ls="-", label=target_label or "Target")
+            handles.append(vline); labels.append(target_label or "Target")
+        ax.set_xlabel(xlabel, fontsize=_fs_label())
+        ax.set_ylabel("Number of biopsies", fontsize=_fs_label())
+        _apply_axis_style(ax)
+        _apply_per_biopsy_ticks(ax)
+        n = pooled.size
+        mean_val = float(np.nanmean(pooled)) if n else np.nan
+        median_val = float(np.nanmedian(pooled)) if n else np.nan
+        if as_percent:
+            mean_str = rf"$\mathrm{{mean}} = {mean_val:.1f}\%$"
+            median_str = rf"$\mathrm{{median}} = {median_val:.1f}\%$"
+        else:
+            mean_str = rf"$\mathrm{{mean}} = {mean_val:.2f}$"
+            median_str = rf"$\mathrm{{median}} = {median_val:.2f}$"
+        # Build header: overlays (hue) show only KDE bandwidth; single-group shows summary + bw
+        header_parts = []
+        if hue_col and hue_col in calib_df.columns:
+            if "kde" in modes_use and kde_bw_disp is not None and np.isfinite(kde_bw_disp):
+                header_parts.append(rf"$\mathrm{{KDE\ bw}} = {kde_bw_disp:.3g}$")
+        else:
+            header_parts.extend([rf"$n={n}$", mean_str, median_str])
+            if "kde" in modes_use and kde_bw_disp is not None and np.isfinite(kde_bw_disp):
+                header_parts.append(rf"$\mathrm{{KDE\ bw}} = {kde_bw_disp:.3g}$")
+            if "histogram" in modes_use and np.isfinite(bin_width):
+                header_parts.append(rf"$\mathrm{{bin\ width}} = {bin_width:.3g}$")
+        header_text = ", ".join(header_parts) if header_parts else None
+        if not handles and not labels:
+            handles = labels = None
+        _finalize_legend_and_header(
+            ax,
+            header=header_text,
+            ncol=len(handles) if handles else 1,
+            header_loc="center",
+            header_fontsize=_fs_legend(),
+            handles=handles if handles else None,
+            labels=labels if labels else None,
+            legend_width_mode="axes",
+            expand_figure=False,
+        )
+        fig.tight_layout()
+        _save_figure(fig, save_dir / fname, formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
+
+    modes_iter = modes_list if modes_list is not None else [modes]
+
+    for modes_use in modes_iter:
+        mode_suffix = "_".join(modes_use) if isinstance(modes_use, (list, tuple)) else str(modes_use)
+        _calib_hist(
+            calib_df["mean_resstd"],
+            r"Mean standardized residual $\mathrm{mean}(r^{\mathrm{std}}_{b,v})$",
+            f"calib_hist_mean_resstd_{mode_suffix}",
+            target_line=0.0,
+            target_label=None,
+            caption="Means cluster near 0 → little systematic bias.",
+            modes_use=modes_use,
+        )
+        _calib_hist(
+            calib_df["std_resstd"],
+            r"SD of standardized residuals $\mathrm{sd}(r^{\mathrm{std}}_{b,v})$",
+            f"calib_hist_sd_resstd_{mode_suffix}",
+            target_line=1.0,
+            target_label=None,
+            caption="SD near 1 → predictive variances on the right scale.",
+            modes_use=modes_use,
+        )
+        _calib_hist(
+            calib_df["pct_abs_le1"],
+            r"Coverage within 1 SD (%)",
+            f"calib_hist_cov_le1_{mode_suffix}",
+            target_line=68.0,
+            target_label="Nominal 68%",
+            caption="",
+            modes_use=modes_use,
+            as_percent=True,
+        )
+        _calib_hist(
+            calib_df["pct_abs_le2"],
+            r"Coverage within 2 SD (%)",
+            f"calib_hist_cov_le2_{mode_suffix}",
+            target_line=95.0,
+            target_label="Nominal 95%",
+            caption="",
+            modes_use=modes_use,
+            as_percent=True,
+        )
+
+    # Optional compact scatter: mean vs SD with ideal point
+    if {"mean_resstd", "std_resstd"}.issubset(calib_df.columns) and not calib_df.empty:
+        has_kernel = "kernel_label" in calib_df.columns and calib_df["kernel_label"].notna().any()
+        fig, ax = plt.subplots(figsize=COHORT_SQUARE_FIGSIZE)
+
+        if has_kernel:
+            kernel_labels = list(pd.unique(calib_df["kernel_label"].dropna()))
+            fallback_colors = iter(KERNEL_PALETTE * ((len(kernel_labels) // len(KERNEL_PALETTE)) + 1))
+            label_to_color = {}
+            for lab in kernel_labels:
+                color = kernel_color_map.get(lab) if kernel_color_map else None
+                if color is None:
+                    color = next(fallback_colors)
+                label_to_color[lab] = color
+
+            acceptable_by_kernel = []
+            n_total = 0
+            for lab in kernel_labels:
+                sub = calib_df.loc[calib_df["kernel_label"] == lab]
+                x = sub["mean_resstd"].to_numpy(dtype=float)
+                y = sub["std_resstd"].to_numpy(dtype=float)
+                msk = np.isfinite(x) & np.isfinite(y)
+                x, y = x[msk], y[msk]
+                if not x.size:
+                    continue
+                n_total += x.size
+                color = label_to_color.get(lab, next(fallback_colors))
+                pretty = KERNEL_LABEL_MAP.get(lab, lab)
+                ax.scatter(x, y, s=22, alpha=0.85, color=color, edgecolors="white", linewidths=0.4, label=pretty, zorder=3)
+                if "acceptable" in sub.columns:
+                    acc = sub.loc[msk, "acceptable"].to_numpy(dtype=float)
+                    if acc.size:
+                        pct = float(np.nanmean(acc) * 100.0)
+                        if np.isfinite(pct):
+                            acceptable_by_kernel.append((lab, pct))
+            header_parts = []
+            if acceptable_by_kernel:
+                short_names = {
+                    "matern_nu_1_5": "M3/2",
+                    "matern_nu_2_5": "M5/2",
+                    "rbf": "RBF",
+                    "exp": "Exp",
+                }
+                per_kernel_text = ", ".join(
+                    f"{pct:.1f}\%\ ({short_names.get(lab, lab)})"
+                    for lab, pct in acceptable_by_kernel
+                )
+                header_parts.append(rf"$\mathrm{{Near\ ideal}}:\ {per_kernel_text}$")
+            header_text = ", ".join(header_parts) if header_parts else None
+        else:
+            x = calib_df["mean_resstd"].to_numpy(float)
+            y = calib_df["std_resstd"].to_numpy(float)
+            msk = np.isfinite(x) & np.isfinite(y)
+            x, y = x[msk], y[msk]
+            ax.scatter(x, y, s=22, alpha=0.85, color=PRIMARY_LINE_COLOR, edgecolors="white", linewidths=0.4, label="Biopsies", zorder=3)
+            acceptable_pct = float(np.nanmean(calib_df.get("acceptable", np.nan)) * 100.0) if "acceptable" in calib_df.columns else float("nan")
+            header_parts = [rf"$n={x.size}$"]
+            if np.isfinite(acceptable_pct):
+                header_parts.append(rf"$\mathrm{{Near\ ideal}} = {acceptable_pct:.1f}\%$")
+            header_text = ", ".join(header_parts) if header_parts else None
+
+        ax.axvline(0.0, color="black", lw=0.9, ls="--", alpha=0.7, label="Mean=0", zorder=1)
+        ax.axhline(1.0, color="black", lw=0.9, ls="--", alpha=0.7, label="SD=1", zorder=1)
+        ax.scatter([0], [1], color="#c70000", s=40, marker="*", label="Ideal (0,1)", zorder=4)
+        # Acceptable region from bounds
+        rect = mpl.patches.Rectangle(
+            (mean_bounds[0], sd_bounds[0]),
+            width=mean_bounds[1] - mean_bounds[0],
+            height=sd_bounds[1] - sd_bounds[0],
+            linewidth=1.6,
+            edgecolor="black",
+            facecolor="#1b8a5a",
+            alpha=0.10,
+            label="Near ideal region",
+        )
+        ax.add_patch(rect)
+        ax.set_xlabel(r"Mean $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+        ax.set_ylabel(r"SD $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+        _apply_axis_style(ax)
+        _apply_per_biopsy_ticks(ax)
+        handles, labels = ax.get_legend_handles_labels()
+        _finalize_legend_and_header(
+            ax,
+            header=header_text,
+            ncol=len(handles) if handles else 1,
+            header_loc="center",
+            header_fontsize=_fs_legend(),
+            handles=handles if handles else None,
+            labels=labels if labels else None,
+            legend_width_mode="axes",
+            expand_figure=False,
+        )
+        fig.tight_layout()
+        _save_figure(fig, save_dir / "calib_scatter_mean_vs_sd", formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
 
 def plot_mean_sd_scatter_with_fits_production(
     metrics_df: pd.DataFrame,
@@ -2415,6 +2745,7 @@ def plot_kernel_sensitivity_mean_sd_with_fits(
     deming_ci_bootstrap: int = 500,
     deming_ci_alpha: float = 0.05,
     legend_fontsize: int | None = 10,
+    kernel_color_map: dict[str, str] | None = None,
 ):
     """
     Kernel sensitivity version of mean_sd scatter with Deming fits + CIs per kernel.
@@ -2434,11 +2765,21 @@ def plot_kernel_sensitivity_mean_sd_with_fits(
     fig, ax = plt.subplots(figsize=COHORT_SQUARE_FIGSIZE)
 
     kernels = list(metrics_df["kernel_label"].dropna().unique())
-    colors = KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1)
+    fallback_colors = iter(KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1))
+    label_to_color = {}
+    for k in kernels:
+        color = kernel_color_map.get(k) if kernel_color_map else None
+        if color is None:
+            color = next(fallback_colors)
+        label_to_color[k] = color
     lim_hi_candidates = []
     scatter_handles, fit_handles, ci_handles = [], [], []
 
-    for k, color in zip(kernels, colors):
+    extra_colors = iter(KERNEL_PALETTE * ((len(kernels) // len(KERNEL_PALETTE)) + 1))
+    for k in kernels:
+        color = label_to_color.get(k)
+        if color is None:
+            color = next(extra_colors)
         sub = metrics_df.loc[metrics_df["kernel_label"] == k].copy()
         sub["kernel_pretty"] = sub["kernel_label"].map(KERNEL_LABEL_MAP).fillna(sub["kernel_label"])
         x = sub["mean_indep_sd"].to_numpy(dtype=float)
@@ -2677,6 +3018,7 @@ def make_patient_level_gpr_plots(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        title_label=title_label,
     )
     plot_residuals_vs_z_production(
         gp_res, patient_id, bx_index,
@@ -2687,6 +3029,7 @@ def make_patient_level_gpr_plots(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        title_label=title_label,
     )
     plot_standardized_residuals_hist_production(
         gp_res, patient_id, bx_index,
@@ -2696,6 +3039,7 @@ def make_patient_level_gpr_plots(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        title_label=title_label,
     )
     plot_standardized_residuals_qq_production(
         gp_res, patient_id, bx_index,
@@ -2705,6 +3049,7 @@ def make_patient_level_gpr_plots(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        title_label=title_label,
     )
     plot_standardized_residuals_ecdf_production(
         gp_res, patient_id, bx_index,
@@ -2714,6 +3059,7 @@ def make_patient_level_gpr_plots(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        title_label=title_label,
     )
     plot_variogram_overlay_production(
         semivariogram_df, patient_id, bx_index, gp_res["hyperparams"],
