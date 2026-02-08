@@ -2606,11 +2606,11 @@ def calibration_plots_production(
         header_parts = []
         if hue_col and hue_col in calib_df.columns:
             if "kde" in modes_use and kde_bw_disp is not None and np.isfinite(kde_bw_disp):
-                header_parts.append(rf"$\mathrm{{KDE\ bw}} = {kde_bw_disp:.3g}$")
+                header_parts.append(rf"$\mathrm{{KDE\ bandwidth}} = {kde_bw_disp:.3g}$")
         else:
             header_parts.extend([rf"$n={n}$", mean_str, median_str])
             if "kde" in modes_use and kde_bw_disp is not None and np.isfinite(kde_bw_disp):
-                header_parts.append(rf"$\mathrm{{KDE\ bw}} = {kde_bw_disp:.3g}$")
+                header_parts.append(rf"$\mathrm{{KDE\ bandwidth}} = {kde_bw_disp:.3g}$")
             if "histogram" in modes_use and np.isfinite(bin_width):
                 header_parts.append(rf"$\mathrm{{bin\ width}} = {bin_width:.3g}$")
         header_text = ", ".join(header_parts) if header_parts else None
@@ -2654,7 +2654,7 @@ def calibration_plots_production(
         )
         _calib_hist(
             calib_df["pct_abs_le1"],
-            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\le 1$",
+            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 1$",
             f"calib_hist_cov_le1_{mode_suffix}",
             target_line=68.0,
             target_label=r"$1\,\sigma\ \mathrm{(68\%, ideal)}$",
@@ -2664,7 +2664,7 @@ def calibration_plots_production(
         )
         _calib_hist(
             calib_df["pct_abs_le2"],
-            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\le 2$",
+            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 2$",
             f"calib_hist_cov_le2_{mode_suffix}",
             target_line=95.0,
             target_label=r"$2\,\sigma\ \mathrm{(95\%, ideal)}$",
