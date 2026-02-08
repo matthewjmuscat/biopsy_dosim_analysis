@@ -622,6 +622,16 @@ def main():
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
             )
+            print(f"    [plots] Paired standardized residuals for Patient {patient_id}, Bx {bx_index}")
+            GPR_production_plots.plot_residuals_pair(
+                res,
+                patient_id,
+                bx_index,
+                save_dir=pair_dir,
+                file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}",
+                save_formats=("pdf", "svg"),
+                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+            )
             # give the list of plots produced in this print statement
             print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
             
