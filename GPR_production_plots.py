@@ -2636,38 +2636,38 @@ def calibration_plots_production(
         mode_suffix = "_".join(modes_use) if isinstance(modes_use, (list, tuple)) else str(modes_use)
         _calib_hist(
             calib_df["mean_resstd"],
-            r"Mean standardized residual $\mathrm{mean}(r^{\mathrm{std}}_{b,v})$",
+            r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v}$",
             f"calib_hist_mean_resstd_{mode_suffix}",
             target_line=0.0,
-            target_label=None,
+            target_label=r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v} = 0\ \mathrm{(ideal)}$",
             caption="Means cluster near 0 → little systematic bias.",
             modes_use=modes_use,
         )
         _calib_hist(
             calib_df["std_resstd"],
-            r"SD of standardized residuals $\mathrm{sd}(r^{\mathrm{std}}_{b,v})$",
+            r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v}$",
             f"calib_hist_sd_resstd_{mode_suffix}",
             target_line=1.0,
-            target_label=None,
+            target_label=r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v} = 1\ \mathrm{(ideal)}$",
             caption="SD near 1 → predictive variances on the right scale.",
             modes_use=modes_use,
         )
         _calib_hist(
             calib_df["pct_abs_le1"],
-            r"Coverage within 1 SD (%)",
+            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\le 1$",
             f"calib_hist_cov_le1_{mode_suffix}",
             target_line=68.0,
-            target_label="Nominal 68%",
+            target_label=r"$1\,\sigma\ \mathrm{(68\%, ideal)}$",
             caption="",
             modes_use=modes_use,
             as_percent=True,
         )
         _calib_hist(
             calib_df["pct_abs_le2"],
-            r"Coverage within 2 SD (%)",
+            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\le 2$",
             f"calib_hist_cov_le2_{mode_suffix}",
             target_line=95.0,
-            target_label="Nominal 95%",
+            target_label=r"$2\,\sigma\ \mathrm{(95\%, ideal)}$",
             caption="",
             modes_use=modes_use,
             as_percent=True,
