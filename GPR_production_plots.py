@@ -970,32 +970,22 @@ def plot_kernel_sensitivity_histogram(
     ax.tick_params(axis="both", labelsize=fs_tick)
     _apply_axis_style(ax)
     # Legend in the standardized style (above axes) matching ratio scatter
+    ann_lines = []
+    if "kde" in modes and kde_bw_disp is not None and np.isfinite(kde_bw_disp):
+        ann_lines.append(rf"$\mathrm{{KDE\ bandwidth}} = {kde_bw_disp:.3g}$")
+    if "histogram" in modes and bin_width is not None and np.isfinite(bin_width):
+        ann_lines.append(rf"$\mathrm{{bin\ width}} = {bin_width:.3g}$")
+    header_text = "\n".join(ann_lines) if ann_lines else None
+
     _finalize_legend_and_header(
         ax,
-        header=None,
+        header=header_text,
         ncol=len(handles) if handles else 1,
         header_loc="center",
         header_fontsize=_fs_legend(legend_fontsize),
         handles=handles if handles else None,
         labels=labels if labels else None,
     )
-
-    ann_lines = []
-    if "kde" in modes and kde_bw_disp is not None and np.isfinite(kde_bw_disp):
-        ann_lines.append(rf"$\mathrm{{KDE\ bandwidth}} = {kde_bw_disp:.3g}$")
-    if "histogram" in modes and bin_width is not None and np.isfinite(bin_width):
-        ann_lines.append(rf"$\mathrm{{bin\ width}} = {bin_width:.3g}$")
-    if ann_lines:
-        ax.text(
-            0.98,
-            0.95,
-            "\n".join(ann_lines),
-            ha="right",
-            va="top",
-            transform=ax.transAxes,
-            fontsize=_fs_annot(),
-            bbox=ANNOT_BBOX,
-        )
 
     saved_paths = _save_figure(fig, Path(save_dir) / file_name_base, formats=file_types, dpi=400, create_subdir_for_stem=False)
     print(f"[kernel_sensitivity_histogram] saved {file_name_base} -> {', '.join(map(str, saved_paths))}")
