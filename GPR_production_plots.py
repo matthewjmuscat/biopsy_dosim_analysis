@@ -1346,8 +1346,14 @@ def plot_residuals_vs_z_production(
     if standardized:
         res = np.divide(res, np.maximum(sd_X, 1e-12))
         y_label = r"Standardized residual $r^{\mathrm{std}}_{b,v}$"
+        mean_rs = float(np.nanmean(res))
+        sd_rs = float(np.nanstd(res, ddof=1)) if res.size > 1 else float("nan")
+        pct_le1 = float(np.nanmean(np.abs(res) <= 1.0) * 100.0) if res.size else float("nan")
     else:
         y_label = r"Residual $r_{b,v}$ (Gy)"
+        mean_rs = float(np.nanmean(res)) if res.size else float("nan")
+        sd_rs = float(np.nanstd(res, ddof=1)) if res.size > 1 else float("nan")
+        pct_le1 = float(np.nanmean(np.abs(res) <= np.nanmedian(sd_X)) * 100.0) if res.size else float("nan")
     fig, ax = plt.subplots(figsize=figsize)
     ax.axhline(0, color="black", lw=1.0, alpha=0.7)
     if standardized:
@@ -1371,9 +1377,20 @@ def plot_residuals_vs_z_production(
     ax.set_ylabel(y_label, fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
-    mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    _finalize_legend_and_header(ax, header=metrics_str, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
+    if standardized:
+        header = ", ".join([
+            rf"$\mathrm{{mean}} = {mean_rs:.2f}$",
+            rf"$\mathrm{{SD}} = {sd_rs:.2f}$",
+            rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$",
+        ])
+    else:
+        mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
+        median_abs_r = float(np.nanmedian(np.abs(res))) if res.size else float("nan")
+        header = ", ".join([
+            rf"$\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$",
+            rf"$\mathrm{{median}}\ |r_b| = {median_abs_r:.2f}$",
+        ])
+    _finalize_legend_and_header(ax, header=header, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
     title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
     ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
@@ -1436,17 +1453,18 @@ def plot_standardized_residuals_hist_production(
     _apply_per_biopsy_ticks(ax)
     bin_width = float(np.nanmean(np.diff(edges))) if edges.size > 1 else np.nan
     s = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else np.nan
-    ann = ", ".join([
-        rf"$\mathrm{{mean}} = {m:.2f}$",
-        rf"$\mathrm{{SD}} = {s:.2f}$",
-        rf"$\mathrm{{bin\ width}} = {bin_width:.3f}$",
+    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
+    pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
+    ann = "\n".join([
+        rf"$\mathrm{{mean}} = {m:.2f},\ \mathrm{{bin\ width}} = {bin_width:.3f}$",
+        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$, $|r^{{\mathrm{{std}}}}|\leq 2: {pct_le2:.1f}\%$",
     ])
     handles, labels = ax.get_legend_handles_labels()
     _finalize_legend_and_header(
         ax,
         header=ann,
         ncol=len(handles) if handles else 1,
-        header_loc="center",
+        header_loc="right",
         header_fontsize=_fs_legend(),
         handles=handles if handles else None,
         labels=labels if labels else None,
@@ -1515,8 +1533,19 @@ def plot_standardized_residuals_qq_production(
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
+    ks_stat = float(stats.kstest(res_std, "norm").statistic) if res_std.size else float("nan")
+    ks_p = float(stats.kstest(res_std, "norm").pvalue) if res_std.size else float("nan")
+    try:
+        ad_stat = float(stats.anderson(res_std, dist="norm").statistic) if res_std.size else float("nan")
+    except Exception:
+        ad_stat = float("nan")
+    header = ", ".join([
+        rf"$\mathrm{{mean}} = {float(np.nanmean(res_std)):.2f}$",
+        rf"$\mathrm{{KS}} = {ks_stat:.3f}$",
+        rf"$p_{{KS}} = {ks_p:.3f}$",
+        rf"$\mathrm{{AD}} = {ad_stat:.3f}$",
+    ])
+    _finalize_legend_and_header(ax, header=header, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
     title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
     ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
@@ -1556,9 +1585,15 @@ def plot_standardized_residuals_ecdf_production(
     ax.set_ylabel("Empirical CDF", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
-    mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
+    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
+    pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
+    pct_ge3 = float(np.nanmean(np.abs(res_std) >= 3.0) * 100.0) if res_std.size else float("nan")
+    median_abs = float(np.nanmedian(np.abs(res_std))) if res_std.size else float("nan")
+    header = "\n".join([
+        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%,\ |r^{{\mathrm{{std}}}}|\leq 2: {pct_le2:.1f}\%$",
+        rf"$|r^{{\mathrm{{std}}}}|\geq 3: {pct_ge3:.1f}\%,\ \mathrm{{median}}|r^{{\mathrm{{std}}}}| = {median_abs:.2f}$",
+    ])
+    _finalize_legend_and_header(ax, header=header, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
     title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
     ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     fig = ax.figure
@@ -1588,17 +1623,20 @@ def plot_residuals_production(
     y = gp_res["y"]
     mu_X = gp_res["mu_X"]
     sd_X = gp_res["sd_X"]
-    res = y - mu_X
+    res_std = (y - mu_X) / np.maximum(sd_X, 1e-12)
     fig, axes = plt.subplots(1, 2, figsize=figsize)
     axes[0].axhline(0, color="black", lw=1.0, alpha=0.6)
-    axes[0].plot(X, res, "o-", ms=4, lw=1.1, color=PRIMARY_LINE_COLOR)
+    for lvl, color in zip([1, 2, 3], ["#b0b0b0", "#c75000", "#7a5195"]):
+        axes[0].axhline(lvl, color=color, lw=0.9, ls="--", alpha=0.6)
+        axes[0].axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
+    axes[0].plot(X, res_std, "o-", ms=4, lw=1.1, color=PRIMARY_LINE_COLOR)
     axes[0].set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
-    axes[0].set_ylabel(r"$r_{b,v} = \widetilde{D}_{b,v} - \mu^{\mathrm{GP}}_{b,v}\ \text{(Gy)}$", fontsize=_fs_label())
+    axes[0].set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
     _apply_axis_style(axes[0])
     _apply_per_biopsy_ticks(axes[0])
 
     axes[1].hist(
-        res / np.maximum(sd_X, 1e-12),
+        res_std,
         bins=20,
         density=True,
         alpha=0.5,
@@ -1608,7 +1646,7 @@ def plot_residuals_production(
         histtype="stepfilled",
     )
     axes[1].hist(
-        res / np.maximum(sd_X, 1e-12),
+        res_std,
         bins=20,
         density=True,
         histtype="step",
@@ -1625,14 +1663,18 @@ def plot_residuals_production(
     if title_on:
         ax0_title = title_label if title_label else f"P{patient_id} Bx{bx_index}"
         axes[0].text(0.0, 1.02, ax0_title, transform=axes[0].transAxes, ha="left", va="bottom", fontsize=_fs_title())
-    mean_rs = float(np.nanmean(res / np.maximum(sd_X, 1e-12)))
-    std_rs = float(np.nanstd(res / np.maximum(sd_X, 1e-12)))
+    mean_rs = float(np.nanmean(res_std))
+    std_rs = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
+    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
+    pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
     axes[1].text(
         0.98,
         0.95,
         "\n".join([
             f"mean={mean_rs:.2f}",
             f"sd={std_rs:.2f}",
+            f"|r_std|<=1: {pct_le1:.1f}%",
+            f"|r_std|<=2: {pct_le2:.1f}%",
         ]),
         ha="right",
         va="top",
@@ -2157,6 +2199,136 @@ def plot_uncertainty_pair(
     for ax in axes:
         ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
     # Ensure no figure-level suptitle remains
+    fig = ax.figure
+    if hasattr(fig, "_suptitle") and fig._suptitle:
+        fig._suptitle.remove()
+        fig._suptitle = None
+
+    return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
+
+
+def plot_residuals_pair(
+    gp_res: dict,
+    patient_id,
+    bx_index,
+    *,
+    save_dir: Path,
+    file_name_base: str = "residuals_pair",
+    save_formats=("pdf", "svg"),
+    font_scale: float = 1.0,
+    seaborn_style: str = "white",
+    seaborn_context: str = "paper",
+    dpi: int = 400,
+    show: bool = False,
+    title_label: str | None = None,
+):
+    """
+    Two-panel figure: standardized residuals vs z (left) + standardized residuals histogram (right).
+    Mirrors styling of other paired panels.
+    """
+    _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    nrows, ncols = 1, 2
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(PAIR_PER_BIOPSY_FIGSIZE[0] * ncols, PAIR_PER_BIOPSY_FIGSIZE[1] * nrows),
+        gridspec_kw={"wspace": 0.25},
+    )
+
+    X = gp_res["X"]
+    res_std = (gp_res["y"] - gp_res["mu_X"]) / np.maximum(gp_res["sd_X"], 1e-12)
+    res_std = res_std[np.isfinite(res_std)]
+
+    # Left: standardized residuals vs z
+    ax = axes[0]
+    ax.axhline(0, color="black", lw=1.0, alpha=0.7)
+    for lvl, color in zip([1, 2, 3], ["#b0b0b0", "#c75000", "#7a5195"]):
+        ax.axhline(lvl, color=color, lw=0.9, ls="--", alpha=0.6)
+        ax.axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
+    ax.plot(X, res_std, "o-", ms=4, lw=1.1, color=PRIMARY_LINE_COLOR)
+    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    _apply_axis_style(ax)
+    _apply_per_biopsy_ticks(ax)
+    if res_std.size:
+        max_abs = float(np.nanmax(np.abs(res_std)))
+        ylim = max(3.5, np.ceil(max_abs * 2) / 2 if max_abs > 3.5 else 3.5)
+        ax.set_ylim(-ylim, ylim)
+    mean_rs = float(np.nanmean(res_std)) if res_std.size else float("nan")
+    sd_rs = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
+    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
+    header_left = ", ".join([
+        rf"$\mathrm{{mean}} = {mean_rs:.2f}$",
+        rf"$\mathrm{{SD}} = {sd_rs:.2f}$",
+        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$",
+    ])
+    _finalize_legend_and_header(ax, header=header_left, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
+
+    # Right: standardized residuals histogram
+    ax = axes[1]
+    bins = _fd_bins(res_std, min_bins=None, max_bins=None, context=file_name_base) if res_std.size else 10
+    counts, edges, _ = ax.hist(
+        res_std,
+        bins=bins,
+        density=True,
+        alpha=0.5,
+        color=HIST_FILL_COLOR,
+        edgecolor="black",
+        linewidth=0.5,
+        histtype="stepfilled",
+    )
+    ax.hist(
+        res_std,
+        bins=bins,
+        density=True,
+        histtype="step",
+        color="0.4",
+        linewidth=0.5,
+    )
+    xs = np.linspace(-4, 4, 200)
+    ax.plot(xs, stats.norm.pdf(xs), color=OVERLAY_LINE_COLOR, lw=1.2, label=r"$\mathcal{N}(0,1)$")
+    ax.axvline(0, color="black", lw=0.9, ls="-", label=r"$r^{\mathrm{std}}=0$")
+    m = float(np.nanmean(res_std)) if res_std.size else float("nan")
+    ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
+    lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
+    ax.set_xlim(-lim, lim)
+    ax.set_xlabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_ylabel("Density", fontsize=_fs_label())
+    _apply_axis_style(ax)
+    _apply_per_biopsy_ticks(ax)
+    bin_width = float(np.nanmean(np.diff(edges))) if edges.size > 1 else np.nan
+    s = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
+    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
+    pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
+    ann = "\n".join([
+        rf"$\mathrm{{mean}} = {m:.2f},\ \mathrm{{bin\ width}} = {bin_width:.3f}$",
+        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$, $|r^{{\mathrm{{std}}}}|\leq 2: {pct_le2:.1f}\%$",
+    ])
+    handles, labels = ax.get_legend_handles_labels()
+    _finalize_legend_and_header(
+        ax,
+        header=ann,
+        ncol=len(handles) if handles else 1,
+        header_loc="right",
+        header_fontsize=_fs_legend(),
+        handles=handles if handles else None,
+        labels=labels if labels else None,
+        legend_width_mode="subplot",
+        expand_figure=False,
+    )
+
+    # Align axes heights/positions
+    pos_l = axes[0].get_position()
+    pos_r = axes[1].get_position()
+    new_y0 = min(pos_l.y0, pos_r.y0)
+    new_h = min(pos_l.height, pos_r.height)
+    axes[0].set_position([pos_l.x0, new_y0, pos_l.width, new_h])
+    axes[1].set_position([pos_r.x0, new_y0, pos_r.width, new_h])
+
+    title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    for ax in axes:
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
+
     fig = ax.figure
     if hasattr(fig, "_suptitle") and fig._suptitle:
         fig._suptitle.remove()
