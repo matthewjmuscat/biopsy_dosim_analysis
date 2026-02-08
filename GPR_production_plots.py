@@ -899,6 +899,7 @@ def plot_kernel_sensitivity_histogram(
     if isinstance(modes, str):
         modes = (modes,)
     modes = tuple(m.lower() for m in modes)
+    kde_only = ("kde" in modes) and ("histogram" not in modes)
 
     with mpl.rc_context({"legend.fontsize": _fs_legend(legend_fontsize)}):
         fig, ax = plt.subplots(figsize=figsize)
@@ -949,7 +950,9 @@ def plot_kernel_sensitivity_histogram(
                 try:
                     kde = stats.gaussian_kde(vals_arr, bw_method=bw_method)
                     xs = np.linspace(vals_arr.min(), vals_arr.max(), 300)
-                    yk = kde(xs) * len(vals_arr) * bin_width  # scale density to match count axis
+                    yk = kde(xs)
+                    if not kde_only:
+                        yk = yk * len(vals_arr) * bin_width  # scale to counts when a histogram is present
                     line, = ax.plot(xs, yk, color=color, lw=1.4, label=f"{k}")
                     handles.append(line)
                     labels.append(f"{k}")
@@ -965,7 +968,7 @@ def plot_kernel_sensitivity_histogram(
     }
     xlabel = xlabels.get(file_name_base, y_label if y_label else "Value")
     ax.set_xlabel(xlabel, fontsize=fs_label)
-    ax.set_ylabel("Number of biopsies", fontsize=fs_label)
+    ax.set_ylabel("Density" if kde_only else "Number of biopsies", fontsize=fs_label)
 
     ax.tick_params(axis="both", labelsize=fs_tick)
     _apply_axis_style(ax)
@@ -2546,6 +2549,7 @@ def calibration_plots_production(
 
         modes_use = (modes_use,) if isinstance(modes_use, str) else modes_use
         handles, labels = [], []
+        kde_only = ("kde" in modes_use) and ("histogram" not in modes_use)
         fallback_colors = iter(KERNEL_PALETTE * ((len(groups) // len(KERNEL_PALETTE)) + 1))
         group_colors = []
         for _, _, label_val in groups:
@@ -2571,7 +2575,9 @@ def calibration_plots_production(
                 try:
                     kde = stats.gaussian_kde(gvals, bw_method=bw_method)
                     xs = np.linspace(np.nanmin(gvals), np.nanmax(gvals), 300)
-                    yk = kde(xs) * len(gvals) * bin_width
+                    yk = kde(xs)
+                    if not kde_only:
+                        yk = yk * len(gvals) * bin_width
                     line, = ax.plot(xs, yk, color=color, lw=1.4, label=f"{glabel}")
                     handles.append(line); labels.append(f"{glabel}")
                 except Exception:
@@ -2580,7 +2586,7 @@ def calibration_plots_production(
             vline = ax.axvline(target_line, color="red", lw=1.0, ls="-", label=target_label or "Target")
             handles.append(vline); labels.append(target_label or "Target")
         ax.set_xlabel(xlabel, fontsize=_fs_label())
-        ax.set_ylabel("Number of biopsies", fontsize=_fs_label())
+        ax.set_ylabel("Density" if kde_only else "Number of biopsies", fontsize=_fs_label())
         _apply_axis_style(ax)
         _apply_per_biopsy_ticks(ax)
         n = pooled.size
