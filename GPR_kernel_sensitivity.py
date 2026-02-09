@@ -54,6 +54,7 @@ def run_kernel_sensitivity(
         ]
 
     kernel_specs = list(kernel_specs)
+    mode_list = [("histogram",), ("histogram", "kde"), ("kde",)]
 
     all_metrics = []
     all_calib = []
@@ -136,11 +137,37 @@ def run_kernel_sensitivity(
             combined_calib_path = csv_dir / "calibration_metrics_all.csv"
             combined_calib.to_csv(combined_calib_path, index=False)
             print(f"Saved combined calibration metrics to {combined_calib_path} and overlay figures to {calib_all_dir}")
+            # Per-kernel calibration summaries: one file per kernel, rows = metrics, cols = stats
+            if "kernel_label" in combined_calib.columns:
+                numeric_cols = [
+                    c for c in combined_calib.select_dtypes(include="number").columns
+                    if c not in {"Patient ID", "Bx index"}
+                ]
+                for klabel, sub in combined_calib.groupby("kernel_label"):
+                    rows = []
+                    for col in numeric_cols:
+                        s = sub[col].dropna()
+                        if s.empty:
+                            continue
+                        q25 = float(s.quantile(0.25))
+                        q75 = float(s.quantile(0.75))
+                        rows.append({
+                            "metric": col,
+                            "mean": float(s.mean()),
+                            "median": float(s.median()),
+                            "iqr": q75 - q25,
+                            "q05": float(s.quantile(0.05)),
+                            "q25": q25,
+                            "q75": q75,
+                            "q95": float(s.quantile(0.95)),
+                        })
+                    if rows:
+                        summary_df = pd.DataFrame(rows)
+                        summary_path = csv_dir / f"calibration_metrics_summary_{klabel}.csv"
+                        summary_df.to_csv(summary_path, index=False)
+                        print(f"Saved calibration summary for {klabel} to {summary_path}")
     except Exception as e:
         print(f"Warning: could not generate combined calibration overlays: {e}")
-
-    # Plots
-    mode_list = [("histogram",), ("histogram", "kde"), ("kde",)]
 
     try:
         for plot_type in mode_list:
@@ -148,7 +175,7 @@ def run_kernel_sensitivity(
             gpr_plots.plot_kernel_sensitivity_histogram(
                 combined_metrics,
                 value_col="ell",
-                y_label=r"$\ell$ (mm)",
+                x_label=r"Fitted axial coherence length $\hat{\ell}_b$ (mm)",
                 save_dir=figs_dir,
                 file_name_base=f"kernel_sensitivity_ell_{suffix}",
                 file_types=file_types,
@@ -168,7 +195,7 @@ def run_kernel_sensitivity(
             gpr_plots.plot_kernel_sensitivity_histogram(
                 combined_metrics,
                 value_col="mean_ratio",
-                y_label="Mean uncertainty reduction ratio",
+                x_label=r"Mean uncertainty reduction ratio ($\mathrm{mean}\ R_{b,v}$)",
                 save_dir=figs_dir,
                 file_name_base=f"kernel_sensitivity_mean_ratio_{suffix}",
                 file_types=file_types,
@@ -217,7 +244,7 @@ def run_kernel_sensitivity(
             gpr_plots.plot_kernel_sensitivity_histogram(
                 combined_metrics,
                 value_col="sv_rmse",
-                y_label=r"Semivariogram RMSE",
+                x_label=r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)",
                 save_dir=figs_dir,
                 file_name_base=f"kernel_sensitivity_sv_rmse_{suffix}",
                 file_types=file_types,

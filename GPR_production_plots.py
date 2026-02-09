@@ -828,7 +828,7 @@ def _grid_shape(n_items: int, n_cols: int) -> tuple[int, int]:
 def plot_kernel_sensitivity_histogram(
     metrics_df,
     value_col: str,
-    y_label: str,
+    x_label: str,
     save_dir,
     file_name_base: str = "kernel_sensitivity_boxplot",
     file_types=("pdf", "svg"),
@@ -900,6 +900,7 @@ def plot_kernel_sensitivity_histogram(
         modes = (modes,)
     modes = tuple(m.lower() for m in modes)
     kde_only = ("kde" in modes) and ("histogram" not in modes)
+    single_kernel = len(kernels) == 1
 
     with mpl.rc_context({"legend.fontsize": _fs_legend(legend_fontsize)}):
         fig, ax = plt.subplots(figsize=figsize)
@@ -933,16 +934,37 @@ def plot_kernel_sensitivity_histogram(
             vals_arr = vals.to_numpy(dtype=float)
             vals_arr = vals_arr[np.isfinite(vals_arr)]
             if "histogram" in modes:
-                h = ax.hist(
-                    vals_arr,
-                    bins=bins,
-                    histtype="step",
-                    color=color,
-                    edgecolor=color,
-                    linewidth=1.1,
-                    alpha=1.0,
-                    label=k,
-                )
+                if single_kernel:
+                    # Per-kernel plot: filled + outline matching cohort style
+                    ax.hist(
+                        vals_arr,
+                        bins=bins,
+                        histtype="stepfilled",
+                        color=HIST_FILL_COLOR,
+                        edgecolor="black",
+                        linewidth=0.5,
+                        alpha=0.5,
+                    )
+                    h = ax.hist(
+                        vals_arr,
+                        bins=bins,
+                        histtype="step",
+                        color="0.4",
+                        linewidth=0.5,
+                        alpha=1.0,
+                        label=k,
+                    )
+                else:
+                    # Combined kernels: outline only (no fill) in kernel color
+                    h = ax.hist(
+                        vals_arr,
+                        bins=bins,
+                        histtype="step",
+                        color=color,
+                        linewidth=0.9,
+                        alpha=1.0,
+                        label=k,
+                    )
                 if len(h) >= 3:
                     handles.append(h[2][0])
                     labels.append(k)
@@ -961,12 +983,7 @@ def plot_kernel_sensitivity_histogram(
                 except Exception:
                     print(f"[kernel_sensitivity_histogram] KDE failed for {k}")
 
-    xlabels = {
-        "kernel_sensitivity_ell": r"$\widehat{\ell}_b$ (mm)",
-        "kernel_sensitivity_mean_ratio": r"Mean voxelwise shrinkage ratio $\overline{R}_{b,v}$",
-        "kernel_sensitivity_sv_rmse": r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)",
-    }
-    xlabel = xlabels.get(file_name_base, y_label if y_label else "Value")
+    xlabel = x_label if x_label else value_col
     ax.set_xlabel(xlabel, fontsize=fs_label)
     ax.set_ylabel("Density" if kde_only else "Number of biopsies", fontsize=fs_label)
 
@@ -1067,8 +1084,9 @@ def plot_kernel_sensitivity_scatter(
 
     # Axis labels per requested outputs
     if file_name_base == "kernel_sensitivity_ratio_scatter":
-        ax.set_xlabel("Mean voxelwise shrinkage ratio", fontsize=fs_label)
-        ax.set_ylabel(r"$100\,(1 - U_b^{\mathrm{GP}}/U_b^{\mathrm{MC}})$ [% reduction]", fontsize=fs_label)
+        ax.set_xlabel(r"$\mathrm{Mean}\ R_{b,v}$", fontsize=fs_label)
+        ax.set_ylabel("Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n" 
+                      r"$\overline{\sigma}^{\mathrm{GP}}_b$ vs $\overline{\widehat{\sigma}}_b$ (%)", fontsize=fs_label)
         header = None
     else:
         ax.set_xlabel(x_label, fontsize=fs_label)
@@ -1138,7 +1156,7 @@ def plot_gp_profile_production(
     else:
         raise ValueError(f"Unsupported ci_level={ci_level}")
 
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=_fs_label())
     ymin, ymax = ax.get_ylim()
     if np.isfinite(ymax):
@@ -1209,7 +1227,7 @@ def plot_noise_profile_production(
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(per_voxel["x_mm"], np.sqrt(np.maximum(per_voxel["var_n"], 0)), marker="o", ms=4, lw=1.2, color=PRIMARY_LINE_COLOR, label=r"MC SD $\widehat{\sigma}_{b,v}$")
     ax.plot(gp_res["X"], gp_res["sd_X"], marker="s", ms=3.5, lw=1.1, color=OVERLAY_LINE_COLOR, label=r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$")
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose standard deviation (Gy)", fontsize=_fs_label())
     if title_on:
         ax.set_title(f"Noise profile — Patient {patient_id}, Bx {bx_index}")
@@ -1249,7 +1267,7 @@ def plot_uncertainty_reduction_production(
     ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$", color=PRIMARY_LINE_COLOR)
     ax.fill_between(X, sd_X, indep_sd, where=indep_sd>=sd_X, color=PRIMARY_LINE_COLOR, alpha=0.12)
     fs_label = _fs_label(label_fontsize)
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=fs_label)
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=fs_label)
     ax.set_ylabel(r"Dose standard deviation (Gy)", fontsize=fs_label)
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -1297,7 +1315,7 @@ def plot_uncertainty_ratio_production(
     ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
     ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     fs_label = _fs_label(label_fontsize)
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=fs_label)
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=fs_label)
     ax.set_ylabel(r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$", fontsize=fs_label)
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -1366,7 +1384,7 @@ def plot_residuals_vs_z_production(
         max_abs = float(np.nanmax(np.abs(res))) if res.size else 0
         lim = max(3.5, np.ceil(max_abs * 2) / 2 if max_abs > 3.5 else 3.5)
         ax.set_ylim(-lim, lim)
-    ax.set_xlabel(r"$z$ (mm)", fontsize=_fs_label())
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(y_label, fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -1623,7 +1641,7 @@ def plot_residuals_production(
         axes[0].axhline(lvl, color=color, lw=0.9, ls="--", alpha=0.6)
         axes[0].axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
     axes[0].plot(X, res_std, "o-", ms=4, lw=1.1, color=PRIMARY_LINE_COLOR)
-    axes[0].set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    axes[0].set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     axes[0].set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
     _apply_axis_style(axes[0])
     _apply_per_biopsy_ticks(axes[0])
@@ -1825,7 +1843,7 @@ def plot_variogram_and_profile_pair(
     ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band")
     ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
     ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$")
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=_fs_label())
     ymin, ymax = ax.get_ylim()
     if np.isfinite(ymax):
@@ -1936,7 +1954,7 @@ def plot_gp_profiles_grid(
         ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band", zorder=2)
         ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$", zorder=4)
         ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.0, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$", zorder=5)
-        ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+        ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
         ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=_fs_label())
         # Keep y-axis non-negative like single-profile plotter
         ymin, ymax = ax.get_ylim()
@@ -2137,7 +2155,7 @@ def plot_uncertainty_pair(
     ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=r"MC SD $\widehat{\sigma}_{b,v}$", color=OVERLAY_LINE_COLOR)
     ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$", color=PRIMARY_LINE_COLOR)
     ax.fill_between(X, sd_X, indep_sd, where=indep_sd>=sd_X, color=PRIMARY_LINE_COLOR, alpha=0.12)
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose standard deviation (Gy)", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -2166,7 +2184,7 @@ def plot_uncertainty_pair(
     ax.axhline(1.25, color="#c75000", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.25$")
     ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
     ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -2238,8 +2256,8 @@ def plot_residuals_pair(
     for lvl, color in zip([1, 2, 3], ["#b0b0b0", "#c75000", "#7a5195"]):
         ax.axhline(lvl, color=color, lw=0.9, ls="--", alpha=0.6)
         ax.axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
-    ax.plot(X, res_std, "o-", ms=4, lw=1.1, color=PRIMARY_LINE_COLOR)
-    ax.set_xlabel(r"$z\ \text{(mm)}$", fontsize=_fs_label())
+    ax.scatter(X, res_std, s=28, color=PRIMARY_LINE_COLOR, alpha=0.9, edgecolors="black", linewidths=0.4)
+    ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -2401,7 +2419,7 @@ def cohort_plots_production(
         _save_figure(fig, save_dir / fname, formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
 
     _hist(metrics_df["mean_ratio"], r"Mean shrinkage ratio $\overline{R}_b$", "cohort_hist_mean_ratio", unit_label="", var_label=r"\overline{R}_b")
-    _hist(metrics_df["ell"], r"Fitted axial coherence length $\widehat{\ell}_b$ (mm)", "cohort_hist_length_scale", unit_label="mm", var_label=r"\ell_b", bins_override=4)
+    _hist(metrics_df["ell"], r"Fitted axial coherence length $\hat{\ell}_b$ (mm)", "cohort_hist_length_scale", unit_label="mm", var_label=r"\ell_b", bins_override=4)
     _hist(metrics_df.get("nugget_fraction", metrics_df["nugget"]), r"Nugget fraction $\tau_b^2 / (\sigma_{f,b}^2 + \tau_b^2)$", "cohort_hist_nugget_fraction", unit_label="", var_label=r"\tau_b^2/(\sigma_{f,b}^2+\tau_b^2)")
     if "sv_rmse" in metrics_df.columns:
         _hist(metrics_df["sv_rmse"], r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)", "cohort_hist_variogram_rmse", unit_label="Gy^2", var_label=r"\mathrm{RMSE}_b^{(\gamma)}")
@@ -2419,12 +2437,12 @@ def cohort_plots_production(
 
     metric_map = {
         "mean_ratio": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
-        "integrated_reduction": (integ_red, r"Integrated SD reduction $\Delta_b^{\mathrm{int}}$"),
+        "integrated_reduction": (integ_red, r"Mean SD reduction $\Delta_b^{(SD)}/100$"),
         "frac_high": (frac_high, r"Fraction with $R_{b,v} \geq 1.25$"),
         # backward-compatible aliases
         "mean": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
         "median": (frac_high, r"Fraction with $R_{b,v} \geq 1.25$"),
-        "delta_int": (integ_red, r"Integrated SD reduction $\Delta_b^{\mathrm{int}}$"),
+        "delta_int": (integ_red, r"Mean SD reduction $\Delta_b^{(SD)}/100$"),
     }
     selected = [m for m in boxplot_metrics if m in metric_map]
     if selected:
@@ -2550,6 +2568,7 @@ def calibration_plots_production(
         modes_use = (modes_use,) if isinstance(modes_use, str) else modes_use
         handles, labels = [], []
         kde_only = ("kde" in modes_use) and ("histogram" not in modes_use)
+        single_group = len(groups) == 1 and not hue_col
         fallback_colors = iter(KERNEL_PALETTE * ((len(groups) // len(KERNEL_PALETTE)) + 1))
         group_colors = []
         for _, _, label_val in groups:
@@ -2559,16 +2578,38 @@ def calibration_plots_production(
             group_colors.append(color)
         for (glabel, gvals, _label), color in zip(groups, group_colors):
             if "histogram" in modes_use:
-                h = ax.hist(
-                    gvals,
-                    bins=bins,
-                    histtype="step",
-                    color=color,
-                    edgecolor=color,
-                    linewidth=1.1,
-                    alpha=1.0,
-                    label=glabel,
-                )
+                if single_group:
+                    # Per-kernel single-group style: filled + outline matching cohort style
+                    ax.hist(
+                        gvals,
+                        bins=bins,
+                        histtype="stepfilled",
+                        color=HIST_FILL_COLOR,
+                        edgecolor="black",
+                        linewidth=0.5,
+                        alpha=0.5,
+                    )
+                    h = ax.hist(
+                        gvals,
+                        bins=bins,
+                        histtype="step",
+                        color="0.4",
+                        linewidth=0.5,
+                        alpha=1.0,
+                        label=glabel,
+                    )
+                else:
+                    # Multi-kernel overlay: outline only in group color
+                    h = ax.hist(
+                        gvals,
+                        bins=bins,
+                        histtype="step",
+                        color=color,
+                        edgecolor=color,
+                        linewidth=1.1,
+                        alpha=1.0,
+                        label=glabel,
+                    )
                 if len(h) >= 3:
                     handles.append(h[2][0]); labels.append(glabel)
             if "kde" in modes_use and gvals.size:
@@ -2632,7 +2673,7 @@ def calibration_plots_production(
         mode_suffix = "_".join(modes_use) if isinstance(modes_use, (list, tuple)) else str(modes_use)
         _calib_hist(
             calib_df["mean_resstd"],
-            r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v}$",
+            r"$\mathrm{Mean}\ r^{\mathrm{std}}_{b,v}$",
             f"calib_hist_mean_resstd_{mode_suffix}",
             target_line=0.0,
             target_label=r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v} = 0\ \mathrm{(ideal)}$",
@@ -3057,8 +3098,8 @@ def plot_mean_sd_bland_altman_production(
 
     ax.set_xlabel(r"Mean SD, $(\overline{\widehat{\sigma}}_b + \overline{\sigma}^{\mathrm{GP}}_b)/2$ (Gy)", fontsize=_fs_label())
     ax.set_ylabel(
-        "Percent difference\n"
-        r"($\overline{\sigma}^{\mathrm{GP}}_b$ vs $\overline{\widehat{\sigma}}_b$) (%)",
+        "Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n"
+        r"$\overline{\sigma}^{\mathrm{GP}}_b$ vs $\overline{\widehat{\sigma}}_b$ (%)",
         fontsize=_fs_label(),
     )
     _apply_axis_style(ax)
