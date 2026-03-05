@@ -278,6 +278,30 @@ def _ratio_ylabel(
     return rf"$R_{{b,v}} = \widehat{{\sigma}}_{{b,v}} / \sigma^{{\mathrm{{GP}}}}_{{b,v}}\ (\mathrm{{{short}}})$"
 
 
+def _std_residual_symbol(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    base = r"r^{\mathrm{std}}_{b,v}"
+    if not include_kernel_legend:
+        return base
+    short = _kernel_short_label(kernel_legend_label)
+    if short is None:
+        return base
+    return rf"r^{{\mathrm{{std}}}}_{{b,v}}\ (\mathrm{{{short}}})"
+
+
+def _std_residual_axis_label(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    symbol = _std_residual_symbol(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
+    return rf"Standardized residual ${symbol}$"
+
+
 def _fd_bins(
     data: np.ndarray,
     min_bins: int | None = 10,
@@ -1459,6 +1483,8 @@ def plot_residuals_vs_z_production(
     xlim: tuple | None = None,
     title_label: str | None = None,
     show: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     X = gp_res["X"]
@@ -1468,7 +1494,10 @@ def plot_residuals_vs_z_production(
     res = y - mu_X
     if standardized:
         res = np.divide(res, np.maximum(sd_X, 1e-12))
-        y_label = r"Standardized residual $r^{\mathrm{std}}_{b,v}$"
+        y_label = _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        )
         mean_rs = float(np.nanmean(res))
         sd_rs = float(np.nanstd(res, ddof=1)) if res.size > 1 else float("nan")
         pct_le1 = float(np.nanmean(np.abs(res) <= 1.0) * 100.0) if res.size else float("nan")
@@ -1536,6 +1565,8 @@ def plot_standardized_residuals_hist_production(
     dpi: int = 400,
     title_label: str | None = None,
     show: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     res_std = (gp_res["y"] - gp_res["mu_X"]) / np.maximum(gp_res["sd_X"], 1e-12)
@@ -1570,7 +1601,13 @@ def plot_standardized_residuals_hist_production(
     ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
     lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
     ax.set_xlim(-lim, lim)
-    ax.set_xlabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_xlabel(
+        _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     ax.set_ylabel("Density", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -2368,6 +2405,8 @@ def plot_residuals_pair(
     dpi: int = 400,
     show: bool = False,
     title_label: str | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Two-panel figure: standardized residuals vs z (left) + standardized residuals histogram (right).
@@ -2394,7 +2433,13 @@ def plot_residuals_pair(
         ax.axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
     ax.scatter(X, res_std, s=28, color=PRIMARY_LINE_COLOR, alpha=0.9, edgecolors="black", linewidths=0.4)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
-    ax.set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_ylabel(
+        _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     if res_std.size:
@@ -2439,7 +2484,13 @@ def plot_residuals_pair(
     ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
     lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
     ax.set_xlim(-lim, lim)
-    ax.set_xlabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_xlabel(
+        _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     ax.set_ylabel("Density", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -3455,6 +3506,8 @@ def make_patient_level_gpr_plots(
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
         title_label=title_label,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_residuals_vs_z_production(
         gp_res, patient_id, bx_index,
@@ -3466,6 +3519,8 @@ def make_patient_level_gpr_plots(
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
         title_label=title_label,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_standardized_residuals_hist_production(
         gp_res, patient_id, bx_index,
@@ -3476,6 +3531,8 @@ def make_patient_level_gpr_plots(
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
         title_label=title_label,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_standardized_residuals_qq_production(
         gp_res, patient_id, bx_index,

@@ -643,6 +643,8 @@ def main():
                 file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                include_kernel_legend=include_kernel_legend_in_primary_histograms,
+                kernel_legend_label=BASE_KERNEL_LABEL,
             )
             # give the list of plots produced in this print statement
             print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
