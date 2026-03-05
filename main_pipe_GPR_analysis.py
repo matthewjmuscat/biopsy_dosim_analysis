@@ -507,6 +507,7 @@ def main():
             sd_bounds=(0.5, 1.5),
             modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
             kernel_color_map=KERNEL_COLOR_MAP,
+            kernel_suffix=BASE_KERNEL_LABEL,
         )
         print(f"[calibration] baseline kernel saved to {calib_csv_base} and {calib_fig_dir_base}")
 
@@ -542,7 +543,7 @@ def main():
         GPR_production_plots.plot_gp_profiles_grid(
             gp_results=results,
             patient_bx_list=patient_bx_list,
-            save_path=grid_dir / "gp_profiles_grid",
+            save_path=grid_dir / f"gp_profiles_grid_kernel_{BASE_KERNEL_LABEL}",
             ncols=grid_ncols,
             label_map=grid_label_map,
             metrics_df=metrics_df,
@@ -557,7 +558,7 @@ def main():
             semivariogram_df=semivariogram_df,
             gp_results=results,
             patient_bx_list=patient_bx_list,
-            save_path=grid_dir / "variogram_overlays_grid",
+            save_path=grid_dir / f"variogram_overlays_grid_kernel_{BASE_KERNEL_LABEL}",
             ncols=grid_ncols,
             label_map=grid_label_map,
             metrics_df=metrics_df,
@@ -594,6 +595,7 @@ def main():
                show_titles=False,
                font_scale=1.0,
                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+               kernel_suffix=BASE_KERNEL_LABEL,
            )
 
             # Paired figures with aligned axes (semivariogram+profile, reduction+ratio)
@@ -606,7 +608,7 @@ def main():
                 bx_index,
                 res,
                 save_dir=pair_dir,
-                file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}",
+                file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
@@ -617,7 +619,7 @@ def main():
                 patient_id,
                 bx_index,
                 save_dir=pair_dir,
-                file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}",
+                file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
@@ -628,7 +630,7 @@ def main():
                 patient_id,
                 bx_index,
                 save_dir=pair_dir,
-                file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}",
+                file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
             )
@@ -655,7 +657,7 @@ def main():
         # Cohort plots
 
         GPR_production_plots.cohort_plots_production(metrics_df,
-                     cohort_output_figures_dir, save_formats=("pdf","svg"))
+                     cohort_output_figures_dir, save_formats=("pdf","svg"), kernel_suffix=BASE_KERNEL_LABEL)
 
 
         # linear regression of paired SDs between methods
@@ -665,14 +667,14 @@ def main():
         GPR_production_plots.plot_mean_sd_scatter_with_fits_production(
             metrics_df, reg_stats,
             save_dir=cohort_output_figures_dir,
-            file_name_base="cohort_mean_sd_scatter_with_fits",
+            file_name_base=f"cohort_mean_sd_scatter_with_fits_kernel_{BASE_KERNEL_LABEL}",
             save_formats=("pdf","svg"),
         )
 
         GPR_production_plots.plot_mean_sd_bland_altman_production(
             metrics_df,
             save_dir=cohort_output_figures_dir,
-            file_name_base="cohort_mean_sd_bland_altman",
+            file_name_base=f"cohort_mean_sd_bland_altman_kernel_{BASE_KERNEL_LABEL}",
             save_formats=("pdf","svg"),
             source_csv_path=output_dir.joinpath("gpr_per_biopsy_metrics.csv"),
             show_annotation=False,

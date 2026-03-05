@@ -103,6 +103,7 @@ def run_kernel_sensitivity(
             sd_bounds=(0.5, 1.5),
             modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
             kernel_color_map=kernel_color_map,
+            kernel_suffix=kernel_label,
         )
         print(f"Saved calibration metrics to {calib_csv} and figures to {calib_fig_dir}")
 
@@ -133,6 +134,7 @@ def run_kernel_sensitivity(
                 modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
                 hue_col="kernel_label",
                 kernel_color_map=kernel_color_map,
+                kernel_suffix="all",
             )
             combined_calib_path = csv_dir / "calibration_metrics_all.csv"
             combined_calib.to_csv(combined_calib_path, index=False)
@@ -177,7 +179,7 @@ def run_kernel_sensitivity(
                 value_col="ell",
                 x_label=r"Fitted axial coherence length $\hat{\ell}_b$ (mm)",
                 save_dir=figs_dir,
-                file_name_base=f"kernel_sensitivity_ell_{suffix}",
+                file_name_base=f"kernel_sensitivity_ell_{suffix}_kernel_all",
                 file_types=file_types,
                 show_title=False,
                 modes=plot_type,
@@ -197,7 +199,7 @@ def run_kernel_sensitivity(
                 value_col="mean_ratio",
                 x_label=r"Mean uncertainty reduction ratio ($\mathrm{mean}\ R_{b,v}$)",
                 save_dir=figs_dir,
-                file_name_base=f"kernel_sensitivity_mean_ratio_{suffix}",
+                file_name_base=f"kernel_sensitivity_mean_ratio_{suffix}_kernel_all",
                 file_types=file_types,
                 show_title=False,
                 modes=plot_type,
@@ -217,7 +219,7 @@ def run_kernel_sensitivity(
             x_label="Mean voxelwise ratio",
             y_label="Integrated SD ratio",
             save_dir=figs_dir,
-            file_name_base="kernel_sensitivity_ratio_scatter",
+            file_name_base="kernel_sensitivity_ratio_scatter_kernel_all",
             file_types=file_types,
             show_title=False,
             kernel_color_map=kernel_color_map,
@@ -230,7 +232,7 @@ def run_kernel_sensitivity(
         gpr_plots.plot_kernel_sensitivity_mean_sd_with_fits(
             combined_metrics,
             save_dir=figs_dir,
-            file_name_base="kernel_sensitivity_mean_sd_scatter_with_fits",
+            file_name_base="kernel_sensitivity_mean_sd_scatter_with_fits_kernel_all",
             file_types=file_types,
             kernel_color_map=kernel_color_map,
         )
@@ -246,7 +248,7 @@ def run_kernel_sensitivity(
                 value_col="sv_rmse",
                 x_label=r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)",
                 save_dir=figs_dir,
-                file_name_base=f"kernel_sensitivity_sv_rmse_{suffix}",
+                file_name_base=f"kernel_sensitivity_sv_rmse_{suffix}_kernel_all",
                 file_types=file_types,
                 show_title=False,
                 modes=plot_type,
