@@ -103,7 +103,7 @@ def main():
     _print_section("GPR PIPELINE: DATA LOADING")
     ### Set main output path ###
     #main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-18,11,24")
-    main_output_path = Path("MC_sim_out- Date-Jan-04-2026 Time-11,55,49 -- 15 patients F2 only cohort with simulated centroid and optimal bxs - good for dosim or GPR analysis")  # Update this path to your specific output directory
+    main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-Jan-04-2026 Time-11,55,49 -- 15 patients F2 only cohort with simulated centroid and optimal bxs - good for dosim or GPR analysis")  # Update this path to your specific output directory
 
     
     ### Load Dataframes 
