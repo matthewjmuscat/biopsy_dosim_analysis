@@ -551,6 +551,8 @@ def main():
             metrics_df=metrics_df,
             save_formats=("pdf", "svg"),
             dpi=400,
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+            kernel_legend_label=BASE_KERNEL_LABEL,
         )
 
         # Grid figures across selected biopsies for semivariogram overlays
@@ -598,6 +600,8 @@ def main():
                font_scale=1.0,
                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                kernel_suffix=BASE_KERNEL_LABEL,
+               include_kernel_legend=include_kernel_legend_in_primary_histograms,
+               kernel_legend_label=BASE_KERNEL_LABEL,
            )
 
             # Paired figures with aligned axes (semivariogram+profile, reduction+ratio)
@@ -614,6 +618,8 @@ def main():
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
+                include_kernel_legend=include_kernel_legend_in_primary_histograms,
+                kernel_legend_label=BASE_KERNEL_LABEL,
             )
             print(f"    [plots] Paired uncertainty reduction/ratio for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_uncertainty_pair(

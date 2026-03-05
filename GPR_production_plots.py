@@ -102,6 +102,12 @@ KERNEL_LABEL_MAP = {
     "rbf": r"RBF",
     "exp": r"Exponential",
 }
+KERNEL_SHORT_LABEL_MAP = {
+    "matern_nu_1_5": "M3/2",
+    "matern_nu_2_5": "M5/2",
+    "rbf": "RBF",
+    "exp": "Exp",
+}
 
 plt.ioff()
 
@@ -197,6 +203,22 @@ def _with_kernel_suffix(stem: str, kernel_suffix: str | None = None) -> str:
     if not suffix:
         return stem
     return f"{stem}_kernel_{suffix}"
+
+
+def _gp_mean_legend_label(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    base = r"$\mu^{\mathrm{GP}}_{b,v}$"
+    if not include_kernel_legend:
+        return base
+    if kernel_legend_label is None:
+        return base
+    key = str(kernel_legend_label).strip()
+    if not key:
+        return base
+    short = KERNEL_SHORT_LABEL_MAP.get(key, KERNEL_LABEL_MAP.get(key, key))
+    return f"{base} ({short})"
 
 
 def _fd_bins(
@@ -1141,6 +1163,8 @@ def plot_gp_profile_production(
     seaborn_context: str = "paper",
     dpi: int = 400,
     show: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     X_star = gp_res["X_star"]
@@ -1151,9 +1175,13 @@ def plot_gp_profile_production(
     mu_X = gp_res.get("mu_X", np.array([]))
     sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
+    gp_mean_label = _gp_mean_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
 
     fig, ax = plt.subplots(figsize=figsize)
-    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$")
+    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=gp_mean_label)
 
     if ci_level == "both":
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
@@ -1187,7 +1215,7 @@ def plot_gp_profile_production(
     # Reorder legend entries: mu, 68% band, 95% band, 1σ, 2σ
     handles, labels = ax.get_legend_handles_labels()
     order_keys = [
-        r"$\mu^{\mathrm{GP}}_{b,v}$",
+        gp_mean_label,
         "68% band",
         "95% band",
         r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
@@ -1790,6 +1818,8 @@ def plot_variogram_and_profile_pair(
     add_nugget: bool = False,
     title_label: str | None = None,
     metrics_row: pd.Series | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Two-panel figure: semivariogram overlay (left) + GP profile (right),
@@ -1851,7 +1881,11 @@ def plot_variogram_and_profile_pair(
     mu_X = gp_res.get("mu_X", np.array([]))
     sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
-    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$")
+    gp_mean_label = _gp_mean_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
+    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=gp_mean_label)
     ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
     ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band")
     ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
@@ -1868,7 +1902,7 @@ def plot_variogram_and_profile_pair(
     # Legend order for profile
     handles, labels = ax.get_legend_handles_labels()
     order_keys = [
-        r"$\mu^{\mathrm{GP}}_{b,v}$",
+        gp_mean_label,
         "68% band",
         "95% band",
         r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
@@ -1935,6 +1969,8 @@ def plot_gp_profiles_grid(
     show: bool = False,
     label_map: dict | None = None,
     metrics_df: pd.DataFrame | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Assemble multiple GP profile plots into a single grid figure.
@@ -1948,6 +1984,10 @@ def plot_gp_profiles_grid(
 
     shared_handles = None
     shared_labels = None
+    gp_mean_label = _gp_mean_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
 
     for ax, (pid, bx) in zip(axes, patient_bx_list):
         gp_res = gp_results.get((pid, bx))
@@ -1962,7 +2002,7 @@ def plot_gp_profiles_grid(
         y = gp_res["y"]
         indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
 
-        ax.plot(X_star, mu_star, lw=2.0, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$", zorder=3)
+        ax.plot(X_star, mu_star, lw=2.0, color=PRIMARY_LINE_COLOR, label=gp_mean_label, zorder=3)
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band", zorder=1)
         ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band", zorder=2)
         ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$", zorder=4)
@@ -3238,6 +3278,8 @@ def make_patient_level_gpr_plots(
     add_nugget_line: bool = False,
     title_label: str | None = None,
     kernel_suffix: str | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Generate all patient-level publication plots and save into concept-specific
@@ -3270,6 +3312,8 @@ def make_patient_level_gpr_plots(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_uncertainty_reduction_production(
         gp_res, patient_id, bx_index,
