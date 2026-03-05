@@ -57,7 +57,10 @@ def main():
     run_cohort_plots = True
 
     # plotting options
-    include_kernel_legend_in_primary_histograms = True   
+    include_kernel_legend_in_primary_histograms = True
+    write_split_main_cohort_summary_csvs = False
+    write_sensitivity_per_kernel_metrics_csvs = False
+    write_sensitivity_per_kernel_calibration_csvs = False
 
     # Baseline kernel selection (change here to switch kernels globally)
     #   ("matern", 1.5) -> Matérn ν = 3/2 (default)
@@ -100,7 +103,7 @@ def main():
     _print_section("GPR PIPELINE: DATA LOADING")
     ### Set main output path ###
     #main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-May-15-2025 Time-18,11,24")
-    main_output_path = Path("/home/matthew-muscat/Documents/UBC/Research/Data/Output data/MC_sim_out- Date-Jan-04-2026 Time-11,55,49")
+    main_output_path = Path("MC_sim_out- Date-Jan-04-2026 Time-11,55,49 -- 15 patients F2 only cohort with simulated centroid and optimal bxs - good for dosim or GPR analysis")  # Update this path to your specific output directory
 
     
     ### Load Dataframes 
@@ -447,6 +450,7 @@ def main():
         kernel_spec=BASE_KERNEL_SPEC,
         kernel_label=BASE_KERNEL_LABEL,
         position_mode=position_mode,
+        save_split_cohort_summary_csvs=write_split_main_cohort_summary_csvs,
     )
 
 
@@ -486,6 +490,8 @@ def main():
             target_stat="median",
             position_mode=position_mode,
             kernel_color_map=KERNEL_COLOR_MAP,
+            save_per_kernel_metrics_csvs=write_sensitivity_per_kernel_metrics_csvs,
+            save_per_kernel_calibration_csvs=write_sensitivity_per_kernel_calibration_csvs,
         )
     else:
         # I created a second path because I need the calibration to run for at least the baseline kernel in order to have calibration metrics and plots for the paper, but I want to be able to skip the rest of the sensitivity analysis if I dont need it to save time. 

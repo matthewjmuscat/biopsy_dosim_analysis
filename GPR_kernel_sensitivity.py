@@ -20,6 +20,8 @@ def run_kernel_sensitivity(
     file_types: tuple[str, ...] = ("pdf", "svg"),
     position_mode: str = "center",
     kernel_color_map: dict[str, str] | None = None,
+    save_per_kernel_metrics_csvs: bool = True,
+    save_per_kernel_calibration_csvs: bool = True,
 ):
     """
     Run the GP+metrics pipeline for a list of kernels and aggregate results.
@@ -58,6 +60,8 @@ def run_kernel_sensitivity(
 
     all_metrics = []
     all_calib = []
+    all_patient_rollups = []
+    all_cohort_summaries = []
 
     for kernel_name, kernel_param, kernel_label in kernel_specs:
         print(f"Running kernel sensitivity for {kernel_label} ...")
@@ -74,9 +78,10 @@ def run_kernel_sensitivity(
         )
 
         # Save kernel-specific metrics
-        metrics_path = csv_dir / f"metrics_kernel_{kernel_label}.csv"
-        metrics_df.to_csv(metrics_path, index=False)
-        print(f"Saved kernel metrics to {metrics_path}")
+        if save_per_kernel_metrics_csvs:
+            metrics_path = csv_dir / f"metrics_kernel_{kernel_label}.csv"
+            metrics_df.to_csv(metrics_path, index=False)
+            print(f"Saved kernel metrics to {metrics_path}")
 
         by_patient_path = csv_dir / f"patient_rollup_{kernel_label}.csv"
         by_patient.to_csv(by_patient_path, index=False)
@@ -92,7 +97,8 @@ def run_kernel_sensitivity(
         )
         calib_df["kernel_label"] = kernel_label
         calib_csv = csv_dir / f"calibration_metrics_{kernel_label}.csv"
-        calib_df.to_csv(calib_csv, index=False)
+        if save_per_kernel_calibration_csvs:
+            calib_df.to_csv(calib_csv, index=False)
         calib_fig_dir = figs_dir / f"calibration_{kernel_label}"
         calib_fig_dir.mkdir(parents=True, exist_ok=True)
         gpr_plots.calibration_plots_production(
@@ -105,10 +111,15 @@ def run_kernel_sensitivity(
             kernel_color_map=kernel_color_map,
             kernel_suffix=kernel_label,
         )
-        print(f"Saved calibration metrics to {calib_csv} and figures to {calib_fig_dir}")
+        if save_per_kernel_calibration_csvs:
+            print(f"Saved calibration metrics to {calib_csv} and figures to {calib_fig_dir}")
+        else:
+            print(f"Saved calibration figures to {calib_fig_dir} (per-kernel calibration CSV disabled)")
 
         all_metrics.append(metrics_df)
         all_calib.append(calib_df)
+        all_patient_rollups.append(by_patient)
+        all_cohort_summaries.append(cohort_summary_df)
 
     if not all_metrics:
         print("No kernel specs provided; nothing to do.")
@@ -118,6 +129,18 @@ def run_kernel_sensitivity(
     combined_path = csv_dir / "metrics_kernel_all.csv"
     combined_metrics.to_csv(combined_path, index=False)
     print(f"Saved combined kernel metrics to {combined_path}")
+
+    if all_patient_rollups:
+        combined_rollup = pd.concat(all_patient_rollups, ignore_index=True)
+        combined_rollup_path = csv_dir / "patient_rollup_all.csv"
+        combined_rollup.to_csv(combined_rollup_path, index=False)
+        print(f"Saved combined patient rollup to {combined_rollup_path}")
+
+    if all_cohort_summaries:
+        combined_cohort_summary = pd.concat(all_cohort_summaries, ignore_index=True)
+        combined_cohort_summary_path = csv_dir / "cohort_summary_all.csv"
+        combined_cohort_summary.to_csv(combined_cohort_summary_path, index=False)
+        print(f"Saved combined cohort summary to {combined_cohort_summary_path}")
 
     # Combined calibration overlays across kernels
     try:
@@ -145,6 +168,7 @@ def run_kernel_sensitivity(
                     c for c in combined_calib.select_dtypes(include="number").columns
                     if c not in {"Patient ID", "Bx index"}
                 ]
+                all_calib_summaries = []
                 for klabel, sub in combined_calib.groupby("kernel_label"):
                     rows = []
                     for col in numeric_cols:
@@ -165,9 +189,16 @@ def run_kernel_sensitivity(
                         })
                     if rows:
                         summary_df = pd.DataFrame(rows)
+                        summary_df.insert(0, "kernel_label", klabel)
                         summary_path = csv_dir / f"calibration_metrics_summary_{klabel}.csv"
                         summary_df.to_csv(summary_path, index=False)
                         print(f"Saved calibration summary for {klabel} to {summary_path}")
+                        all_calib_summaries.append(summary_df)
+                if all_calib_summaries:
+                    calibration_summary_all = pd.concat(all_calib_summaries, ignore_index=True)
+                    calibration_summary_all_path = csv_dir / "calibration_metrics_summary_all.csv"
+                    calibration_summary_all.to_csv(calibration_summary_all_path, index=False)
+                    print(f"Saved combined calibration summary to {calibration_summary_all_path}")
     except Exception as e:
         print(f"Warning: could not generate combined calibration overlays: {e}")
 
