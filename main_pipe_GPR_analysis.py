@@ -631,6 +631,8 @@ def main():
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
+                include_kernel_legend=include_kernel_legend_in_primary_histograms,
+                kernel_legend_label=BASE_KERNEL_LABEL,
             )
             print(f"    [plots] Paired standardized residuals for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_residuals_pair(
@@ -682,6 +684,8 @@ def main():
             save_dir=cohort_output_figures_dir,
             file_name_base=f"cohort_mean_sd_scatter_with_fits_kernel_{BASE_KERNEL_LABEL}",
             save_formats=("pdf","svg"),
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+            kernel_legend_label=BASE_KERNEL_LABEL,
         )
 
         GPR_production_plots.plot_mean_sd_bland_altman_production(
@@ -691,6 +695,8 @@ def main():
             save_formats=("pdf","svg"),
             source_csv_path=output_dir.joinpath("gpr_per_biopsy_metrics.csv"),
             show_annotation=False,
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+            kernel_legend_label=BASE_KERNEL_LABEL,
         )
     else:
         _print_section("PLOTS: Cohort-level figures (skipped)")
