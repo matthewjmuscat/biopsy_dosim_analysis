@@ -55,7 +55,9 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
-   
+
+    # plotting options
+    include_kernel_legend_in_primary_histograms = True   
 
     # Baseline kernel selection (change here to switch kernels globally)
     #   ("matern", 1.5) -> Matérn ν = 3/2 (default)
@@ -656,8 +658,13 @@ def main():
         _print_section("PLOTS: Cohort-level figures")
         # Cohort plots
 
-        GPR_production_plots.cohort_plots_production(metrics_df,
-                     cohort_output_figures_dir, save_formats=("pdf","svg"), kernel_suffix=BASE_KERNEL_LABEL)
+        GPR_production_plots.cohort_plots_production(
+            metrics_df,
+            cohort_output_figures_dir,
+            save_formats=("pdf","svg"),
+            kernel_suffix=BASE_KERNEL_LABEL,
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+        )
 
 
         # linear regression of paired SDs between methods

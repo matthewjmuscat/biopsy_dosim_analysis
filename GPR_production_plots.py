@@ -2372,10 +2372,18 @@ def cohort_plots_production(
     boxplot_metrics=("mean_ratio", "integrated_reduction", "frac_high"),
     boxplot_label_fontsize: int | None = None,
     kernel_suffix: str | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    resolved_kernel_label = None
+    if include_kernel_legend:
+        kernel_key = kernel_legend_label if kernel_legend_label is not None else kernel_suffix
+        if kernel_key is not None and str(kernel_key).strip():
+            kernel_key = str(kernel_key).strip()
+            resolved_kernel_label = KERNEL_LABEL_MAP.get(kernel_key, kernel_key)
 
     def _hist(series, xlabel, fname, unit_label: str, var_label: str, figsize=COHORT_WIDE_FIGSIZE, bins_override: int | None = None):
         fig, ax = plt.subplots(figsize=figsize)
@@ -2413,6 +2421,16 @@ def cohort_plots_production(
             rf"${bw_txt}$",
         ])
         handles, labels = ax.get_legend_handles_labels()
+        if resolved_kernel_label is not None:
+            kernel_handle = mpl.patches.Patch(
+                facecolor=HIST_FILL_COLOR,
+                edgecolor="black",
+                linewidth=0.5,
+                alpha=0.5,
+                label=resolved_kernel_label,
+            )
+            handles = [kernel_handle] + list(handles)
+            labels = [resolved_kernel_label] + list(labels)
         _finalize_legend_and_header(
             ax,
             header=header_text,
