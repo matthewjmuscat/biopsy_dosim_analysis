@@ -102,6 +102,12 @@ KERNEL_LABEL_MAP = {
     "rbf": r"RBF",
     "exp": r"Exponential",
 }
+KERNEL_SHORT_LABEL_MAP = {
+    "matern_nu_1_5": "M3/2",
+    "matern_nu_2_5": "M5/2",
+    "rbf": "RBF",
+    "exp": "Exp",
+}
 
 plt.ioff()
 
@@ -187,6 +193,113 @@ def _save_figure(
         plt.show()
     plt.close(fig)
     return out_paths
+
+
+def _with_kernel_suffix(stem: str, kernel_suffix: str | None = None) -> str:
+    """Append kernel suffix for kernel-specific figure filenames."""
+    if kernel_suffix is None:
+        return stem
+    suffix = str(kernel_suffix).strip()
+    if not suffix:
+        return stem
+    return f"{stem}_kernel_{suffix}"
+
+
+def _gp_mean_legend_label(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    base = r"$\mu^{\mathrm{GP}}_{b,v}$"
+    if not include_kernel_legend:
+        return base
+    if kernel_legend_label is None:
+        return base
+    short = _kernel_short_label(kernel_legend_label)
+    if short is None:
+        return base
+    return f"{base} ({short})"
+
+
+def _kernel_short_label(kernel_legend_label: str | None = None) -> str | None:
+    if kernel_legend_label is None:
+        return None
+    key = str(kernel_legend_label).strip()
+    if not key:
+        return None
+    return KERNEL_SHORT_LABEL_MAP.get(key, KERNEL_LABEL_MAP.get(key, key))
+
+
+def _gp_sd_legend_label(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    base = r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$"
+    if not include_kernel_legend:
+        return base
+    short = _kernel_short_label(kernel_legend_label)
+    if short is None:
+        return base
+    return f"{base} ({short})"
+
+
+def _mean_gp_sd_symbol(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    base = r"\overline{\sigma}^{\mathrm{GP}}_b"
+    if not include_kernel_legend:
+        return base
+    short = _kernel_short_label(kernel_legend_label)
+    if short is None:
+        return base
+    return rf"\overline{{\sigma}}^{{\mathrm{{GP}}}}_b\ (\mathrm{{{short}}})"
+
+
+def _mean_gp_sd_ylabel(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    symbol = _mean_gp_sd_symbol(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
+    return rf"Mean GP SD ${symbol}\ \text{{(Gy)}}$"
+
+
+def _ratio_ylabel(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    if not include_kernel_legend:
+        return r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$"
+    short = _kernel_short_label(kernel_legend_label)
+    if short is None:
+        return r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$"
+    return rf"$R_{{b,v}} = \widehat{{\sigma}}_{{b,v}} / \sigma^{{\mathrm{{GP}}}}_{{b,v}}\ (\mathrm{{{short}}})$"
+
+
+def _std_residual_symbol(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    base = r"r^{\mathrm{std}}_{b,v}"
+    if not include_kernel_legend:
+        return base
+    short = _kernel_short_label(kernel_legend_label)
+    if short is None:
+        return base
+    return rf"r^{{\mathrm{{std}}}}_{{b,v}}\ (\mathrm{{{short}}})"
+
+
+def _std_residual_axis_label(
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
+) -> str:
+    symbol = _std_residual_symbol(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
+    return rf"Standardized residual ${symbol}$"
 
 
 def _fd_bins(
@@ -936,7 +1049,7 @@ def plot_kernel_sensitivity_histogram(
             if "histogram" in modes:
                 if single_kernel:
                     # Per-kernel plot: filled + outline matching cohort style
-                    ax.hist(
+                    h_fill = ax.hist(
                         vals_arr,
                         bins=bins,
                         histtype="stepfilled",
@@ -954,6 +1067,9 @@ def plot_kernel_sensitivity_histogram(
                         alpha=1.0,
                         label=k,
                     )
+                    if len(h_fill) >= 3:
+                        handles.append(h_fill[2][0])
+                        labels.append(k)
                 else:
                     # Combined kernels: outline only (no fill) in kernel color
                     h = ax.hist(
@@ -965,7 +1081,7 @@ def plot_kernel_sensitivity_histogram(
                         alpha=1.0,
                         label=k,
                     )
-                if len(h) >= 3:
+                if not single_kernel and len(h) >= 3:
                     handles.append(h[2][0])
                     labels.append(k)
             if "kde" in modes and vals_arr.size:
@@ -1083,7 +1199,7 @@ def plot_kernel_sensitivity_scatter(
         )
 
     # Axis labels per requested outputs
-    if file_name_base == "kernel_sensitivity_ratio_scatter":
+    if file_name_base.startswith("kernel_sensitivity_ratio_scatter"):
         ax.set_xlabel(r"$\mathrm{Mean}\ R_{b,v}$", fontsize=fs_label)
         ax.set_ylabel("Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n" 
                       r"$\overline{\sigma}^{\mathrm{GP}}_b$ vs $\overline{\widehat{\sigma}}_b$ (%)", fontsize=fs_label)
@@ -1128,6 +1244,8 @@ def plot_gp_profile_production(
     seaborn_context: str = "paper",
     dpi: int = 400,
     show: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     X_star = gp_res["X_star"]
@@ -1138,9 +1256,13 @@ def plot_gp_profile_production(
     mu_X = gp_res.get("mu_X", np.array([]))
     sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
+    gp_mean_label = _gp_mean_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
 
     fig, ax = plt.subplots(figsize=figsize)
-    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$")
+    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=gp_mean_label)
 
     if ci_level == "both":
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
@@ -1174,7 +1296,7 @@ def plot_gp_profile_production(
     # Reorder legend entries: mu, 68% band, 95% band, 1σ, 2σ
     handles, labels = ax.get_legend_handles_labels()
     order_keys = [
-        r"$\mu^{\mathrm{GP}}_{b,v}$",
+        gp_mean_label,
         "68% band",
         "95% band",
         r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
@@ -1257,14 +1379,20 @@ def plot_uncertainty_reduction_production(
     show: bool = False,
     label_fontsize: int | None = None,
     legend_fontsize: int | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     X = gp_res["X"]
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
     sd_X = gp_res["sd_X"]
+    gp_sd_label = _gp_sd_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=r"MC SD $\widehat{\sigma}_{b,v}$", color=OVERLAY_LINE_COLOR)
-    ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$", color=PRIMARY_LINE_COLOR)
+    ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=gp_sd_label, color=PRIMARY_LINE_COLOR)
     ax.fill_between(X, sd_X, indep_sd, where=indep_sd>=sd_X, color=PRIMARY_LINE_COLOR, alpha=0.12)
     fs_label = _fs_label(label_fontsize)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=fs_label)
@@ -1303,6 +1431,8 @@ def plot_uncertainty_ratio_production(
     title_label: str | None = None,
     show: bool = False,
     label_fontsize: int | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     X = gp_res["X"]
@@ -1316,7 +1446,13 @@ def plot_uncertainty_ratio_production(
     ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     fs_label = _fs_label(label_fontsize)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=fs_label)
-    ax.set_ylabel(r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$", fontsize=fs_label)
+    ax.set_ylabel(
+        _ratio_ylabel(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=fs_label,
+    )
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
@@ -1347,6 +1483,8 @@ def plot_residuals_vs_z_production(
     xlim: tuple | None = None,
     title_label: str | None = None,
     show: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     X = gp_res["X"]
@@ -1356,7 +1494,10 @@ def plot_residuals_vs_z_production(
     res = y - mu_X
     if standardized:
         res = np.divide(res, np.maximum(sd_X, 1e-12))
-        y_label = r"Standardized residual $r^{\mathrm{std}}_{b,v}$"
+        y_label = _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        )
         mean_rs = float(np.nanmean(res))
         sd_rs = float(np.nanstd(res, ddof=1)) if res.size > 1 else float("nan")
         pct_le1 = float(np.nanmean(np.abs(res) <= 1.0) * 100.0) if res.size else float("nan")
@@ -1424,6 +1565,8 @@ def plot_standardized_residuals_hist_production(
     dpi: int = 400,
     title_label: str | None = None,
     show: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     res_std = (gp_res["y"] - gp_res["mu_X"]) / np.maximum(gp_res["sd_X"], 1e-12)
@@ -1458,7 +1601,13 @@ def plot_standardized_residuals_hist_production(
     ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
     lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
     ax.set_xlim(-lim, lim)
-    ax.set_xlabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_xlabel(
+        _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     ax.set_ylabel("Density", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -1777,6 +1926,8 @@ def plot_variogram_and_profile_pair(
     add_nugget: bool = False,
     title_label: str | None = None,
     metrics_row: pd.Series | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Two-panel figure: semivariogram overlay (left) + GP profile (right),
@@ -1838,7 +1989,11 @@ def plot_variogram_and_profile_pair(
     mu_X = gp_res.get("mu_X", np.array([]))
     sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
-    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$")
+    gp_mean_label = _gp_mean_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
+    ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=gp_mean_label)
     ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
     ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band")
     ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
@@ -1855,7 +2010,7 @@ def plot_variogram_and_profile_pair(
     # Legend order for profile
     handles, labels = ax.get_legend_handles_labels()
     order_keys = [
-        r"$\mu^{\mathrm{GP}}_{b,v}$",
+        gp_mean_label,
         "68% band",
         "95% band",
         r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
@@ -1922,6 +2077,8 @@ def plot_gp_profiles_grid(
     show: bool = False,
     label_map: dict | None = None,
     metrics_df: pd.DataFrame | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Assemble multiple GP profile plots into a single grid figure.
@@ -1935,6 +2092,10 @@ def plot_gp_profiles_grid(
 
     shared_handles = None
     shared_labels = None
+    gp_mean_label = _gp_mean_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
 
     for ax, (pid, bx) in zip(axes, patient_bx_list):
         gp_res = gp_results.get((pid, bx))
@@ -1949,7 +2110,7 @@ def plot_gp_profiles_grid(
         y = gp_res["y"]
         indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
 
-        ax.plot(X_star, mu_star, lw=2.0, color=PRIMARY_LINE_COLOR, label=r"$\mu^{\mathrm{GP}}_{b,v}$", zorder=3)
+        ax.plot(X_star, mu_star, lw=2.0, color=PRIMARY_LINE_COLOR, label=gp_mean_label, zorder=3)
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band", zorder=1)
         ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band", zorder=2)
         ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$", zorder=4)
@@ -2132,6 +2293,8 @@ def plot_uncertainty_pair(
     show: bool = False,
     title_label: str | None = None,
     metrics_row: pd.Series | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Two-panel figure: uncertainty reduction (left) + uncertainty ratio (right),
@@ -2152,8 +2315,12 @@ def plot_uncertainty_pair(
 
     # Left: uncertainty reduction
     ax = axes[0]
+    gp_sd_label = _gp_sd_legend_label(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
     ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=r"MC SD $\widehat{\sigma}_{b,v}$", color=OVERLAY_LINE_COLOR)
-    ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$", color=PRIMARY_LINE_COLOR)
+    ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=gp_sd_label, color=PRIMARY_LINE_COLOR)
     ax.fill_between(X, sd_X, indep_sd, where=indep_sd>=sd_X, color=PRIMARY_LINE_COLOR, alpha=0.12)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose standard deviation (Gy)", fontsize=_fs_label())
@@ -2185,7 +2352,13 @@ def plot_uncertainty_pair(
     ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
     ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
-    ax.set_ylabel(r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$", fontsize=_fs_label())
+    ax.set_ylabel(
+        _ratio_ylabel(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     median_ratio = float(np.nanmedian(ratio)) if ratio.size else np.nan
@@ -2232,6 +2405,8 @@ def plot_residuals_pair(
     dpi: int = 400,
     show: bool = False,
     title_label: str | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Two-panel figure: standardized residuals vs z (left) + standardized residuals histogram (right).
@@ -2258,7 +2433,13 @@ def plot_residuals_pair(
         ax.axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
     ax.scatter(X, res_std, s=28, color=PRIMARY_LINE_COLOR, alpha=0.9, edgecolors="black", linewidths=0.4)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
-    ax.set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_ylabel(
+        _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     if res_std.size:
@@ -2303,7 +2484,13 @@ def plot_residuals_pair(
     ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
     lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
     ax.set_xlim(-lim, lim)
-    ax.set_xlabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_xlabel(
+        _std_residual_axis_label(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     ax.set_ylabel("Density", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -2358,10 +2545,21 @@ def cohort_plots_production(
     dpi: int = 400,
     boxplot_metrics=("mean_ratio", "integrated_reduction", "frac_high"),
     boxplot_label_fontsize: int | None = None,
+    kernel_suffix: str | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    resolved_kernel_label = None
+    kernel_label_key = None
+    if include_kernel_legend:
+        kernel_key = kernel_legend_label if kernel_legend_label is not None else kernel_suffix
+        if kernel_key is not None and str(kernel_key).strip():
+            kernel_key = str(kernel_key).strip()
+            kernel_label_key = kernel_key
+            resolved_kernel_label = KERNEL_LABEL_MAP.get(kernel_key, kernel_key)
 
     def _hist(series, xlabel, fname, unit_label: str, var_label: str, figsize=COHORT_WIDE_FIGSIZE, bins_override: int | None = None):
         fig, ax = plt.subplots(figsize=figsize)
@@ -2399,6 +2597,16 @@ def cohort_plots_production(
             rf"${bw_txt}$",
         ])
         handles, labels = ax.get_legend_handles_labels()
+        if resolved_kernel_label is not None:
+            kernel_handle = mpl.patches.Patch(
+                facecolor=HIST_FILL_COLOR,
+                edgecolor="black",
+                linewidth=0.5,
+                alpha=0.5,
+                label=resolved_kernel_label,
+            )
+            handles = [kernel_handle] + list(handles)
+            labels = [resolved_kernel_label] + list(labels)
         _finalize_legend_and_header(
             ax,
             header=header_text,
@@ -2416,7 +2624,13 @@ def cohort_plots_production(
         _apply_per_biopsy_ticks(ax)
         print(f"[{fname}] bin width: {bin_width:.4g} {unit_label}".strip())
         fig.tight_layout()
-        _save_figure(fig, save_dir / fname, formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
+        _save_figure(
+            fig,
+            save_dir / _with_kernel_suffix(fname, kernel_suffix),
+            formats=save_formats,
+            dpi=dpi,
+            create_subdir_for_stem=False,
+        )
 
     _hist(metrics_df["mean_ratio"], r"Mean shrinkage ratio $\overline{R}_b$", "cohort_hist_mean_ratio", unit_label="", var_label=r"\overline{R}_b")
     _hist(metrics_df["ell"], r"Fitted axial coherence length $\hat{\ell}_b$ (mm)", "cohort_hist_length_scale", unit_label="mm", var_label=r"\ell_b", bins_override=4)
@@ -2470,7 +2684,13 @@ def cohort_plots_production(
         ax.tick_params(axis="x", which="minor", bottom=False)
         ax.tick_params(axis="x", labelrotation=30)
         fig.tight_layout()
-        _save_figure(fig, save_dir / "cohort_boxplot_uncertainty_reduction", formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
+        _save_figure(
+            fig,
+            save_dir / _with_kernel_suffix("cohort_boxplot_uncertainty_reduction", kernel_suffix),
+            formats=save_formats,
+            dpi=dpi,
+            create_subdir_for_stem=False,
+        )
 
     fig, ax = plt.subplots(figsize=COHORT_WIDE_FIGSIZE)
     ax.scatter(metrics_df["mean_indep_sd"], metrics_df["mean_gp_sd"], s=24, alpha=0.85, color=PRIMARY_LINE_COLOR)
@@ -2479,11 +2699,23 @@ def cohort_plots_production(
     ax.plot(lims, lims, "k--", lw=1.0)
     ax.set_xlim(lims); ax.set_ylim(lims)
     ax.set_xlabel(r"Mean MC SD $\overline{\widehat{\sigma}}_b\ \text{(Gy)}$", fontsize=_fs_label())
-    ax.set_ylabel(r"Mean GP SD $\overline{\sigma}^{\mathrm{GP}}_b\ \text{(Gy)}$", fontsize=_fs_label())
+    ax.set_ylabel(
+        _mean_gp_sd_ylabel(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_label_key,
+        ),
+        fontsize=_fs_label(),
+    )
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     fig.tight_layout()
-    _save_figure(fig, save_dir / "cohort_mean_sd_scatter", formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
+    _save_figure(
+        fig,
+        save_dir / _with_kernel_suffix("cohort_mean_sd_scatter", kernel_suffix),
+        formats=save_formats,
+        dpi=dpi,
+        create_subdir_for_stem=False,
+    )
 
 
 # ----------------------------------------------------------------------
@@ -2504,6 +2736,7 @@ def calibration_plots_production(
     kde_bw_scale: float | None = None,
     hue_col: str | None = None,
     kernel_color_map: dict[str, str] | None = None,
+    kernel_suffix: str | None = None,
 ):
     """
     Produce publication-ready calibration diagnostics from per-biopsy calibration metrics.
@@ -2534,7 +2767,15 @@ def calibration_plots_production(
         else:
             arr = series.dropna().to_numpy(dtype=float)
             arr = arr[np.isfinite(arr)]
-            groups.append(("All", arr, None))
+            # Single-kernel calibration calls pass one kernel at a time; use that label
+            # instead of a generic "All" legend entry when available.
+            legend_label = "All"
+            if "kernel_label" in calib_df.columns:
+                kernel_vals = calib_df["kernel_label"].dropna().unique()
+                if len(kernel_vals) == 1:
+                    kernel_key = str(kernel_vals[0])
+                    legend_label = KERNEL_LABEL_MAP.get(kernel_key, kernel_key)
+            groups.append((legend_label, arr, None))
 
         pooled = np.concatenate([g[1] for g in groups]) if groups else np.array([])
         fig, ax = plt.subplots(figsize=COHORT_WIDE_FIGSIZE)
@@ -2580,7 +2821,7 @@ def calibration_plots_production(
             if "histogram" in modes_use:
                 if single_group:
                     # Per-kernel single-group style: filled + outline matching cohort style
-                    ax.hist(
+                    h_fill = ax.hist(
                         gvals,
                         bins=bins,
                         histtype="stepfilled",
@@ -2598,6 +2839,8 @@ def calibration_plots_production(
                         alpha=1.0,
                         label=glabel,
                     )
+                    if len(h_fill) >= 3:
+                        handles.append(h_fill[2][0]); labels.append(glabel)
                 else:
                     # Multi-kernel overlay: outline only in group color
                     h = ax.hist(
@@ -2610,7 +2853,7 @@ def calibration_plots_production(
                         alpha=1.0,
                         label=glabel,
                     )
-                if len(h) >= 3:
+                if not single_group and len(h) >= 3:
                     handles.append(h[2][0]); labels.append(glabel)
             if "kde" in modes_use and gvals.size:
                 try:
@@ -2665,7 +2908,13 @@ def calibration_plots_production(
             expand_figure=False,
         )
         fig.tight_layout()
-        _save_figure(fig, save_dir / fname, formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
+        _save_figure(
+            fig,
+            save_dir / _with_kernel_suffix(fname, kernel_suffix),
+            formats=save_formats,
+            dpi=dpi,
+            create_subdir_for_stem=False,
+        )
 
     modes_iter = modes_list if modes_list is not None else [modes]
 
@@ -2803,7 +3052,13 @@ def calibration_plots_production(
             expand_figure=False,
         )
         fig.tight_layout()
-        _save_figure(fig, save_dir / "calib_scatter_mean_vs_sd", formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
+        _save_figure(
+            fig,
+            save_dir / _with_kernel_suffix("calib_scatter_mean_vs_sd", kernel_suffix),
+            formats=save_formats,
+            dpi=dpi,
+            create_subdir_for_stem=False,
+        )
 
 def plot_mean_sd_scatter_with_fits_production(
     metrics_df: pd.DataFrame,
@@ -2819,6 +3074,8 @@ def plot_mean_sd_scatter_with_fits_production(
     add_origin_fit: bool = False,
     add_ci_ribbon: bool = True,
     add_pred_band: bool = False,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     x = metrics_df["mean_indep_sd"].to_numpy(dtype=float)
     y = metrics_df["mean_gp_sd"].to_numpy(dtype=float)
@@ -2890,7 +3147,13 @@ def plot_mean_sd_scatter_with_fits_production(
         ax.plot(xs, bo * xs, lw=1.5, ls="-.", color="#7a5195", label=f"Through-origin: y={bo:.3f}x")
 
     ax.set_xlabel(r"Mean MC SD $\overline{\widehat{\sigma}}_b$ (Gy)", fontsize=_fs_label())
-    ax.set_ylabel(r"Mean GP SD $\overline{\sigma}^{\mathrm{GP}}_b\ \text{(Gy)}$", fontsize=_fs_label())
+    ax.set_ylabel(
+        _mean_gp_sd_ylabel(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        ),
+        fontsize=_fs_label(),
+    )
     ax.set_xlim(lims); ax.set_ylim(lims)
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -3062,6 +3325,8 @@ def plot_mean_sd_bland_altman_production(
     seaborn_context: str = "paper",
     show_annotation: bool = True,
     nearline_fontsize: int | None = 12,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """Production-quality Bland–Altman plot for mean MC vs GP SD."""
     _setup_matplotlib_defaults(
@@ -3097,9 +3362,13 @@ def plot_mean_sd_bland_altman_production(
     ax.axhline(loa_high, color=PRIMARY_LINE_COLOR, lw=1.0, ls="--", alpha=0.6)
 
     ax.set_xlabel(r"Mean SD, $(\overline{\widehat{\sigma}}_b + \overline{\sigma}^{\mathrm{GP}}_b)/2$ (Gy)", fontsize=_fs_label())
+    gp_mean_symbol = _mean_gp_sd_symbol(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
     ax.set_ylabel(
         "Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n"
-        r"$\overline{\sigma}^{\mathrm{GP}}_b$ vs $\overline{\widehat{\sigma}}_b$ (%)",
+        + rf"${gp_mean_symbol}$ vs $\overline{{\widehat{{\sigma}}}}_b$ (%)",
         fontsize=_fs_label(),
     )
     _apply_axis_style(ax)
@@ -3164,6 +3433,9 @@ def make_patient_level_gpr_plots(
     add_sill_line: bool = False,
     add_nugget_line: bool = False,
     title_label: str | None = None,
+    kernel_suffix: str | None = None,
+    include_kernel_legend: bool = True,
+    kernel_legend_label: str | None = None,
 ):
     """
     Generate all patient-level publication plots and save into concept-specific
@@ -3189,71 +3461,83 @@ def make_patient_level_gpr_plots(
     plot_gp_profile_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["gp_profile"],
-        file_name_base=f"gp_profile_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"gp_profile_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         title_on=show_titles,
         title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_uncertainty_reduction_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["uncertainty_reduction"],
-        file_name_base=f"uncertainty_reduction_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"uncertainty_reduction_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         title_on=show_titles,
         title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_uncertainty_ratio_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["uncertainty_ratio"],
-        file_name_base=f"uncertainty_ratio_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"uncertainty_ratio_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         title_on=show_titles,
         title_label=title_label,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_residuals_vs_z_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["residuals"],
-        file_name_base=f"residuals_vs_z_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"residuals_vs_z_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
         title_label=title_label,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_residuals_vs_z_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["residuals"],
-        file_name_base=f"residuals_std_vs_z_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"residuals_std_vs_z_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         standardized=True,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
         title_label=title_label,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_standardized_residuals_hist_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["residuals"],
-        file_name_base=f"residuals_hist_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"residuals_hist_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
         seaborn_context=seaborn_context,
         title_label=title_label,
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
     )
     plot_standardized_residuals_qq_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["residuals"],
-        file_name_base=f"residuals_qq_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"residuals_qq_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
@@ -3263,7 +3547,7 @@ def make_patient_level_gpr_plots(
     plot_standardized_residuals_ecdf_production(
         gp_res, patient_id, bx_index,
         save_dir=concept_dirs["residuals"],
-        file_name_base=f"residuals_ecdf_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"residuals_ecdf_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         font_scale=font_scale,
         seaborn_style=seaborn_style,
@@ -3273,7 +3557,7 @@ def make_patient_level_gpr_plots(
     plot_variogram_overlay_production(
         semivariogram_df, patient_id, bx_index, gp_res["hyperparams"],
         save_dir=concept_dirs["variogram_overlay"],
-        file_name_base=f"variogram_overlay_patient_{patient_id}_bx_{bx_index}",
+        file_name_base=_with_kernel_suffix(f"variogram_overlay_patient_{patient_id}_bx_{bx_index}", kernel_suffix),
         save_formats=save_formats,
         title_on=show_titles,
         title_label=title_label,

@@ -55,7 +55,9 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
-   
+
+    # plotting options
+    include_kernel_legend_in_primary_histograms = True   
 
     # Baseline kernel selection (change here to switch kernels globally)
     #   ("matern", 1.5) -> Matérn ν = 3/2 (default)
@@ -507,6 +509,7 @@ def main():
             sd_bounds=(0.5, 1.5),
             modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
             kernel_color_map=KERNEL_COLOR_MAP,
+            kernel_suffix=BASE_KERNEL_LABEL,
         )
         print(f"[calibration] baseline kernel saved to {calib_csv_base} and {calib_fig_dir_base}")
 
@@ -542,12 +545,14 @@ def main():
         GPR_production_plots.plot_gp_profiles_grid(
             gp_results=results,
             patient_bx_list=patient_bx_list,
-            save_path=grid_dir / "gp_profiles_grid",
+            save_path=grid_dir / f"gp_profiles_grid_kernel_{BASE_KERNEL_LABEL}",
             ncols=grid_ncols,
             label_map=grid_label_map,
             metrics_df=metrics_df,
             save_formats=("pdf", "svg"),
             dpi=400,
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+            kernel_legend_label=BASE_KERNEL_LABEL,
         )
 
         # Grid figures across selected biopsies for semivariogram overlays
@@ -557,7 +562,7 @@ def main():
             semivariogram_df=semivariogram_df,
             gp_results=results,
             patient_bx_list=patient_bx_list,
-            save_path=grid_dir / "variogram_overlays_grid",
+            save_path=grid_dir / f"variogram_overlays_grid_kernel_{BASE_KERNEL_LABEL}",
             ncols=grid_ncols,
             label_map=grid_label_map,
             metrics_df=metrics_df,
@@ -594,6 +599,9 @@ def main():
                show_titles=False,
                font_scale=1.0,
                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+               kernel_suffix=BASE_KERNEL_LABEL,
+               include_kernel_legend=include_kernel_legend_in_primary_histograms,
+               kernel_legend_label=BASE_KERNEL_LABEL,
            )
 
             # Paired figures with aligned axes (semivariogram+profile, reduction+ratio)
@@ -606,10 +614,12 @@ def main():
                 bx_index,
                 res,
                 save_dir=pair_dir,
-                file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}",
+                file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
+                include_kernel_legend=include_kernel_legend_in_primary_histograms,
+                kernel_legend_label=BASE_KERNEL_LABEL,
             )
             print(f"    [plots] Paired uncertainty reduction/ratio for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_uncertainty_pair(
@@ -617,10 +627,12 @@ def main():
                 patient_id,
                 bx_index,
                 save_dir=pair_dir,
-                file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}",
+                file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
+                include_kernel_legend=include_kernel_legend_in_primary_histograms,
+                kernel_legend_label=BASE_KERNEL_LABEL,
             )
             print(f"    [plots] Paired standardized residuals for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_residuals_pair(
@@ -628,9 +640,11 @@ def main():
                 patient_id,
                 bx_index,
                 save_dir=pair_dir,
-                file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}",
+                file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
                 title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                include_kernel_legend=include_kernel_legend_in_primary_histograms,
+                kernel_legend_label=BASE_KERNEL_LABEL,
             )
             # give the list of plots produced in this print statement
             print(f"Saved all plots for Patient ID: {patient_id}, Bx index: {bx_index} to {patient_dir}")
@@ -654,8 +668,13 @@ def main():
         _print_section("PLOTS: Cohort-level figures")
         # Cohort plots
 
-        GPR_production_plots.cohort_plots_production(metrics_df,
-                     cohort_output_figures_dir, save_formats=("pdf","svg"))
+        GPR_production_plots.cohort_plots_production(
+            metrics_df,
+            cohort_output_figures_dir,
+            save_formats=("pdf","svg"),
+            kernel_suffix=BASE_KERNEL_LABEL,
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+        )
 
 
         # linear regression of paired SDs between methods
@@ -665,17 +684,21 @@ def main():
         GPR_production_plots.plot_mean_sd_scatter_with_fits_production(
             metrics_df, reg_stats,
             save_dir=cohort_output_figures_dir,
-            file_name_base="cohort_mean_sd_scatter_with_fits",
+            file_name_base=f"cohort_mean_sd_scatter_with_fits_kernel_{BASE_KERNEL_LABEL}",
             save_formats=("pdf","svg"),
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+            kernel_legend_label=BASE_KERNEL_LABEL,
         )
 
         GPR_production_plots.plot_mean_sd_bland_altman_production(
             metrics_df,
             save_dir=cohort_output_figures_dir,
-            file_name_base="cohort_mean_sd_bland_altman",
+            file_name_base=f"cohort_mean_sd_bland_altman_kernel_{BASE_KERNEL_LABEL}",
             save_formats=("pdf","svg"),
             source_csv_path=output_dir.joinpath("gpr_per_biopsy_metrics.csv"),
             show_annotation=False,
+            include_kernel_legend=include_kernel_legend_in_primary_histograms,
+            kernel_legend_label=BASE_KERNEL_LABEL,
         )
     else:
         _print_section("PLOTS: Cohort-level figures (skipped)")
