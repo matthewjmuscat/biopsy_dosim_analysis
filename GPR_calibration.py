@@ -169,7 +169,12 @@ def build_calibration_metrics(
     """
     rows = []
     for (pid, bx), res in results.items():
-        rows.append(compute_biopsy_calibration(pid, bx, res, mean_bounds=mean_bounds, sd_bounds=sd_bounds))
+        row = compute_biopsy_calibration(pid, bx, res, mean_bounds=mean_bounds, sd_bounds=sd_bounds)
+        if isinstance(res, dict):
+            row["gp_mean_mode"] = res.get("mean_mode", "zero")
+            row["target_stat"] = res.get("target_stat", np.nan)
+            row["position_mode"] = res.get("position_mode", np.nan)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 

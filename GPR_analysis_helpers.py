@@ -239,6 +239,9 @@ def run_gp_and_collect_metrics(
         "median_length_scale_mm": float(metrics_df["ell"].median()),
         "median_nugget": float(metrics_df["nugget"].median()),
         "median_sv_rmse": float(metrics_df["sv_rmse"].median()),
+        "gp_mean_mode": mean_mode,
+        "target_stat": target_stat,
+        "position_mode": position_mode,
     }
     if kernel_label:
         cohort_summary["kernel_label"] = kernel_label

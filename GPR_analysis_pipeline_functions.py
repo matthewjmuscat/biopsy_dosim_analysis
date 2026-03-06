@@ -240,6 +240,31 @@ def build_kernel_matrix(Xa: np.ndarray, Xb: np.ndarray, hyp: GPHyperparams) -> n
         return exp_covariance(h, hyp.sigma_f2, hyp.ell)
     return matern_covariance(h, hyp.sigma_f2, hyp.ell, hyp.nu)
 
+
+def estimate_gls_constant_mean(
+    X: np.ndarray,
+    y: np.ndarray,
+    var_n: np.ndarray,
+    hyp: GPHyperparams,
+    jitter: float = 1e-8,
+) -> Tuple[float, float]:
+    """
+    Estimate constant GLS mean and denominator 1^T C^{-1} 1 for audit/traceability.
+    Returns (m_hat, denom). On numerical failure returns (nan, nan).
+    """
+    Kxx = build_kernel_matrix(X, X, hyp)
+    Sigma_eff = np.diag(var_n) + (hyp.nugget + jitter) * np.eye(len(X))
+    L, lower = cho_factor(Kxx + Sigma_eff, lower=True, check_finite=False)
+    ones = np.ones(len(X), dtype=float)
+    Cinv_ones = cho_solve((L, lower), ones, check_finite=False)
+    denom = float(ones @ Cinv_ones)
+    if (not np.isfinite(denom)) or (denom <= 1e-14):
+        return float("nan"), float(denom)
+    Cinv_y = cho_solve((L, lower), y, check_finite=False)
+    m_hat = float((ones @ Cinv_y) / denom)
+    return m_hat, denom
+
+
 def gp_posterior(
     X: np.ndarray, y: np.ndarray, var_n: np.ndarray, hyp: GPHyperparams,
     X_star: np.ndarray, jitter: float = 1e-8,
@@ -341,10 +366,22 @@ def run_gp_for_biopsy(
     else:
         X_star = np.asarray(grid_mm, float)
 
-    mu_star, sd_star = gp_posterior(X, y, var_n, hyp, X_star, mean_mode=mean_mode)
+    solver_jitter = 1e-8
+    m_b_hat = np.nan
+    ones_cinv_ones = np.nan
+    if mean_mode == "ordinary":
+        m_b_hat, ones_cinv_ones = estimate_gls_constant_mean(
+            X, y, var_n, hyp, jitter=solver_jitter
+        )
+
+    mu_star, sd_star = gp_posterior(
+        X, y, var_n, hyp, X_star, jitter=solver_jitter, mean_mode=mean_mode
+    )
 
     # Step 3b: posterior AT TRAINING VOXELS for residuals/metrics
-    mu_X, sd_X = gp_posterior(X, y, var_n, hyp, X_star=X, mean_mode=mean_mode)
+    mu_X, sd_X = gp_posterior(
+        X, y, var_n, hyp, X_star=X, jitter=solver_jitter, mean_mode=mean_mode
+    )
 
     return dict(
         patient_id=patient_id,
@@ -352,6 +389,11 @@ def run_gp_for_biopsy(
         per_voxel=per_voxel,       # table of X,y,var_n for debugging/plots
         hyperparams=hyp,           # sigma_f2, ell, nugget, nu
         mean_mode=mean_mode,
+        target_stat=target_stat,
+        position_mode=position_mode,
+        m_b_hat=m_b_hat,
+        ones_cinv_ones=ones_cinv_ones,
+        solver_jitter=solver_jitter,
         X=X, y=y, var_n=var_n,
         X_star=X_star, mu_star=mu_star, sd_star=sd_star,
         mu_X=mu_X, sd_X=sd_X   # <-- added keys
@@ -397,6 +439,12 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
     gp_sd    = np.asarray(res["sd_X"])
     mu_X     = np.asarray(res["mu_X"])
     hyp      = res["hyperparams"]
+    mean_mode = res.get("mean_mode", "zero")
+    target_stat = res.get("target_stat", np.nan)
+    position_mode = res.get("position_mode", np.nan)
+    m_b_hat = float(res.get("m_b_hat", np.nan))
+    ones_cinv_ones = float(res.get("ones_cinv_ones", np.nan))
+    solver_jitter = float(res.get("solver_jitter", np.nan))
 
     indep_sd = np.sqrt(np.maximum(var_n, 0))
     spacing  = _safe_spacing(X)  # mm
@@ -438,6 +486,9 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
     rmse_resid  = float(np.sqrt(np.nanmean(resids_f**2))) if len(resids_f) else np.nan
     mean_resstd = float(np.nanmean(resstd_f)) if len(resstd_f) else np.nan
     std_resstd  = float(np.nanstd(resstd_f, ddof=1)) if len(resstd_f) > 1 else np.nan
+    mean_y_gy = float(np.nanmean(y)) if np.isfinite(y).any() else np.nan
+    mean_muX_gy = float(np.nanmean(mu_X)) if np.isfinite(mu_X).any() else np.nan
+    mean_residual_gy = float(np.nanmean(resids)) if np.isfinite(resids).any() else np.nan
 
     # crude skew/kurtosis (no SciPy)
     def _moments(a):
@@ -508,6 +559,9 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
         pct_reduction_from_ratio=pct_reduction_from_ratio,
         mae_resid=mae_resid,
         rmse_resid=rmse_resid,
+        mean_y_gy=mean_y_gy,
+        mean_muX_gy=mean_muX_gy,
+        mean_residual_gy=mean_residual_gy,
         mean_resstd=mean_resstd,
         std_resstd=std_resstd,
         skew_resstd=skew_resstd,
@@ -515,6 +569,12 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
         ell=ell, sigma_f2=sigma_f2, nugget=nugget, tau2=nugget, nu=nu_param,
         nugget_fraction=nugget_fraction,
         sv_rmse=sv_rmse,
+        gp_mean_mode=mean_mode,
+        target_stat=target_stat,
+        position_mode=position_mode,
+        m_b_hat_gy=m_b_hat,
+        ones_cinv_ones=ones_cinv_ones,
+        solver_jitter=solver_jitter,
     )
     if inferred_label:
         row["kernel_label"] = inferred_label
@@ -620,7 +680,6 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
 
 
 
