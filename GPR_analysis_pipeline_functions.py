@@ -249,11 +249,8 @@ def gp_posterior(
     Gaussian-noise GP with heteroscedastic noise: Var(eps_i)=var_n[i]; plus nugget.
     Returns posterior mean (m,) and std (m,) at X_star.
     """
-    if mean_mode != "zero":
-        raise NotImplementedError(
-            f"mean_mode='{mean_mode}' is not implemented yet. "
-            "Phase 0 keeps only zero-mean behavior; ordinary kriging will be added in Phase 1."
-        )
+    if mean_mode not in {"zero", "ordinary"}:
+        raise ValueError(f"Unsupported mean_mode '{mean_mode}'. Use 'zero' or 'ordinary'.")
 
     Kxx = build_kernel_matrix(X, X, hyp)
     Sigma_eff = np.diag(var_n) + (hyp.nugget + jitter) * np.eye(len(X))
@@ -261,12 +258,34 @@ def gp_posterior(
     # Cholesky solve
     L, lower = cho_factor(Kxx + Sigma_eff, lower=True, check_finite=False)
     Ksx = build_kernel_matrix(X_star, X, hyp)
-    alpha = cho_solve((L, lower), y, check_finite=False)      # (n,)
-    mu_star = Ksx @ alpha                                     # (m,)
+    if mean_mode == "zero":
+        alpha = cho_solve((L, lower), y, check_finite=False)      # (n,)
+        mu_star = Ksx @ alpha                                     # (m,)
+    else:
+        # Ordinary kriging: estimate constant mean with GLS then krige residuals.
+        ones = np.ones(len(X), dtype=float)
+        Cinv_y = cho_solve((L, lower), y, check_finite=False)
+        Cinv_ones = cho_solve((L, lower), ones, check_finite=False)
+        denom = float(ones @ Cinv_ones)
+        if (not np.isfinite(denom)) or (denom <= 1e-14):
+            # Numerical fallback to zero-mean branch if GLS denominator is unstable.
+            alpha = Cinv_y
+            mu_star = Ksx @ alpha
+        else:
+            m_hat = float((ones @ Cinv_y) / denom)
+            alpha = cho_solve((L, lower), y - m_hat * ones, check_finite=False)
+            mu_star = m_hat + (Ksx @ alpha)
 
     v = cho_solve((L, lower), Ksx.T, check_finite=False)      # (n,m)
     Kss = build_kernel_matrix(X_star, X_star, hyp)
     Sigma_star = Kss - (Ksx @ v)                              # (m,m)
+    if mean_mode == "ordinary":
+        ones = np.ones(len(X), dtype=float)
+        Cinv_ones = cho_solve((L, lower), ones, check_finite=False)
+        denom = float(ones @ Cinv_ones)
+        if np.isfinite(denom) and denom > 1e-14:
+            corr = 1.0 - (Ksx @ Cinv_ones)  # (m,)
+            Sigma_star = Sigma_star + np.outer(corr, corr) / denom
     # Numerical safety
     var_star = np.clip(np.diag(Sigma_star), 0.0, None)
     return mu_star, np.sqrt(var_star)
@@ -601,7 +620,6 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
 
 
 
