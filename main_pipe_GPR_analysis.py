@@ -58,8 +58,8 @@ def main():
     run_cohort_plots = True
 
     # GP methodology options
-    gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be ordinary, we have tested for this and zero displays artifically pushed done regression profiles
-    semivariogram_method = "shift"  # options: "shift" (legacy), "pairwise" (gap-safe)
+    gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be ordinary, we have tested for this and zero displays artificially pushed down regression profiles
+    semivariogram_method = "shift"  # options: "shift" (legacy), "pairwise" (gap-safe, upgraded allows for proper calculation for Leave One Segment Out pathway)
     run_semivariogram_method_parity_check = True
     semivariogram_pairwise_position_mode = "begin"
     semivariogram_pairwise_lag_bin_width_mm = None
