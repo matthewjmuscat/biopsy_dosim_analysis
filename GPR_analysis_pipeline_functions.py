@@ -242,12 +242,19 @@ def build_kernel_matrix(Xa: np.ndarray, Xb: np.ndarray, hyp: GPHyperparams) -> n
 
 def gp_posterior(
     X: np.ndarray, y: np.ndarray, var_n: np.ndarray, hyp: GPHyperparams,
-    X_star: np.ndarray, jitter: float = 1e-8
+    X_star: np.ndarray, jitter: float = 1e-8,
+    mean_mode: Literal["zero", "ordinary"] = "zero",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Gaussian-noise GP with heteroscedastic noise: Var(eps_i)=var_n[i]; plus nugget.
     Returns posterior mean (m,) and std (m,) at X_star.
     """
+    if mean_mode != "zero":
+        raise NotImplementedError(
+            f"mean_mode='{mean_mode}' is not implemented yet. "
+            "Phase 0 keeps only zero-mean behavior; ordinary kriging will be added in Phase 1."
+        )
+
     Kxx = build_kernel_matrix(X, X, hyp)
     Sigma_eff = np.diag(var_n) + (hyp.nugget + jitter) * np.eye(len(X))
 
@@ -278,6 +285,7 @@ def run_gp_for_biopsy(
     grid_mm: Optional[np.ndarray] = None,
     kernel_spec: Tuple[str, Optional[float]] | None = None,
     position_mode: Literal["center","begin"] = "center",
+    mean_mode: Literal["zero", "ordinary"] = "zero",
 ) -> Dict[str, object]:
     """
     Orchestrates: targets+noise -> variogram fit -> GP posterior on grid.
@@ -314,16 +322,17 @@ def run_gp_for_biopsy(
     else:
         X_star = np.asarray(grid_mm, float)
 
-    mu_star, sd_star = gp_posterior(X, y, var_n, hyp, X_star)
+    mu_star, sd_star = gp_posterior(X, y, var_n, hyp, X_star, mean_mode=mean_mode)
 
     # Step 3b: posterior AT TRAINING VOXELS for residuals/metrics
-    mu_X, sd_X = gp_posterior(X, y, var_n, hyp, X_star=X)
+    mu_X, sd_X = gp_posterior(X, y, var_n, hyp, X_star=X, mean_mode=mean_mode)
 
     return dict(
         patient_id=patient_id,
         bx_index=bx_index,
         per_voxel=per_voxel,       # table of X,y,var_n for debugging/plots
         hyperparams=hyp,           # sigma_f2, ell, nugget, nu
+        mean_mode=mean_mode,
         X=X, y=y, var_n=var_n,
         X_star=X_star, mu_star=mu_star, sd_star=sd_star,
         mu_X=mu_X, sd_X=sd_X   # <-- added keys
@@ -592,7 +601,6 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
 
 
 

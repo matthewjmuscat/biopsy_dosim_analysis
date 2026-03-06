@@ -55,6 +55,7 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
+    gp_mean_mode = "zero"  # Phase 0: keep existing zero-mean GP behavior
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True
@@ -452,6 +453,7 @@ def main():
         kernel_spec=BASE_KERNEL_SPEC,
         kernel_label=BASE_KERNEL_LABEL,
         position_mode=position_mode,
+        mean_mode=gp_mean_mode,
         save_split_cohort_summary_csvs=write_split_main_cohort_summary_csvs,
     )
 
@@ -491,6 +493,7 @@ def main():
             csv_dir=kernel_csv_dir,
             target_stat="median",
             position_mode=position_mode,
+            mean_mode=gp_mean_mode,
             kernel_color_map=KERNEL_COLOR_MAP,
             save_per_kernel_metrics_csvs=write_sensitivity_per_kernel_metrics_csvs,
             save_per_kernel_calibration_csvs=write_sensitivity_per_kernel_calibration_csvs,

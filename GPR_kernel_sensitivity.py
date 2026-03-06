@@ -19,6 +19,7 @@ def run_kernel_sensitivity(
     kernel_specs: Iterable[Tuple[str, float | None, str]] | None = None,
     file_types: tuple[str, ...] = ("pdf", "svg"),
     position_mode: str = "center",
+    mean_mode: str = "zero",
     kernel_color_map: dict[str, str] | None = None,
     save_per_kernel_metrics_csvs: bool = True,
     save_per_kernel_calibration_csvs: bool = True,
@@ -74,6 +75,7 @@ def run_kernel_sensitivity(
             kernel_spec=(kernel_name, kernel_param),
             kernel_label=kernel_label,
             position_mode=position_mode,
+            mean_mode=mean_mode,
             save_csv=False,
         )
 

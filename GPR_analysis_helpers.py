@@ -126,6 +126,7 @@ def run_gp_and_collect_metrics(
     kernel_spec=None,
     kernel_label: str | None = None,
     position_mode: Literal["center","begin"] = "center",
+    mean_mode: Literal["zero", "ordinary"] = "zero",
     save_csv: bool = True,
     save_split_cohort_summary_csvs: bool = True,
 ):
@@ -162,6 +163,7 @@ def run_gp_and_collect_metrics(
             nu=nu,
             kernel_spec=kernel_spec,
             position_mode=position_mode,
+            mean_mode=mean_mode,
         )
         results[(pid, bx_idx)] = res
         print(f"Processed Patient ID: {pid}, Bx index: {bx_idx}")
