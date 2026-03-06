@@ -88,7 +88,8 @@ def main():
     # fixed_mm tiny-tail merge knobs
     blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy small tail holdouts (not used for equal_voxels)
     blocked_cv_min_test_voxels = 3  # minimum held-out voxel count per fold when tiny-tail merge is enabled
-    blocked_cv_min_test_block_mm = 3.0  # minimum held-out physical span (mm) per fold when tiny-tail merge is enabled
+    blocked_cv_min_test_block_mm = 5.0  # minimum held-out physical span (mm) per fold when tiny-tail merge is enabled
+    blocked_cv_min_effective_folds_after_merge = 2  # tiny-tail merge guard: do not collapse a biopsy below this many folds
     blocked_cv_kernel_specs = [
         ("matern", 1.5, "matern_nu_1_5"),
         ("matern", 2.5, "matern_nu_2_5"),
@@ -620,6 +621,7 @@ def main():
             merge_tiny_tail_folds=blocked_cv_merge_tiny_tail_folds,
             min_test_voxels=blocked_cv_min_test_voxels,
             min_test_block_mm=blocked_cv_min_test_block_mm,
+            min_effective_folds_after_merge=blocked_cv_min_effective_folds_after_merge,
             position_mode=semivariogram_pairwise_position_mode,
             target_stat=blocked_cv_target_stat,
             mean_mode=blocked_cv_mean_mode,

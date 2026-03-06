@@ -26,6 +26,7 @@ class BlockedCVConfig:
     merge_tiny_tail_folds: bool = False
     min_test_voxels: int = 1
     min_test_block_mm: float = 0.0
+    min_effective_folds_after_merge: int = 2
     position_mode: str = "begin"
     target_stat: str = "median"
     mean_mode: str = "ordinary"
@@ -87,6 +88,7 @@ def run_blocked_cv_scaffold(
         "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
         "min_test_voxels": int(config.min_test_voxels),
         "min_test_block_mm": float(config.min_test_block_mm),
+        "min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
         "position_mode": config.position_mode,
         "target_stat": config.target_stat,
         "mean_mode": config.mean_mode,
@@ -170,6 +172,7 @@ def _merge_tiny_tail_fold_ids(
     *,
     min_test_voxels: int,
     min_test_block_mm: float,
+    min_effective_folds_after_merge: int,
 ) -> tuple[np.ndarray, bool]:
     """
     Merge tiny remainder tail folds into the previous fold (fixed_mm mode).
@@ -183,10 +186,11 @@ def _merge_tiny_tail_fold_ids(
 
     min_vox = max(int(min_test_voxels), 1)
     min_span = max(float(min_test_block_mm), 0.0)
+    min_eff = max(int(min_effective_folds_after_merge), 1)
 
     while True:
         uniq = np.sort(np.unique(ids))
-        if uniq.size <= 1:
+        if uniq.size <= min_eff:
             break
         tail = int(uniq[-1])
         prev = int(uniq[-2])
@@ -253,6 +257,7 @@ def build_blocked_cv_fold_map(
                     vox["x_mm"].to_numpy(float),
                     min_test_voxels=config.min_test_voxels,
                     min_test_block_mm=config.min_test_block_mm,
+                    min_effective_folds_after_merge=config.min_effective_folds_after_merge,
                 )
         else:
             raise ValueError(
@@ -364,6 +369,7 @@ def run_blocked_cv_phase3b(
         "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
         "min_test_voxels": int(config.min_test_voxels),
         "min_test_block_mm": float(config.min_test_block_mm),
+        "min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
         "n_biopsies_with_merged_tail": merged_bx_count,
         "position_mode": config.position_mode,
         "target_stat": config.target_stat,
