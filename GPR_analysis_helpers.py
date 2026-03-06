@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 from typing import Literal
 
+import GPR_semivariogram as gpr_sv
 
 
 
@@ -54,6 +55,9 @@ def semivariogram_by_biopsy(
     all_df,
     voxel_size_mm: float = 1.0,
     max_lag_voxels=None,
+    method: Literal["shift", "pairwise"] = "shift",
+    position_mode: Literal["begin", "center"] = "begin",
+    lag_bin_width_mm: float | None = None,
 ):
     """
     Compute semivariogram for each biopsy (grouped by Patient ID and Bx index).
@@ -69,17 +73,35 @@ def semivariogram_by_biopsy(
         Physical size per voxel (used to convert lag_voxels -> h_mm).
     max_lag_voxels : int | None
         Maximum voxel lag to compute; None uses all available.
+    method : {"shift", "pairwise"}
+        Semivariogram computation method. "shift" is legacy contiguous-lag mode.
+        "pairwise" is gap-safe and bins by physical lag.
+    position_mode : {"begin", "center"}
+        Axial voxel position convention used by pairwise method.
+    lag_bin_width_mm : float | None
+        Pairwise lag bin width (mm); defaults to voxel_size_mm when None.
     """
 
     results = []
     group_cols = ['Patient ID', 'Bx index']
 
     for (patient_id, bx_index), g in all_df.groupby(group_cols):
-        sv = compute_semivariogram_regular(
-            g,
-            voxel_size_mm=voxel_size_mm,
-            max_lag_voxels=max_lag_voxels
-        )
+        if method == "pairwise":
+            sv = gpr_sv.compute_semivariogram_pairwise(
+                g,
+                voxel_size_mm=voxel_size_mm,
+                max_lag_voxels=max_lag_voxels,
+                position_mode=position_mode,
+                lag_bin_width_mm=lag_bin_width_mm,
+            )
+        elif method == "shift":
+            sv = compute_semivariogram_regular(
+                g,
+                voxel_size_mm=voxel_size_mm,
+                max_lag_voxels=max_lag_voxels,
+            )
+        else:
+            raise ValueError(f"Unsupported semivariogram method '{method}'. Use 'shift' or 'pairwise'.")
 
         # Metadata (handle mixed cases explicitly)
         meta = {}

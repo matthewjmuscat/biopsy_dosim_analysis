@@ -21,6 +21,7 @@ import numpy as np
 import GPR_analysis_pipeline_functions
 import GPR_production_plots
 import GPR_kernel_sensitivity
+import GPR_semivariogram
 
 
 def main():
@@ -55,7 +56,14 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
-    gp_mean_mode = "ordinary"  # Cane be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging)
+
+    # GP methodology options
+    gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be "ordinary", we have tested for this and zero displays artificially pushed down regression profiles
+    semivariogram_method = "pairwise"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for LOSO-CV)
+    run_semivariogram_method_parity_check = True
+    semivariogram_voxel_size_mm = 1.0  # lag spacing in mm used by semivariogram lag axis/bin centers
+    semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
+    semivariogram_pairwise_lag_bin_width_mm = None  # pairwise only: lag bin width in mm; None defaults to semivariogram_voxel_size_mm
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True
@@ -374,8 +382,11 @@ def main():
 
     semivariogram_df = GPR_analysis_helpers.semivariogram_by_biopsy(
         all_voxel_wise_dose_df,
-        voxel_size_mm=1.0,
+        voxel_size_mm=semivariogram_voxel_size_mm,
         max_lag_voxels=None,
+        method=semivariogram_method,
+        position_mode=semivariogram_pairwise_position_mode,
+        lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
     )
     """NOTE: The columns of the dataframe are:
     Index(['lag_voxels', 'h_mm', 'semivariance', 'n_pairs', 'Patient ID',
@@ -383,6 +394,30 @@ def main():
        'n_trials', 'n_voxels'],
       dtype='object')"""
     print(semivariogram_df)
+
+    if run_semivariogram_method_parity_check:
+        parity_dir = output_dir.joinpath("semivariogram_method_parity")
+        parity_dir.mkdir(parents=True, exist_ok=True)
+        parity_summary_df, parity_detail_df = GPR_semivariogram.compare_semivariogram_methods_by_biopsy(
+            all_voxel_wise_dose_df,
+            voxel_size_mm=semivariogram_voxel_size_mm,
+            max_lag_voxels=None,
+            position_mode=semivariogram_pairwise_position_mode,
+            lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
+        )
+        parity_summary_path = parity_dir.joinpath("semivariogram_method_parity_summary.csv")
+        parity_detail_path = parity_dir.joinpath("semivariogram_method_parity_differences.csv")
+        parity_summary_df.to_csv(parity_summary_path, index=False)
+        parity_detail_df.to_csv(parity_detail_path, index=False)
+        print(f"[semivariogram parity] summary saved to: {parity_summary_path}")
+        print(f"[semivariogram parity] details saved to: {parity_detail_path}")
+        if not parity_summary_df.empty:
+            max_row = parity_summary_df.iloc[0]
+            print(
+                "[semivariogram parity] "
+                f"worst biopsy: Patient {max_row['Patient ID']}, Bx {max_row['Bx index']}, "
+                f"max |Δ semivariance|={max_row['max_abs_diff_semivariance']:.6g}"
+            )
 
     # Sanity check:
     # RMS difference from semivariogram

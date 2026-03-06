@@ -20,6 +20,8 @@ Always or conditionally produced in main pipeline:
 
 - `voxel_stats_cross_check_summary.csv`
 - `voxel_stats_cross_check_mismatches_sample.csv` (only if mismatches exist)
+- `semivariogram_method_parity/semivariogram_method_parity_summary.csv`
+- `semivariogram_method_parity/semivariogram_method_parity_differences.csv`
 - `gpr_per_biopsy_metrics.csv`
 - `gpr_cohort_summary.csv`
 - `gpr_by_patient_summary.csv`
@@ -409,7 +411,58 @@ Columns include:
 
 ---
 
-## 10) Notes on aliases and equivalences
+## 10) Semivariogram method parity CSV schemas
+
+Files (under subfolder `semivariogram_method_parity/`):
+
+- `semivariogram_method_parity_summary.csv`
+- `semivariogram_method_parity_differences.csv`
+
+## 10.1 Summary file columns
+
+- `Patient ID`
+- `Bx index`
+- `n_lags_compared`: count of lag bins with finite semivariance from both methods.
+- `max_abs_diff_semivariance`
+- `mean_abs_diff_semivariance`
+- `median_abs_diff_semivariance`
+- `max_abs_diff_n_pairs`
+- `mean_abs_diff_n_pairs`
+
+## 10.2 Differences file columns
+
+Per-lag comparison columns:
+
+- `Patient ID`
+- `Bx index`
+- `lag_voxels`
+- `h_mm`
+- `semivariance_shift`
+- `n_pairs_shift`
+- `semivariance_pairwise`
+- `n_pairs_pairwise`
+- `abs_diff_semivariance`
+- `abs_diff_n_pairs`
+
+## 10.3 Method options and defaults
+
+These controls are defined near the top of `main_pipe_GPR_analysis.py`:
+
+- `semivariogram_method`
+  - `"shift"`: legacy contiguous-lag semivariogram (current default for baseline path).
+  - `"pairwise"`: gap-safe semivariogram based on pairwise physical lag distances.
+
+- `semivariogram_pairwise_position_mode` (used when `semivariogram_method="pairwise"`)
+  - `"begin"`: use `Voxel begin (Z)` as axial voxel position.
+  - `"center"`: use midpoint of `Voxel begin (Z)` and `Voxel end (Z)`.
+
+- `semivariogram_pairwise_lag_bin_width_mm` (used when `semivariogram_method="pairwise"`)
+  - float in mm: explicit lag-bin width around each lag center.
+  - `None`: defaults to `voxel_size_mm` (currently `1.0` mm in main).
+
+---
+
+## 11) Notes on aliases and equivalences
 
 These columns intentionally duplicate the same values for compatibility:
 
