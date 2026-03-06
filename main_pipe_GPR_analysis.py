@@ -55,7 +55,7 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
-    gp_mean_mode = "zero"  # Phase 0: keep existing zero-mean GP behavior
+    gp_mean_mode = "ordinary"  # Cane be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging)
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True

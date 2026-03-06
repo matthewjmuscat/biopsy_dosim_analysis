@@ -8,8 +8,7 @@
 *.pdf
 output_data/
 output_data_GPR_analysis/
-output_data_GPR_analysis_old/
-output_data_GPR_analysis_old2/
+output_data_GPR_analysis_archive/
 chatgpt digests/
 __pycache__/
 .vscode/
