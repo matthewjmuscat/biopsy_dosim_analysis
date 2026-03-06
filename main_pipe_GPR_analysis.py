@@ -22,6 +22,7 @@ import GPR_analysis_pipeline_functions
 import GPR_production_plots
 import GPR_kernel_sensitivity
 import GPR_semivariogram
+import GPR_blocked_cv
 
 
 def main():
@@ -64,6 +65,26 @@ def main():
     semivariogram_voxel_size_mm = 1.0  # lag spacing in mm used by semivariogram lag axis/bin centers
     semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
     semivariogram_pairwise_lag_bin_width_mm = None  # pairwise only: lag bin width in mm; None defaults to semivariogram_voxel_size_mm
+
+    # blocked_CV scaffold options (Phase 3A)
+    run_blocked_cv = False  # master switch for blocked_CV pathway
+    blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
+    blocked_cv_block_mode = "equal_voxels"  # options: "equal_voxels", "fixed_mm"
+    blocked_cv_n_folds = 5  # used when block_mode="equal_voxels"
+    blocked_cv_block_length_mm = None  # used when block_mode="fixed_mm"
+    blocked_cv_min_block_mm = 5.0  # lower bound for fixed-mm block sizes
+    blocked_cv_target_stat = "median"  # voxel target summary statistic
+    blocked_cv_mean_mode = gp_mean_mode  # "zero" or "ordinary" GP mean handling
+    blocked_cv_predictive_variance_mode = "observed_mc"  # planned: variance mode for rstd/NLPD
+    blocked_cv_kernel_specs = [
+        ("matern", 1.5, "matern_nu_1_5"),
+        ("matern", 2.5, "matern_nu_2_5"),
+        ("rbf", None, "rbf"),
+        ("exp", None, "exp"),
+    ]  # kernel loop for blocked_CV runs
+    write_blocked_cv_per_kernel_point_csvs = False  # redundant when *_all exists
+    write_blocked_cv_per_kernel_metrics_csvs = False  # redundant when *_all exists
+    write_blocked_cv_per_kernel_summary_csvs = False  # redundant when *_all exists
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True
@@ -560,6 +581,49 @@ def main():
         )
         print(f"[calibration] baseline kernel saved to {calib_csv_base} and {calib_fig_dir_base}")
 
+
+
+
+
+
+
+
+
+
+
+    # ---------------------------------------
+    # # blocked_CV scaffold (separate pathway)
+    # ---------------------------------------
+    if run_blocked_cv:
+        _print_section("BLOCKED_CV (scaffold)")
+        blocked_cv_root, blocked_cv_figs_dir, blocked_cv_csv_dir = GPR_blocked_cv.init_blocked_cv_dirs(
+            output_dir, subdir_name=blocked_cv_output_subdir
+        )
+        blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
+            block_mode=blocked_cv_block_mode,
+            n_folds=blocked_cv_n_folds,
+            block_length_mm=blocked_cv_block_length_mm,
+            min_block_mm=blocked_cv_min_block_mm,
+            position_mode=semivariogram_pairwise_position_mode,
+            target_stat=blocked_cv_target_stat,
+            mean_mode=blocked_cv_mean_mode,
+            predictive_variance_mode=blocked_cv_predictive_variance_mode,
+            kernel_specs=blocked_cv_kernel_specs,
+            write_per_kernel_point_csvs=write_blocked_cv_per_kernel_point_csvs,
+            write_per_kernel_metrics_csvs=write_blocked_cv_per_kernel_metrics_csvs,
+            write_per_kernel_summary_csvs=write_blocked_cv_per_kernel_summary_csvs,
+        )
+        blocked_cv_status = GPR_blocked_cv.run_blocked_cv_scaffold(
+            all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+            semivariogram_df=semivariogram_df,
+            output_dir=blocked_cv_root,
+            figs_dir=blocked_cv_figs_dir,
+            csv_dir=blocked_cv_csv_dir,
+            config=blocked_cv_cfg,
+        )
+        print(f"[blocked_CV] scaffold status: {blocked_cv_status}")
+    else:
+        _print_section("BLOCKED_CV (scaffold skipped)")
 
 
 
