@@ -126,6 +126,7 @@ def run_gp_and_collect_metrics(
     kernel_spec=None,
     kernel_label: str | None = None,
     position_mode: Literal["center","begin"] = "center",
+    mean_mode: Literal["zero", "ordinary"] = "zero",
     save_csv: bool = True,
     save_split_cohort_summary_csvs: bool = True,
 ):
@@ -134,6 +135,8 @@ def run_gp_and_collect_metrics(
     trial-wise voxel table, computes per-biopsy metrics, and writes cohort
     summary CSVs to output_dir. Returns (results_dict, metrics_df,
     cohort_summary_dict, by_patient_df).
+
+    CSV output schemas are documented in `GPR_CSV_DATA_DICTIONARY.md`.
 
     Assumes:
     - all_voxel_wise_dose_df and semivariogram_df are filtered to the same
@@ -162,6 +165,7 @@ def run_gp_and_collect_metrics(
             nu=nu,
             kernel_spec=kernel_spec,
             position_mode=position_mode,
+            mean_mode=mean_mode,
         )
         results[(pid, bx_idx)] = res
         print(f"Processed Patient ID: {pid}, Bx index: {bx_idx}")
@@ -237,6 +241,9 @@ def run_gp_and_collect_metrics(
         "median_length_scale_mm": float(metrics_df["ell"].median()),
         "median_nugget": float(metrics_df["nugget"].median()),
         "median_sv_rmse": float(metrics_df["sv_rmse"].median()),
+        "gp_mean_mode": mean_mode,
+        "target_stat": target_stat,
+        "position_mode": position_mode,
     }
     if kernel_label:
         cohort_summary["kernel_label"] = kernel_label

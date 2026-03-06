@@ -55,11 +55,13 @@ def main():
     run_patient_plots = True
     run_kernel_sensitivity_and_calibtration_flag = True
     run_cohort_plots = True
+    gp_mean_mode = "ordinary"  # Cane be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging)
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True
 
     # csv output options for GP metrics and calibration results, should we produce redunadant csvs for each kernel and other split csvs (they are redundant, they are essentially just different slices of the same dataframe)
+    # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
     write_split_main_cohort_summary_csvs = False
     write_sensitivity_per_kernel_metrics_csvs = False
     write_sensitivity_per_kernel_calibration_csvs = False
@@ -452,6 +454,7 @@ def main():
         kernel_spec=BASE_KERNEL_SPEC,
         kernel_label=BASE_KERNEL_LABEL,
         position_mode=position_mode,
+        mean_mode=gp_mean_mode,
         save_split_cohort_summary_csvs=write_split_main_cohort_summary_csvs,
     )
 
@@ -491,6 +494,7 @@ def main():
             csv_dir=kernel_csv_dir,
             target_stat="median",
             position_mode=position_mode,
+            mean_mode=gp_mean_mode,
             kernel_color_map=KERNEL_COLOR_MAP,
             save_per_kernel_metrics_csvs=write_sensitivity_per_kernel_metrics_csvs,
             save_per_kernel_calibration_csvs=write_sensitivity_per_kernel_calibration_csvs,
