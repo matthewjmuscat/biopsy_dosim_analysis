@@ -66,22 +66,29 @@ def main():
     semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
     semivariogram_pairwise_lag_bin_width_mm = None  # pairwise only: lag bin width in mm; None defaults to semivariogram_voxel_size_mm
 
-    # blocked_CV scaffold options (Phase 3A)
+    # blocked_CV options
+    # Common blocked_CV knobs (apply regardless of split mode)
     run_blocked_cv = True  # master switch for blocked_CV pathway
     run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict smoke path
     blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
-    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels", "fixed_mm"; fixed_mm is preferred for consistent physical holdout difficulty across biopsies
-    blocked_cv_n_folds = 5  # equal_voxels: direct fold count; fixed_mm: used only when block_length_mm=None (derive length from span/n_folds)
-    blocked_cv_block_length_mm = 5.0  # used when block_mode="fixed_mm"; None derives length from biopsy span / n_folds
-    blocked_cv_min_block_mm = 5.0  # lower bound for fixed-mm block sizes
-    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy 1-voxel holdouts
-    blocked_cv_min_test_voxels = 3  # minimum held-out voxel count per fold when tiny-tail merge is enabled
-    blocked_cv_min_test_block_mm = 3.0  # minimum held-out physical span (mm) per fold when tiny-tail merge is enabled
+    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels", "fixed_mm"; fixed_mm is preferred for spatially correlated models (consistent physical holdout difficulty)
     blocked_cv_target_stat = "median"  # options: "median", "mean" (voxel target summary statistic)
     blocked_cv_mean_mode = gp_mean_mode  # options: "zero", "ordinary" (GP mean handling)
     blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; controls canonical rstd denominator
     blocked_cv_compare_variance_modes = True  # if True, also score each mode listed in blocked_cv_variance_modes_to_compare on identical folds/predictions
     blocked_cv_variance_modes_to_compare = ["latent", "observed_mc"]  # each entry must be one of: "latent", "observed_mc", "observed_mc_plus_nugget"
+
+    # Fold-count split knobs (used by equal_voxels directly, and by fixed_mm only when block_length_mm is None)
+    blocked_cv_n_folds = 5  # equal_voxels: direct fold count; fixed_mm + block_length_mm=None: derive length from span / n_folds
+    blocked_cv_min_derived_block_mm = 5.0  # fixed_mm + block_length_mm=None only: floor on derived block length
+
+    # fixed_mm-specific split knobs
+    blocked_cv_block_length_mm = 8.0  # fixed_mm only: explicit block length in mm; set None to derive from span / n_folds
+
+    # fixed_mm tiny-tail merge knobs
+    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy 1-voxel holdouts
+    blocked_cv_min_test_voxels = 3  # minimum held-out voxel count per fold when tiny-tail merge is enabled
+    blocked_cv_min_test_block_mm = 3.0  # minimum held-out physical span (mm) per fold when tiny-tail merge is enabled
     blocked_cv_kernel_specs = [
         ("matern", 1.5, "matern_nu_1_5"),
         ("matern", 2.5, "matern_nu_2_5"),
@@ -609,7 +616,7 @@ def main():
             block_mode=blocked_cv_block_mode,
             n_folds=blocked_cv_n_folds,
             block_length_mm=blocked_cv_block_length_mm,
-            min_block_mm=blocked_cv_min_block_mm,
+            min_derived_block_mm=blocked_cv_min_derived_block_mm,
             merge_tiny_tail_folds=blocked_cv_merge_tiny_tail_folds,
             min_test_voxels=blocked_cv_min_test_voxels,
             min_test_block_mm=blocked_cv_min_test_block_mm,

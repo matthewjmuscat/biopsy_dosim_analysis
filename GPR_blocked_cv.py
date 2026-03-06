@@ -22,7 +22,7 @@ class BlockedCVConfig:
     block_mode: str = "equal_voxels"  # "equal_voxels" or "fixed_mm"
     n_folds: int = 5
     block_length_mm: float | None = None
-    min_block_mm: float = 5.0
+    min_derived_block_mm: float = 5.0
     merge_tiny_tail_folds: bool = False
     min_test_voxels: int = 1
     min_test_block_mm: float = 0.0
@@ -84,6 +84,7 @@ def run_blocked_cv_scaffold(
         "semivariogram_rows_seen": int(len(semivariogram_df)),
         "block_mode": config.block_mode,
         "n_folds": int(config.n_folds),
+        "min_derived_block_mm": float(config.min_derived_block_mm),
         "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
         "min_test_voxels": int(config.min_test_voxels),
         "min_test_block_mm": float(config.min_test_block_mm),
@@ -136,11 +137,12 @@ def _assign_folds_fixed_mm(
     *,
     n_folds: int,
     block_length_mm: float | None,
-    min_block_mm: float,
+    min_derived_block_mm: float,
 ) -> np.ndarray:
     """
     Assign folds by contiguous physical-length bins.
-    If block_length_mm is None, derive it from span/n_folds.
+    If block_length_mm is None, derive it from span/n_folds and apply
+    min_derived_block_mm as a floor.
     """
     x = np.asarray(x_mm, dtype=float)
     z_min = float(np.nanmin(x))
@@ -149,9 +151,9 @@ def _assign_folds_fixed_mm(
 
     if block_length_mm is None:
         length = span / max(1, int(n_folds))
+        length = max(float(min_derived_block_mm), length)
     else:
         length = float(block_length_mm)
-    length = max(float(min_block_mm), length)
     if length <= 0:
         length = 1.0
 
@@ -244,7 +246,7 @@ def build_blocked_cv_fold_map(
                 vox["x_mm"].to_numpy(float),
                 n_folds=config.n_folds,
                 block_length_mm=config.block_length_mm,
-                min_block_mm=config.min_block_mm,
+                min_derived_block_mm=config.min_derived_block_mm,
             )
             if config.merge_tiny_tail_folds:
                 fold_of_voxel, merged_tail_fold = _merge_tiny_tail_fold_ids(
@@ -359,6 +361,7 @@ def run_blocked_cv_phase3b(
         "semivariogram_rows_seen": int(len(semivariogram_df)),
         "block_mode": config.block_mode,
         "n_folds": int(config.n_folds),
+        "min_derived_block_mm": float(config.min_derived_block_mm),
         "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
         "min_test_voxels": int(config.min_test_voxels),
         "min_test_block_mm": float(config.min_test_block_mm),
@@ -728,7 +731,8 @@ def run_blocked_cv_phase3c_smoke(
 
         summary_rows = []
         if not compare_df.empty and "variance_mode" in compare_df.columns:
-            for mode, g_mode in compare_df.groupby("variance_mode", sort=True):
+            grp_cols = ["kernel_label", "kernel_name", "kernel_param", "variance_mode"]
+            for (k_label, k_name, k_param, mode), g_mode in compare_df.groupby(grp_cols, sort=True):
                 rstd = pd.to_numeric(g_mode["rstd"], errors="coerce").to_numpy(float)
                 valid = np.isfinite(rstd)
                 rstd_v = rstd[valid]
@@ -749,6 +753,9 @@ def run_blocked_cv_phase3c_smoke(
                 abs_ratio_v = abs_ratio[np.isfinite(abs_ratio)]
                 summary_rows.append(
                     {
+                        "kernel_label": k_label,
+                        "kernel_name": k_name,
+                        "kernel_param": k_param,
                         "variance_mode": mode,
                         "n_points": int(rstd_v.size),
                         "mean_rstd": mean_rstd,

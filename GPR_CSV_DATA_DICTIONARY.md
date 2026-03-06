@@ -616,6 +616,9 @@ One row per held-out voxel *per variance mode* (same folds/predictions):
 
 One row per `variance_mode` aggregated over all held-out points:
 
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
 - `variance_mode`
 - `n_points`
 - `mean_rstd`
