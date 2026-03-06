@@ -55,19 +55,20 @@ def main():
     # plotting / analysis gates (speed control)
     run_semivariogram_plots = False
     run_patient_plots = True
-    run_kernel_sensitivity_and_calibtration_flag = True
+    run_kernel_sensitivity_and_calibtration_flag = False
     run_cohort_plots = True
 
     # GP methodology options
     gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be "ordinary", we have tested for this and zero displays artificially pushed down regression profiles
-    semivariogram_method = "pairwise"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for LOSO-CV)
+    semivariogram_method = "pairwise"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for blocked_CV)
     run_semivariogram_method_parity_check = True
     semivariogram_voxel_size_mm = 1.0  # lag spacing in mm used by semivariogram lag axis/bin centers
     semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
     semivariogram_pairwise_lag_bin_width_mm = None  # pairwise only: lag bin width in mm; None defaults to semivariogram_voxel_size_mm
 
     # blocked_CV scaffold options (Phase 3A)
-    run_blocked_cv = False  # master switch for blocked_CV pathway
+    run_blocked_cv = True  # master switch for blocked_CV pathway
+    run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict smoke path
     blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
     blocked_cv_block_mode = "equal_voxels"  # options: "equal_voxels", "fixed_mm"
     blocked_cv_n_folds = 5  # used when block_mode="equal_voxels"
@@ -609,6 +610,8 @@ def main():
             mean_mode=blocked_cv_mean_mode,
             predictive_variance_mode=blocked_cv_predictive_variance_mode,
             kernel_specs=blocked_cv_kernel_specs,
+            semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
+            semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
             write_per_kernel_point_csvs=write_blocked_cv_per_kernel_point_csvs,
             write_per_kernel_metrics_csvs=write_blocked_cv_per_kernel_metrics_csvs,
             write_per_kernel_summary_csvs=write_blocked_cv_per_kernel_summary_csvs,
@@ -622,6 +625,17 @@ def main():
             config=blocked_cv_cfg,
         )
         print(f"[blocked_CV] phase 3B status: {blocked_cv_status}")
+        if run_blocked_cv_phase3c_smoke:
+            _print_section("BLOCKED_CV (Phase 3C: smoke fit/predict)")
+            blocked_cv_phase3c_status = GPR_blocked_cv.run_blocked_cv_phase3c_smoke(
+                all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+                semivariogram_df=semivariogram_df,
+                output_dir=blocked_cv_root,
+                figs_dir=blocked_cv_figs_dir,
+                csv_dir=blocked_cv_csv_dir,
+                config=blocked_cv_cfg,
+            )
+            print(f"[blocked_CV] phase 3C status: {blocked_cv_phase3c_status}")
     else:
         _print_section("BLOCKED_CV (Phase 3B skipped)")
 

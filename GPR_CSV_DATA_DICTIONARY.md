@@ -70,10 +70,16 @@ Phase 3B currently produces:
 - `blocked_cv_fold_map.csv`
 - `blocked_cv_fold_summary.csv`
 
+Optional Phase 3C smoke path also produces:
+
+- `blocked_cv_point_predictions_smoke_all.csv`
+- `blocked_cv_fold_fit_status_smoke_all.csv`
+
 Notes:
 
 - These files are generated only when `run_blocked_cv=True`.
 - At Phase 3B, these are split-definition artifacts only (no CV model fitting).
+- Phase 3C smoke adds strict train-only fold fit/predict outputs for one kernel.
 
 ## 1.4 Redundancy relationship
 
@@ -482,6 +488,8 @@ Files (under `blocked_CV/csv/`):
 
 - `blocked_cv_fold_map.csv`
 - `blocked_cv_fold_summary.csv`
+- `blocked_cv_point_predictions_smoke_all.csv` (Phase 3C smoke)
+- `blocked_cv_fold_fit_status_smoke_all.csv` (Phase 3C smoke)
 
 ## 11.1 `blocked_cv_fold_map.csv` columns
 
@@ -515,6 +523,49 @@ One row per `(Patient ID, Bx index, fold_id)`:
 - `test_z_min_mm`
 - `test_z_max_mm`
 - `contiguous_test_block`
+
+## 11.3 `blocked_cv_point_predictions_smoke_all.csv` columns
+
+One row per held-out voxel prediction from strict train-only fold fit:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
+- `Voxel index`
+- `x_mm`
+- `y_test` (held-out MC voxel target)
+- `mu_test` (GP predictive mean at held-out voxel)
+- `sd_test_latent` (latent GP predictive SD)
+- `var_obs_test` (held-out MC observation variance)
+- `var_pred_used` (variance used for standardization/NLPD mode)
+- `sd_pred_used`
+- `residual` (`y_test - mu_test`)
+- `rstd` (`residual / sd_pred_used`)
+- `gp_mean_mode`
+- `target_stat`
+- `predictive_variance_mode`
+- `n_train_voxels`
+- `n_test_voxels`
+- `ell`
+- `sigma_f2`
+- `nugget`
+- `nu`
+
+## 11.4 `blocked_cv_fold_fit_status_smoke_all.csv` columns
+
+One row per `(Patient ID, Bx index, fold_id)` attempt:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `kernel_label`
+- `status` (`ok`, `skipped`, or `error`)
+- `message`
+- `n_train_voxels` (when status is `ok`)
+- `n_test_voxels` (when status is `ok`)
 
 ---
 
