@@ -61,6 +61,7 @@ def main():
     include_kernel_legend_in_primary_histograms = True
 
     # csv output options for GP metrics and calibration results, should we produce redunadant csvs for each kernel and other split csvs (they are redundant, they are essentially just different slices of the same dataframe)
+    # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
     write_split_main_cohort_summary_csvs = False
     write_sensitivity_per_kernel_metrics_csvs = False
     write_sensitivity_per_kernel_calibration_csvs = False

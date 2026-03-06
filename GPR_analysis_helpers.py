@@ -136,6 +136,8 @@ def run_gp_and_collect_metrics(
     summary CSVs to output_dir. Returns (results_dict, metrics_df,
     cohort_summary_dict, by_patient_df).
 
+    CSV output schemas are documented in `GPR_CSV_DATA_DICTIONARY.md`.
+
     Assumes:
     - all_voxel_wise_dose_df and semivariogram_df are filtered to the same
       Simulated type subset upstream.

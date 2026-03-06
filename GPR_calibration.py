@@ -166,6 +166,8 @@ def build_calibration_metrics(
     """
     Build a calibration metrics DataFrame for all biopsies in `results`,
     where results is a dict keyed by (patient_id, bx_index) -> gp_res.
+
+    CSV output schemas are documented in `GPR_CSV_DATA_DICTIONARY.md`.
     """
     rows = []
     for (pid, bx), res in results.items():

@@ -27,6 +27,8 @@ def run_kernel_sensitivity(
     """
     Run the GP+metrics pipeline for a list of kernels and aggregate results.
 
+    CSV output schemas are documented in `GPR_CSV_DATA_DICTIONARY.md`.
+
     Parameters
     ----------
     all_voxel_wise_dose_df : pd.DataFrame
