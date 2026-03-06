@@ -59,10 +59,11 @@ def main():
 
     # GP methodology options
     gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be "ordinary", we have tested for this and zero displays artificially pushed down regression profiles
-    semivariogram_method = "shift"  # options: "shift" (legacy), "pairwise" (gap-safe, upgraded allows for proper calculation for Leave One Segment Out pathway)
+    semivariogram_method = "shift"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for LOSO-CV)
     run_semivariogram_method_parity_check = True
-    semivariogram_pairwise_position_mode = "begin"
-    semivariogram_pairwise_lag_bin_width_mm = None
+    semivariogram_voxel_size_mm = 1.0  # lag spacing in mm used by semivariogram lag axis/bin centers
+    semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
+    semivariogram_pairwise_lag_bin_width_mm = None  # pairwise only: lag bin width in mm; None defaults to semivariogram_voxel_size_mm
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True
@@ -381,7 +382,7 @@ def main():
 
     semivariogram_df = GPR_analysis_helpers.semivariogram_by_biopsy(
         all_voxel_wise_dose_df,
-        voxel_size_mm=1.0,
+        voxel_size_mm=semivariogram_voxel_size_mm,
         max_lag_voxels=None,
         method=semivariogram_method,
         position_mode=semivariogram_pairwise_position_mode,
@@ -399,7 +400,7 @@ def main():
         parity_dir.mkdir(parents=True, exist_ok=True)
         parity_summary_df, parity_detail_df = GPR_semivariogram.compare_semivariogram_methods_by_biopsy(
             all_voxel_wise_dose_df,
-            voxel_size_mm=1.0,
+            voxel_size_mm=semivariogram_voxel_size_mm,
             max_lag_voxels=None,
             position_mode=semivariogram_pairwise_position_mode,
             lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,

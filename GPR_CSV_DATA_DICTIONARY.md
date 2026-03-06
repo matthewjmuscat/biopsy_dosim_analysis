@@ -444,6 +444,22 @@ Per-lag comparison columns:
 - `abs_diff_semivariance`
 - `abs_diff_n_pairs`
 
+## 10.3 Method options and defaults
+
+These controls are defined near the top of `main_pipe_GPR_analysis.py`:
+
+- `semivariogram_method`
+  - `"shift"`: legacy contiguous-lag semivariogram (current default for baseline path).
+  - `"pairwise"`: gap-safe semivariogram based on pairwise physical lag distances.
+
+- `semivariogram_pairwise_position_mode` (used when `semivariogram_method="pairwise"`)
+  - `"begin"`: use `Voxel begin (Z)` as axial voxel position.
+  - `"center"`: use midpoint of `Voxel begin (Z)` and `Voxel end (Z)`.
+
+- `semivariogram_pairwise_lag_bin_width_mm` (used when `semivariogram_method="pairwise"`)
+  - float in mm: explicit lag-bin width around each lag center.
+  - `None`: defaults to `voxel_size_mm` (currently `1.0` mm in main).
+
 ---
 
 ## 11) Notes on aliases and equivalences
