@@ -127,6 +127,7 @@ def run_gp_and_collect_metrics(
     kernel_label: str | None = None,
     position_mode: Literal["center","begin"] = "center",
     save_csv: bool = True,
+    save_split_cohort_summary_csvs: bool = True,
 ):
     """
     Runs the per-biopsy GP (posterior + hyperparams) on an already-filtered
@@ -244,79 +245,80 @@ def run_gp_and_collect_metrics(
         cohort_summary_path = output_dir.joinpath("gpr_cohort_summary.csv")
         cohort_summary_df.to_csv(cohort_summary_path, index=False)
         print("Cohort summary:", cohort_summary)
-        # Additional split CSVs for convenience (keep main summary unchanged)
-        def _write_subset(filename: str, keys: list[str]):
-            subset = {k: cohort_summary.get(k, float("nan")) for k in keys}
-            pd.DataFrame([subset]).to_csv(output_dir.joinpath(filename), index=False)
+        if save_split_cohort_summary_csvs:
+            # Additional split CSVs for convenience (keep main summary unchanged)
+            def _write_subset(filename: str, keys: list[str]):
+                subset = {k: cohort_summary.get(k, float("nan")) for k in keys}
+                pd.DataFrame([subset]).to_csv(output_dir.joinpath(filename), index=False)
 
-        _write_subset(
-            "gpr_cohort_summary_ratio.csv",
-            [
-                "n_biopsies",
-                "mean_uncertainty_ratio",
-                "median_uncertainty_ratio",
-                "mean_integrated_ratio",
-                "uncertainty_ratio_q05",
-                "uncertainty_ratio_q25",
-                "uncertainty_ratio_q75",
-                "uncertainty_ratio_q95",
-                "uncertainty_ratio_iqr",
-                "pct_biopsies_ge20pct_reduction",
-            ],
-        )
-        _write_subset(
-            "gpr_cohort_summary_percent_reduction.csv",
-            [
-                "pct_reduction_mean_sd_mean",
-                "pct_reduction_mean_sd_std",
-                "pct_reduction_mean_sd_median",
-                "pct_reduction_mean_sd_iqr",
-                "pct_reduction_mean_sd_q05",
-                "pct_reduction_mean_sd_q25",
-                "pct_reduction_mean_sd_q75",
-                "pct_reduction_mean_sd_q95",
-                "pct_reduction_integ_sd_mean",
-                "pct_reduction_integ_sd_std",
-                "pct_reduction_integ_sd_median",
-                "pct_reduction_integ_sd_iqr",
-                "pct_reduction_integ_sd_q05",
-                "pct_reduction_integ_sd_q25",
-                "pct_reduction_integ_sd_q75",
-                "pct_reduction_integ_sd_q95",
-            ],
-        )
-        _write_subset(
-            "gpr_cohort_summary_mc_sd.csv",
-            [
-                "mc_sd_mean",
-                "mc_sd_median",
-                "mc_sd_q05",
-                "mc_sd_q25",
-                "mc_sd_q75",
-                "mc_sd_q95",
-                "mc_sd_iqr",
-            ],
-        )
-        _write_subset(
-            "gpr_cohort_summary_gp_sd.csv",
-            [
-                "gp_sd_mean",
-                "gp_sd_median",
-                "gp_sd_q05",
-                "gp_sd_q25",
-                "gp_sd_q75",
-                "gp_sd_q95",
-                "gp_sd_iqr",
-            ],
-        )
-        _write_subset(
-            "gpr_cohort_summary_kernel_params.csv",
-            [
-                "median_length_scale_mm",
-                "median_nugget",
-                "median_sv_rmse",
-            ],
-        )
+            _write_subset(
+                "gpr_cohort_summary_ratio.csv",
+                [
+                    "n_biopsies",
+                    "mean_uncertainty_ratio",
+                    "median_uncertainty_ratio",
+                    "mean_integrated_ratio",
+                    "uncertainty_ratio_q05",
+                    "uncertainty_ratio_q25",
+                    "uncertainty_ratio_q75",
+                    "uncertainty_ratio_q95",
+                    "uncertainty_ratio_iqr",
+                    "pct_biopsies_ge20pct_reduction",
+                ],
+            )
+            _write_subset(
+                "gpr_cohort_summary_percent_reduction.csv",
+                [
+                    "pct_reduction_mean_sd_mean",
+                    "pct_reduction_mean_sd_std",
+                    "pct_reduction_mean_sd_median",
+                    "pct_reduction_mean_sd_iqr",
+                    "pct_reduction_mean_sd_q05",
+                    "pct_reduction_mean_sd_q25",
+                    "pct_reduction_mean_sd_q75",
+                    "pct_reduction_mean_sd_q95",
+                    "pct_reduction_integ_sd_mean",
+                    "pct_reduction_integ_sd_std",
+                    "pct_reduction_integ_sd_median",
+                    "pct_reduction_integ_sd_iqr",
+                    "pct_reduction_integ_sd_q05",
+                    "pct_reduction_integ_sd_q25",
+                    "pct_reduction_integ_sd_q75",
+                    "pct_reduction_integ_sd_q95",
+                ],
+            )
+            _write_subset(
+                "gpr_cohort_summary_mc_sd.csv",
+                [
+                    "mc_sd_mean",
+                    "mc_sd_median",
+                    "mc_sd_q05",
+                    "mc_sd_q25",
+                    "mc_sd_q75",
+                    "mc_sd_q95",
+                    "mc_sd_iqr",
+                ],
+            )
+            _write_subset(
+                "gpr_cohort_summary_gp_sd.csv",
+                [
+                    "gp_sd_mean",
+                    "gp_sd_median",
+                    "gp_sd_q05",
+                    "gp_sd_q25",
+                    "gp_sd_q75",
+                    "gp_sd_q95",
+                    "gp_sd_iqr",
+                ],
+            )
+            _write_subset(
+                "gpr_cohort_summary_kernel_params.csv",
+                [
+                    "median_length_scale_mm",
+                    "median_nugget",
+                    "median_sv_rmse",
+                ],
+            )
 
     # Patient-level rollups
     by_patient = (
