@@ -59,7 +59,7 @@ def main():
 
     # GP methodology options
     gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be "ordinary", we have tested for this and zero displays artificially pushed down regression profiles
-    semivariogram_method = "shift"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for LOSO-CV)
+    semivariogram_method = "pairwise"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for LOSO-CV)
     run_semivariogram_method_parity_check = True
     semivariogram_voxel_size_mm = 1.0  # lag spacing in mm used by semivariogram lag axis/bin centers
     semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
