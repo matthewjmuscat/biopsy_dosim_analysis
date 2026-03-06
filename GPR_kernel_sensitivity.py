@@ -77,17 +77,15 @@ def run_kernel_sensitivity(
             save_csv=False,
         )
 
-        # Save kernel-specific metrics
+        # Save kernel-specific metrics/rollups/summaries (optional)
         if save_per_kernel_metrics_csvs:
             metrics_path = csv_dir / f"metrics_kernel_{kernel_label}.csv"
             metrics_df.to_csv(metrics_path, index=False)
             print(f"Saved kernel metrics to {metrics_path}")
-
-        by_patient_path = csv_dir / f"patient_rollup_{kernel_label}.csv"
-        by_patient.to_csv(by_patient_path, index=False)
-
-        cohort_summary_path = csv_dir / f"cohort_summary_{kernel_label}.csv"
-        cohort_summary_df.to_csv(cohort_summary_path, index=False)
+            by_patient_path = csv_dir / f"patient_rollup_{kernel_label}.csv"
+            by_patient.to_csv(by_patient_path, index=False)
+            cohort_summary_path = csv_dir / f"cohort_summary_{kernel_label}.csv"
+            cohort_summary_df.to_csv(cohort_summary_path, index=False)
 
         # Calibration metrics and figures per kernel
         calib_df = GPR_calibration.build_calibration_metrics(
@@ -190,9 +188,10 @@ def run_kernel_sensitivity(
                     if rows:
                         summary_df = pd.DataFrame(rows)
                         summary_df.insert(0, "kernel_label", klabel)
-                        summary_path = csv_dir / f"calibration_metrics_summary_{klabel}.csv"
-                        summary_df.to_csv(summary_path, index=False)
-                        print(f"Saved calibration summary for {klabel} to {summary_path}")
+                        if save_per_kernel_calibration_csvs:
+                            summary_path = csv_dir / f"calibration_metrics_summary_{klabel}.csv"
+                            summary_df.to_csv(summary_path, index=False)
+                            print(f"Saved calibration summary for {klabel} to {summary_path}")
                         all_calib_summaries.append(summary_df)
                 if all_calib_summaries:
                     calibration_summary_all = pd.concat(all_calib_summaries, ignore_index=True)
