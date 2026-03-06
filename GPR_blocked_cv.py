@@ -29,7 +29,6 @@ class BlockedCVConfig:
     position_mode: str = "begin"
     target_stat: str = "median"
     mean_mode: str = "ordinary"
-    predictive_variance_mode: str = "observed_mc"  # legacy alias for primary_predictive_variance_mode
     primary_predictive_variance_mode: str = "observed_mc"
     compare_variance_modes: bool = False
     variance_modes_to_compare: Iterable[str] | None = None
@@ -415,11 +414,7 @@ def _resolve_variance_modes(config: BlockedCVConfig) -> tuple[str, list[str]]:
     """
     Resolve primary and scored predictive-variance modes for blocked_CV outputs.
     """
-    primary_mode = (
-        str(config.primary_predictive_variance_mode)
-        if getattr(config, "primary_predictive_variance_mode", None)
-        else str(config.predictive_variance_mode)
-    )
+    primary_mode = str(config.primary_predictive_variance_mode)
     if config.compare_variance_modes:
         base_modes = (
             list(config.variance_modes_to_compare)

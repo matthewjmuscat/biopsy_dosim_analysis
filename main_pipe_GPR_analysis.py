@@ -71,7 +71,7 @@ def main():
     run_blocked_cv = True  # master switch for blocked_CV pathway
     run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict smoke path
     blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
-    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels", "fixed_mm"; fixed_mm is preferred for spatially correlated models (consistent physical holdout difficulty)
+    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels" (split each biopsy into contiguous blocks with similar voxel counts; no tiny-tail merge applied because contiguous blocks differ by at most 1 voxel so no tiny tails exist), "fixed_mm" (split by physical z-length in mm); fixed_mm is preferred for spatially correlated models (consistent physical holdout difficulty)
     blocked_cv_target_stat = "median"  # options: "median", "mean" (voxel target summary statistic)
     blocked_cv_mean_mode = gp_mean_mode  # options: "zero", "ordinary" (GP mean handling)
     blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; controls canonical rstd denominator
@@ -86,7 +86,7 @@ def main():
     blocked_cv_block_length_mm = 8.0  # fixed_mm only: explicit block length in mm; set None to derive from span / n_folds
 
     # fixed_mm tiny-tail merge knobs
-    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy 1-voxel holdouts
+    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy small tail holdouts (not used for equal_voxels)
     blocked_cv_min_test_voxels = 3  # minimum held-out voxel count per fold when tiny-tail merge is enabled
     blocked_cv_min_test_block_mm = 3.0  # minimum held-out physical span (mm) per fold when tiny-tail merge is enabled
     blocked_cv_kernel_specs = [
@@ -623,7 +623,6 @@ def main():
             position_mode=semivariogram_pairwise_position_mode,
             target_stat=blocked_cv_target_stat,
             mean_mode=blocked_cv_mean_mode,
-            predictive_variance_mode=blocked_cv_primary_predictive_variance_mode,  # legacy alias for compatibility
             primary_predictive_variance_mode=blocked_cv_primary_predictive_variance_mode,
             compare_variance_modes=blocked_cv_compare_variance_modes,
             variance_modes_to_compare=blocked_cv_variance_modes_to_compare,
