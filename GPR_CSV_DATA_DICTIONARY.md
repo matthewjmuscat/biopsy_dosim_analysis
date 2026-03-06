@@ -61,7 +61,21 @@ If sensitivity is disabled, baseline calibration-only path writes:
 
 - `kernel_sensitivity/csv/calibration_metrics_<BASE_KERNEL_LABEL>.csv`
 
-## 1.3 Redundancy relationship
+## 1.3 blocked_CV output directory
+
+Base directory: `output_data_GPR_analysis/blocked_CV/csv/`
+
+Phase 3B currently produces:
+
+- `blocked_cv_fold_map.csv`
+- `blocked_cv_fold_summary.csv`
+
+Notes:
+
+- These files are generated only when `run_blocked_cv=True`.
+- At Phase 3B, these are split-definition artifacts only (no CV model fitting).
+
+## 1.4 Redundancy relationship
 
 For sensitivity outputs, every per-kernel CSV is a subset of its `_all`
 counterpart filtered by `kernel_label`.
@@ -462,7 +476,49 @@ These controls are defined near the top of `main_pipe_GPR_analysis.py`:
 
 ---
 
-## 11) Notes on aliases and equivalences
+## 11) blocked_CV fold map schemas (Phase 3B)
+
+Files (under `blocked_CV/csv/`):
+
+- `blocked_cv_fold_map.csv`
+- `blocked_cv_fold_summary.csv`
+
+## 11.1 `blocked_cv_fold_map.csv` columns
+
+One row per `(Patient ID, Bx index, fold_id, voxel)`:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `Voxel index`
+- `x_mm`
+- `is_test` (True if voxel is in held-out block for this fold)
+- `n_train`
+- `n_test`
+- `test_z_min_mm`
+- `test_z_max_mm`
+- `block_mode` (`equal_voxels` or `fixed_mm`)
+- `position_mode` (`begin` or `center`)
+
+## 11.2 `blocked_cv_fold_summary.csv` columns
+
+One row per `(Patient ID, Bx index, fold_id)`:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `block_mode`
+- `position_mode`
+- `n_voxels`
+- `n_train`
+- `n_test`
+- `test_z_min_mm`
+- `test_z_max_mm`
+- `contiguous_test_block`
+
+---
+
+## 12) Notes on aliases and equivalences
 
 These columns intentionally duplicate the same values for compatibility:
 

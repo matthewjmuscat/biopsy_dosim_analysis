@@ -592,10 +592,10 @@ def main():
 
 
     # ---------------------------------------
-    # # blocked_CV scaffold (separate pathway)
+    # # blocked_CV Phase 3B (fold map only; no model fitting)
     # ---------------------------------------
     if run_blocked_cv:
-        _print_section("BLOCKED_CV (scaffold)")
+        _print_section("BLOCKED_CV (Phase 3B: fold map)")
         blocked_cv_root, blocked_cv_figs_dir, blocked_cv_csv_dir = GPR_blocked_cv.init_blocked_cv_dirs(
             output_dir, subdir_name=blocked_cv_output_subdir
         )
@@ -613,7 +613,7 @@ def main():
             write_per_kernel_metrics_csvs=write_blocked_cv_per_kernel_metrics_csvs,
             write_per_kernel_summary_csvs=write_blocked_cv_per_kernel_summary_csvs,
         )
-        blocked_cv_status = GPR_blocked_cv.run_blocked_cv_scaffold(
+        blocked_cv_status = GPR_blocked_cv.run_blocked_cv_phase3b(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
             semivariogram_df=semivariogram_df,
             output_dir=blocked_cv_root,
@@ -621,9 +621,9 @@ def main():
             csv_dir=blocked_cv_csv_dir,
             config=blocked_cv_cfg,
         )
-        print(f"[blocked_CV] scaffold status: {blocked_cv_status}")
+        print(f"[blocked_CV] phase 3B status: {blocked_cv_status}")
     else:
-        _print_section("BLOCKED_CV (scaffold skipped)")
+        _print_section("BLOCKED_CV (Phase 3B skipped)")
 
 
 
