@@ -74,6 +74,8 @@ Optional Phase 3C smoke path also produces:
 
 - `blocked_cv_point_predictions_smoke_all.csv`
 - `blocked_cv_fold_fit_status_smoke_all.csv`
+- `blocked_cv_point_predictions_smoke_variance_compare_all.csv`
+- `blocked_cv_variance_mode_summary_smoke_all.csv`
 
 Notes:
 
@@ -490,6 +492,8 @@ Files (under `blocked_CV/csv/`):
 - `blocked_cv_fold_summary.csv`
 - `blocked_cv_point_predictions_smoke_all.csv` (Phase 3C smoke)
 - `blocked_cv_fold_fit_status_smoke_all.csv` (Phase 3C smoke)
+- `blocked_cv_point_predictions_smoke_variance_compare_all.csv` (Phase 3C.5)
+- `blocked_cv_variance_mode_summary_smoke_all.csv` (Phase 3C.5)
 
 ## 11.1 `blocked_cv_fold_map.csv` columns
 
@@ -503,6 +507,8 @@ One row per `(Patient ID, Bx index, fold_id, voxel)`:
 - `is_test` (True if voxel is in held-out block for this fold)
 - `n_train`
 - `n_test`
+- `effective_n_folds`
+- `merged_tail_fold` (True when tiny tail fold merge was applied for this biopsy)
 - `test_z_min_mm`
 - `test_z_max_mm`
 - `block_mode` (`equal_voxels` or `fixed_mm`)
@@ -520,6 +526,8 @@ One row per `(Patient ID, Bx index, fold_id)`:
 - `n_voxels`
 - `n_train`
 - `n_test`
+- `effective_n_folds`
+- `merged_tail_fold`
 - `test_z_min_mm`
 - `test_z_max_mm`
 - `contiguous_test_block`
@@ -544,9 +552,12 @@ One row per held-out voxel prediction from strict train-only fold fit:
 - `sd_pred_used`
 - `residual` (`y_test - mu_test`)
 - `rstd` (`residual / sd_pred_used`)
+- `abs_res_over_sd_latent` (`|residual| / sd_test_latent`)
+- `abs_res_over_sd_used` (`|residual| / sd_pred_used`)
 - `gp_mean_mode`
 - `target_stat`
-- `predictive_variance_mode`
+- `predictive_variance_mode` (primary mode selected in main)
+- `variance_modes_scored` (pipe-separated list of modes scored in this run)
 - `n_train_voxels`
 - `n_test_voxels`
 - `ell`
@@ -562,10 +573,56 @@ One row per `(Patient ID, Bx index, fold_id)` attempt:
 - `Bx index`
 - `fold_id`
 - `kernel_label`
+- `primary_predictive_variance_mode`
+- `variance_modes_scored`
 - `status` (`ok`, `skipped`, or `error`)
 - `message`
 - `n_train_voxels` (when status is `ok`)
 - `n_test_voxels` (when status is `ok`)
+
+## 11.5 `blocked_cv_point_predictions_smoke_variance_compare_all.csv` columns
+
+One row per held-out voxel *per variance mode* (same folds/predictions):
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
+- `Voxel index`
+- `x_mm`
+- `y_test`
+- `mu_test`
+- `sd_test_latent`
+- `var_obs_test`
+- `variance_mode` (`latent`, `observed_mc`, `observed_mc_plus_nugget`)
+- `var_pred_used`
+- `sd_pred_used`
+- `residual`
+- `rstd`
+- `abs_res_over_sd_latent`
+- `abs_res_over_sd_used`
+- `gp_mean_mode`
+- `target_stat`
+- `n_train_voxels`
+- `n_test_voxels`
+- `ell`
+- `sigma_f2`
+- `nugget`
+- `nu`
+
+## 11.6 `blocked_cv_variance_mode_summary_smoke_all.csv` columns
+
+One row per `variance_mode` aggregated over all held-out points:
+
+- `variance_mode`
+- `n_points`
+- `mean_rstd`
+- `sd_rstd`
+- `pct_abs_le1`
+- `pct_abs_le2`
+- `median_abs_res_over_sd_used`
 
 ---
 

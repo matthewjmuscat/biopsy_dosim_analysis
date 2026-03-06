@@ -23,10 +23,16 @@ class BlockedCVConfig:
     n_folds: int = 5
     block_length_mm: float | None = None
     min_block_mm: float = 5.0
+    merge_tiny_tail_folds: bool = False
+    min_test_voxels: int = 1
+    min_test_block_mm: float = 0.0
     position_mode: str = "begin"
     target_stat: str = "median"
     mean_mode: str = "ordinary"
-    predictive_variance_mode: str = "observed_mc"
+    predictive_variance_mode: str = "observed_mc"  # legacy alias for primary_predictive_variance_mode
+    primary_predictive_variance_mode: str = "observed_mc"
+    compare_variance_modes: bool = False
+    variance_modes_to_compare: Iterable[str] | None = None
     kernel_specs: Iterable[Tuple[str, float | None, str]] | None = None
     semivariogram_voxel_size_mm: float = 1.0
     semivariogram_lag_bin_width_mm: float | None = None
@@ -78,10 +84,15 @@ def run_blocked_cv_scaffold(
         "semivariogram_rows_seen": int(len(semivariogram_df)),
         "block_mode": config.block_mode,
         "n_folds": int(config.n_folds),
+        "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+        "min_test_voxels": int(config.min_test_voxels),
+        "min_test_block_mm": float(config.min_test_block_mm),
         "position_mode": config.position_mode,
         "target_stat": config.target_stat,
         "mean_mode": config.mean_mode,
-        "predictive_variance_mode": config.predictive_variance_mode,
+        "primary_predictive_variance_mode": config.primary_predictive_variance_mode,
+        "compare_variance_modes": bool(config.compare_variance_modes),
+        "variance_modes_to_compare": list(config.variance_modes_to_compare) if config.variance_modes_to_compare is not None else None,
     }
 
     return status
@@ -152,6 +163,54 @@ def _assign_folds_fixed_mm(
     return fold_ids.astype(int)
 
 
+def _merge_tiny_tail_fold_ids(
+    fold_ids: np.ndarray,
+    x_mm: np.ndarray,
+    *,
+    min_test_voxels: int,
+    min_test_block_mm: float,
+) -> tuple[np.ndarray, bool]:
+    """
+    Merge tiny remainder tail folds into the previous fold (fixed_mm mode).
+
+    This prevents pathological 1-voxel/near-zero-span held-out folds that are
+    overly easy and can bias blocked_CV metrics optimistic.
+    """
+    ids = np.asarray(fold_ids, dtype=int).copy()
+    x = np.asarray(x_mm, dtype=float)
+    merged = False
+
+    min_vox = max(int(min_test_voxels), 1)
+    min_span = max(float(min_test_block_mm), 0.0)
+
+    while True:
+        uniq = np.sort(np.unique(ids))
+        if uniq.size <= 1:
+            break
+        tail = int(uniq[-1])
+        prev = int(uniq[-2])
+        m_tail = ids == tail
+        n_tail = int(m_tail.sum())
+        if n_tail <= 0:
+            break
+        x_tail = x[m_tail]
+        if n_tail > 1 and np.any(np.isfinite(x_tail)):
+            span_tail = float(np.nanmax(x_tail) - np.nanmin(x_tail))
+        else:
+            span_tail = 0.0
+        tiny_tail = (n_tail < min_vox) or (span_tail < min_span)
+        if not tiny_tail:
+            break
+        ids[m_tail] = prev
+        merged = True
+
+    # Renumber to contiguous 1..K labels to keep outputs tidy.
+    uniq = np.sort(np.unique(ids))
+    remap = {int(old): i + 1 for i, old in enumerate(uniq)}
+    ids = np.array([remap[int(v)] for v in ids], dtype=int)
+    return ids, merged
+
+
 def build_blocked_cv_fold_map(
     all_voxel_wise_dose_df: pd.DataFrame,
     *,
@@ -176,6 +235,7 @@ def build_blocked_cv_fold_map(
         n_vox = int(len(vox))
         if n_vox == 0:
             continue
+        merged_tail_fold = False
 
         if config.block_mode == "equal_voxels":
             fold_of_voxel = _assign_folds_equal_voxels(n_vox, config.n_folds)
@@ -186,6 +246,13 @@ def build_blocked_cv_fold_map(
                 block_length_mm=config.block_length_mm,
                 min_block_mm=config.min_block_mm,
             )
+            if config.merge_tiny_tail_folds:
+                fold_of_voxel, merged_tail_fold = _merge_tiny_tail_fold_ids(
+                    fold_of_voxel,
+                    vox["x_mm"].to_numpy(float),
+                    min_test_voxels=config.min_test_voxels,
+                    min_test_block_mm=config.min_test_block_mm,
+                )
         else:
             raise ValueError(
                 f"Unsupported blocked_CV block_mode '{config.block_mode}'. "
@@ -195,6 +262,7 @@ def build_blocked_cv_fold_map(
         vox = vox.copy()
         vox["test_fold_id"] = fold_of_voxel
         fold_ids = np.sort(np.unique(fold_of_voxel))
+        effective_n_folds = int(len(fold_ids))
 
         for fold_id in fold_ids:
             test_mask = vox["test_fold_id"] == fold_id
@@ -216,6 +284,8 @@ def build_blocked_cv_fold_map(
                     "n_voxels": n_vox,
                     "n_train": n_train,
                     "n_test": n_test,
+                    "effective_n_folds": effective_n_folds,
+                    "merged_tail_fold": bool(merged_tail_fold),
                     "test_z_min_mm": z_min,
                     "test_z_max_mm": z_max,
                     "contiguous_test_block": contiguous,
@@ -234,6 +304,8 @@ def build_blocked_cv_fold_map(
                         "is_test": is_test,
                         "n_train": n_train,
                         "n_test": n_test,
+                        "effective_n_folds": effective_n_folds,
+                        "merged_tail_fold": bool(merged_tail_fold),
                         "test_z_min_mm": z_min,
                         "test_z_max_mm": z_max,
                         "block_mode": config.block_mode,
@@ -266,6 +338,14 @@ def run_blocked_cv_phase3b(
     fold_summary_path = csv_dir.joinpath("blocked_cv_fold_summary.csv")
     fold_map_df.to_csv(fold_map_path, index=False)
     fold_summary_df.to_csv(fold_summary_path, index=False)
+    if not fold_summary_df.empty and {"Patient ID", "Bx index", "merged_tail_fold"}.issubset(fold_summary_df.columns):
+        merged_bx_count = int(
+            fold_summary_df.loc[fold_summary_df["merged_tail_fold"], ["Patient ID", "Bx index"]]
+            .drop_duplicates()
+            .shape[0]
+        )
+    else:
+        merged_bx_count = 0
 
     status = {
         "phase": "3B_fold_map",
@@ -279,10 +359,16 @@ def run_blocked_cv_phase3b(
         "semivariogram_rows_seen": int(len(semivariogram_df)),
         "block_mode": config.block_mode,
         "n_folds": int(config.n_folds),
+        "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+        "min_test_voxels": int(config.min_test_voxels),
+        "min_test_block_mm": float(config.min_test_block_mm),
+        "n_biopsies_with_merged_tail": merged_bx_count,
         "position_mode": config.position_mode,
         "target_stat": config.target_stat,
         "mean_mode": config.mean_mode,
-        "predictive_variance_mode": config.predictive_variance_mode,
+        "primary_predictive_variance_mode": config.primary_predictive_variance_mode,
+        "compare_variance_modes": bool(config.compare_variance_modes),
+        "variance_modes_to_compare": list(config.variance_modes_to_compare) if config.variance_modes_to_compare is not None else None,
         "fold_map_csv": str(fold_map_path),
         "fold_summary_csv": str(fold_summary_path),
         "n_fold_map_rows": int(len(fold_map_df)),
@@ -320,6 +406,42 @@ def _predictive_variance_for_mode(
         f"Unsupported blocked_CV predictive_variance_mode '{mode}'. "
         "Use 'latent', 'observed_mc', or 'observed_mc_plus_nugget'."
     )
+
+
+def _resolve_variance_modes(config: BlockedCVConfig) -> tuple[str, list[str]]:
+    """
+    Resolve primary and scored predictive-variance modes for blocked_CV outputs.
+    """
+    primary_mode = (
+        str(config.primary_predictive_variance_mode)
+        if getattr(config, "primary_predictive_variance_mode", None)
+        else str(config.predictive_variance_mode)
+    )
+    if config.compare_variance_modes:
+        base_modes = (
+            list(config.variance_modes_to_compare)
+            if config.variance_modes_to_compare is not None
+            else ["latent", "observed_mc"]
+        )
+    else:
+        base_modes = [primary_mode]
+
+    scored_modes: list[str] = []
+    for m in base_modes:
+        m_str = str(m)
+        if m_str not in scored_modes:
+            scored_modes.append(m_str)
+    if primary_mode not in scored_modes:
+        scored_modes.insert(0, primary_mode)
+
+    valid = {"latent", "observed_mc", "observed_mc_plus_nugget"}
+    invalid = [m for m in scored_modes if m not in valid]
+    if invalid:
+        raise ValueError(
+            f"Unsupported blocked_CV variance mode(s) {invalid}. "
+            "Use only: 'latent', 'observed_mc', 'observed_mc_plus_nugget'."
+        )
+    return primary_mode, scored_modes
 
 
 def _fit_hyperparams_from_train_sv(
@@ -372,8 +494,10 @@ def run_blocked_cv_phase3c_smoke(
     if not kernel_specs:
         raise ValueError("blocked_CV Phase 3C needs at least one kernel spec.")
     kernel_name, kernel_param, kernel_label = kernel_specs[0]
+    primary_mode, scored_modes = _resolve_variance_modes(config)
 
     pred_rows = []
+    pred_compare_rows = []
     fold_status_rows = []
 
     grp_cols = ["Patient ID", "Bx index", "fold_id"]
@@ -392,6 +516,8 @@ def run_blocked_cv_phase3c_smoke(
                     "Bx index": bx_index,
                     "fold_id": int(fold_id),
                     "kernel_label": kernel_label,
+                    "primary_predictive_variance_mode": primary_mode,
+                    "variance_modes_scored": "|".join(scored_modes),
                     "status": "skipped",
                     "message": "no test voxels",
                 }
@@ -422,6 +548,8 @@ def run_blocked_cv_phase3c_smoke(
                         "Bx index": bx_index,
                         "fold_id": int(fold_id),
                         "kernel_label": kernel_label,
+                        "primary_predictive_variance_mode": primary_mode,
+                        "variance_modes_scored": "|".join(scored_modes),
                         "status": "skipped",
                         "message": f"insufficient voxels (train={len(X_train)}, test={len(X_test)})",
                     }
@@ -445,6 +573,8 @@ def run_blocked_cv_phase3c_smoke(
                         "Bx index": bx_index,
                         "fold_id": int(fold_id),
                         "kernel_label": kernel_label,
+                        "primary_predictive_variance_mode": primary_mode,
+                        "variance_modes_scored": "|".join(scored_modes),
                         "status": "skipped",
                         "message": f"insufficient semivariogram bins (n={len(sv_train)})",
                     }
@@ -466,18 +596,25 @@ def run_blocked_cv_phase3c_smoke(
                 X_star=X_test,
                 mean_mode=config.mean_mode,
             )
-            pred_var = _predictive_variance_for_mode(
-                latent_sd=sd_test,
-                obs_var=var_n_test,
-                nugget=float(getattr(hyp, "nugget", 0.0)),
-                mode=config.predictive_variance_mode,
-            )
-            pred_sd = np.sqrt(np.maximum(pred_var, 1e-12))
             resid = y_test - mu_test
-            rstd = resid / pred_sd
+            mode_arrays: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+            for mode in scored_modes:
+                pred_var_mode = _predictive_variance_for_mode(
+                    latent_sd=sd_test,
+                    obs_var=var_n_test,
+                    nugget=float(getattr(hyp, "nugget", 0.0)),
+                    mode=mode,
+                )
+                pred_sd_mode = np.sqrt(np.maximum(pred_var_mode, 1e-12))
+                rstd_mode = resid / pred_sd_mode
+                mode_arrays[mode] = (pred_var_mode, pred_sd_mode, rstd_mode)
+            pred_var_primary, pred_sd_primary, rstd_primary = mode_arrays[primary_mode]
 
             pv_test = pv_test.sort_values("x_mm").reset_index(drop=True)
             for i in range(len(X_test)):
+                abs_res = float(np.abs(resid[i]))
+                abs_res_over_sd_latent = abs_res / max(float(sd_test[i]), 1e-12)
+                abs_res_over_sd_used = abs_res / max(float(pred_sd_primary[i]), 1e-12)
                 pred_rows.append(
                     {
                         "Patient ID": patient_id,
@@ -492,13 +629,16 @@ def run_blocked_cv_phase3c_smoke(
                         "mu_test": float(mu_test[i]),
                         "sd_test_latent": float(sd_test[i]),
                         "var_obs_test": float(var_n_test[i]),
-                        "var_pred_used": float(pred_var[i]),
-                        "sd_pred_used": float(pred_sd[i]),
+                        "var_pred_used": float(pred_var_primary[i]),
+                        "sd_pred_used": float(pred_sd_primary[i]),
                         "residual": float(resid[i]),
-                        "rstd": float(rstd[i]),
+                        "rstd": float(rstd_primary[i]),
+                        "abs_res_over_sd_latent": abs_res_over_sd_latent,
+                        "abs_res_over_sd_used": abs_res_over_sd_used,
                         "gp_mean_mode": config.mean_mode,
                         "target_stat": config.target_stat,
-                        "predictive_variance_mode": config.predictive_variance_mode,
+                        "predictive_variance_mode": primary_mode,
+                        "variance_modes_scored": "|".join(scored_modes),
                         "n_train_voxels": int(len(X_train)),
                         "n_test_voxels": int(len(X_test)),
                         "ell": float(getattr(hyp, "ell", np.nan)),
@@ -507,6 +647,40 @@ def run_blocked_cv_phase3c_smoke(
                         "nu": float(getattr(hyp, "nu", np.nan)),
                     }
                 )
+                if config.compare_variance_modes:
+                    for mode in scored_modes:
+                        var_m, sd_m, rstd_m = mode_arrays[mode]
+                        pred_compare_rows.append(
+                            {
+                                "Patient ID": patient_id,
+                                "Bx index": bx_index,
+                                "fold_id": int(fold_id),
+                                "kernel_label": kernel_label,
+                                "kernel_name": kernel_name,
+                                "kernel_param": kernel_param,
+                                "Voxel index": int(pv_test.loc[i, "Voxel index"]),
+                                "x_mm": float(X_test[i]),
+                                "y_test": float(y_test[i]),
+                                "mu_test": float(mu_test[i]),
+                                "sd_test_latent": float(sd_test[i]),
+                                "var_obs_test": float(var_n_test[i]),
+                                "variance_mode": mode,
+                                "var_pred_used": float(var_m[i]),
+                                "sd_pred_used": float(sd_m[i]),
+                                "residual": float(resid[i]),
+                                "rstd": float(rstd_m[i]),
+                                "abs_res_over_sd_latent": abs_res_over_sd_latent,
+                                "abs_res_over_sd_used": abs_res / max(float(sd_m[i]), 1e-12),
+                                "gp_mean_mode": config.mean_mode,
+                                "target_stat": config.target_stat,
+                                "n_train_voxels": int(len(X_train)),
+                                "n_test_voxels": int(len(X_test)),
+                                "ell": float(getattr(hyp, "ell", np.nan)),
+                                "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
+                                "nugget": float(getattr(hyp, "nugget", np.nan)),
+                                "nu": float(getattr(hyp, "nu", np.nan)),
+                            }
+                        )
 
             fold_status_rows.append(
                 {
@@ -514,6 +688,8 @@ def run_blocked_cv_phase3c_smoke(
                     "Bx index": bx_index,
                     "fold_id": int(fold_id),
                     "kernel_label": kernel_label,
+                    "primary_predictive_variance_mode": primary_mode,
+                    "variance_modes_scored": "|".join(scored_modes),
                     "status": "ok",
                     "message": "",
                     "n_train_voxels": int(len(X_train)),
@@ -528,6 +704,8 @@ def run_blocked_cv_phase3c_smoke(
                     "Bx index": bx_index,
                     "fold_id": int(fold_id),
                     "kernel_label": kernel_label,
+                    "primary_predictive_variance_mode": primary_mode,
+                    "variance_modes_scored": "|".join(scored_modes),
                     "status": "error",
                     "message": str(e),
                 }
@@ -540,6 +718,50 @@ def run_blocked_cv_phase3c_smoke(
     pred_df.to_csv(pred_path, index=False)
     fold_status_df.to_csv(status_path, index=False)
 
+    compare_path = None
+    compare_summary_path = None
+    compare_df = pd.DataFrame()
+    if config.compare_variance_modes:
+        compare_df = pd.DataFrame(pred_compare_rows)
+        compare_path = csv_dir.joinpath("blocked_cv_point_predictions_smoke_variance_compare_all.csv")
+        compare_df.to_csv(compare_path, index=False)
+
+        summary_rows = []
+        if not compare_df.empty and "variance_mode" in compare_df.columns:
+            for mode, g_mode in compare_df.groupby("variance_mode", sort=True):
+                rstd = pd.to_numeric(g_mode["rstd"], errors="coerce").to_numpy(float)
+                valid = np.isfinite(rstd)
+                rstd_v = rstd[valid]
+                if rstd_v.size:
+                    mean_rstd = float(np.mean(rstd_v))
+                    sd_rstd = float(np.std(rstd_v, ddof=0))
+                    pct_abs_le1 = float(np.mean(np.abs(rstd_v) <= 1.0) * 100.0)
+                    pct_abs_le2 = float(np.mean(np.abs(rstd_v) <= 2.0) * 100.0)
+                else:
+                    mean_rstd = np.nan
+                    sd_rstd = np.nan
+                    pct_abs_le1 = np.nan
+                    pct_abs_le2 = np.nan
+                abs_ratio = pd.to_numeric(
+                    g_mode.get("abs_res_over_sd_used", pd.Series(dtype=float)),
+                    errors="coerce",
+                ).to_numpy(float)
+                abs_ratio_v = abs_ratio[np.isfinite(abs_ratio)]
+                summary_rows.append(
+                    {
+                        "variance_mode": mode,
+                        "n_points": int(rstd_v.size),
+                        "mean_rstd": mean_rstd,
+                        "sd_rstd": sd_rstd,
+                        "pct_abs_le1": pct_abs_le1,
+                        "pct_abs_le2": pct_abs_le2,
+                        "median_abs_res_over_sd_used": float(np.median(abs_ratio_v)) if abs_ratio_v.size else np.nan,
+                    }
+                )
+        compare_summary_df = pd.DataFrame(summary_rows)
+        compare_summary_path = csv_dir.joinpath("blocked_cv_variance_mode_summary_smoke_all.csv")
+        compare_summary_df.to_csv(compare_summary_path, index=False)
+
     status = {
         "phase": "3C_smoke_fit_predict",
         "status": "ready",
@@ -547,9 +769,14 @@ def run_blocked_cv_phase3c_smoke(
         "blocked_cv_figs_dir": str(figs_dir),
         "blocked_cv_csv_dir": str(csv_dir),
         "kernel_label": kernel_label,
+        "primary_predictive_variance_mode": primary_mode,
+        "variance_modes_scored": scored_modes,
         "point_predictions_csv": str(pred_path),
         "fold_fit_status_csv": str(status_path),
+        "point_predictions_compare_csv": str(compare_path) if compare_path is not None else None,
+        "variance_mode_summary_csv": str(compare_summary_path) if compare_summary_path is not None else None,
         "n_point_prediction_rows": int(len(pred_df)),
+        "n_point_prediction_compare_rows": int(len(compare_df)),
         "n_fold_status_rows": int(len(fold_status_df)),
         "n_fold_status_ok": int((fold_status_df.get("status", pd.Series(dtype=str)) == "ok").sum()) if len(fold_status_df) else 0,
         "n_fold_status_error": int((fold_status_df.get("status", pd.Series(dtype=str)) == "error").sum()) if len(fold_status_df) else 0,

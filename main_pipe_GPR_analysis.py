@@ -54,9 +54,9 @@ def main():
 
     # plotting / analysis gates (speed control)
     run_semivariogram_plots = False
-    run_patient_plots = True
+    run_patient_plots = False
     run_kernel_sensitivity_and_calibtration_flag = False
-    run_cohort_plots = True
+    run_cohort_plots = False
 
     # GP methodology options
     gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be "ordinary", we have tested for this and zero displays artificially pushed down regression profiles
@@ -70,13 +70,18 @@ def main():
     run_blocked_cv = True  # master switch for blocked_CV pathway
     run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict smoke path
     blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
-    blocked_cv_block_mode = "equal_voxels"  # options: "equal_voxels", "fixed_mm"
-    blocked_cv_n_folds = 5  # used when block_mode="equal_voxels"
-    blocked_cv_block_length_mm = None  # used when block_mode="fixed_mm"
+    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels", "fixed_mm"; fixed_mm is preferred for consistent physical holdout difficulty across biopsies
+    blocked_cv_n_folds = 5  # equal_voxels: direct fold count; fixed_mm: used only when block_length_mm=None (derive length from span/n_folds)
+    blocked_cv_block_length_mm = 5.0  # used when block_mode="fixed_mm"; None derives length from biopsy span / n_folds
     blocked_cv_min_block_mm = 5.0  # lower bound for fixed-mm block sizes
-    blocked_cv_target_stat = "median"  # voxel target summary statistic
-    blocked_cv_mean_mode = gp_mean_mode  # "zero" or "ordinary" GP mean handling
-    blocked_cv_predictive_variance_mode = "observed_mc"  # planned: variance mode for rstd/NLPD
+    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy 1-voxel holdouts
+    blocked_cv_min_test_voxels = 3  # minimum held-out voxel count per fold when tiny-tail merge is enabled
+    blocked_cv_min_test_block_mm = 3.0  # minimum held-out physical span (mm) per fold when tiny-tail merge is enabled
+    blocked_cv_target_stat = "median"  # options: "median", "mean" (voxel target summary statistic)
+    blocked_cv_mean_mode = gp_mean_mode  # options: "zero", "ordinary" (GP mean handling)
+    blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; controls canonical rstd denominator
+    blocked_cv_compare_variance_modes = True  # if True, also score each mode listed in blocked_cv_variance_modes_to_compare on identical folds/predictions
+    blocked_cv_variance_modes_to_compare = ["latent", "observed_mc"]  # each entry must be one of: "latent", "observed_mc", "observed_mc_plus_nugget"
     blocked_cv_kernel_specs = [
         ("matern", 1.5, "matern_nu_1_5"),
         ("matern", 2.5, "matern_nu_2_5"),
@@ -605,10 +610,16 @@ def main():
             n_folds=blocked_cv_n_folds,
             block_length_mm=blocked_cv_block_length_mm,
             min_block_mm=blocked_cv_min_block_mm,
+            merge_tiny_tail_folds=blocked_cv_merge_tiny_tail_folds,
+            min_test_voxels=blocked_cv_min_test_voxels,
+            min_test_block_mm=blocked_cv_min_test_block_mm,
             position_mode=semivariogram_pairwise_position_mode,
             target_stat=blocked_cv_target_stat,
             mean_mode=blocked_cv_mean_mode,
-            predictive_variance_mode=blocked_cv_predictive_variance_mode,
+            predictive_variance_mode=blocked_cv_primary_predictive_variance_mode,  # legacy alias for compatibility
+            primary_predictive_variance_mode=blocked_cv_primary_predictive_variance_mode,
+            compare_variance_modes=blocked_cv_compare_variance_modes,
+            variance_modes_to_compare=blocked_cv_variance_modes_to_compare,
             kernel_specs=blocked_cv_kernel_specs,
             semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
             semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
