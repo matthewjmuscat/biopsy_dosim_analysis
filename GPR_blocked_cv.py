@@ -325,6 +325,7 @@ def build_blocked_cv_fold_map(
 
     grp_cols = ["Patient ID", "Bx index"]
     for (patient_id, bx_index), g in all_voxel_wise_dose_df.groupby(grp_cols):
+        bx_id_value = g["Bx ID"].dropna().iloc[0] if ("Bx ID" in g.columns and g["Bx ID"].notna().any()) else None
         vox = _voxel_position_table(g, position_mode=config.position_mode)
         n_vox = int(len(vox))
         if n_vox == 0:
@@ -393,6 +394,7 @@ def build_blocked_cv_fold_map(
             fold_summary_rows.append(
                 {
                     "Patient ID": patient_id,
+                    "Bx ID": bx_id_value,
                     "Bx index": bx_index,
                     "fold_id": int(fold_id),
                     "block_mode": config.block_mode,
@@ -421,6 +423,7 @@ def build_blocked_cv_fold_map(
                 fold_map_rows.append(
                     {
                         "Patient ID": patient_id,
+                        "Bx ID": bx_id_value,
                         "Bx index": bx_index,
                         "fold_id": int(fold_id),
                         "Voxel index": int(r["Voxel index"]),
@@ -609,6 +612,117 @@ def _fit_hyperparams_from_train_sv(
     raise ValueError(f"Unsupported kernel_name '{kernel_name}' in blocked_CV.")
 
 
+def _compute_fold_metrics_from_predictions(
+    pred_df: pd.DataFrame,
+    *,
+    variance_mode_col: str,
+) -> pd.DataFrame:
+    """
+    Aggregate held-out point predictions into one row per fold group.
+
+    The output preserves grouping identity keys and selected run metadata while
+    computing residual/standardized-residual/NLPD metrics from point-level rows.
+    """
+    if pred_df.empty:
+        return pd.DataFrame()
+    if variance_mode_col not in pred_df.columns:
+        raise ValueError(f"Missing required variance-mode column '{variance_mode_col}' in predictions table.")
+
+    group_cols = [
+        "Patient ID",
+        "Bx ID",
+        "Bx index",
+        "fold_id",
+        "kernel_label",
+        "kernel_name",
+        "kernel_param",
+        variance_mode_col,
+    ]
+    group_cols = [c for c in group_cols if c in pred_df.columns]
+
+    meta_cols = [
+        "gp_mean_mode",
+        "target_stat",
+        "block_mode",
+        "position_mode",
+        "split_strategy",
+        "rebalanced_two_fold_split",
+        "cv_n_folds",
+        "cv_block_length_mm",
+        "cv_min_derived_block_mm",
+        "cv_merge_tiny_tail_folds",
+        "cv_rebalance_two_fold_splits",
+        "cv_min_test_voxels",
+        "cv_min_test_block_mm",
+        "cv_min_effective_folds_after_merge",
+        "n_train_voxels",
+        "n_test_voxels",
+        "n_total_voxels_bx",
+        "train_test_total_match",
+        "train_count_matches_fold_map",
+        "test_count_matches_fold_map",
+    ]
+    meta_cols = [c for c in meta_cols if c in pred_df.columns]
+
+    rows = []
+    for keys, g in pred_df.groupby(group_cols, sort=True, dropna=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        row = {col: val for col, val in zip(group_cols, keys)}
+        if variance_mode_col in row and variance_mode_col != "variance_mode":
+            row["variance_mode"] = row[variance_mode_col]
+        for col in meta_cols:
+            row[col] = g[col].iloc[0]
+
+        residual = pd.to_numeric(g.get("residual", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        rstd = pd.to_numeric(g.get("rstd", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        var_pred_used = pd.to_numeric(g.get("var_pred_used", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+
+        resid_v = residual[np.isfinite(residual)]
+        rstd_v = rstd[np.isfinite(rstd)]
+        valid_nlpd = np.isfinite(residual) & np.isfinite(var_pred_used)
+        eps = 1e-12
+        if np.any(valid_nlpd):
+            resid_nlpd = residual[valid_nlpd]
+            var_nlpd = np.maximum(var_pred_used[valid_nlpd], eps)
+            nlpd = 0.5 * np.log(2.0 * np.pi * var_nlpd) + 0.5 * ((resid_nlpd ** 2) / var_nlpd)
+            nlpd_mean = float(np.mean(nlpd))
+        else:
+            nlpd_mean = np.nan
+
+        n_test = int(len(g))
+        n_residual_valid = int(resid_v.size)
+        n_rstd_valid = int(rstd_v.size)
+        n_nlpd_valid = int(np.sum(valid_nlpd))
+        n_abs_le1 = int(np.sum(np.abs(rstd_v) <= 1.0)) if n_rstd_valid else 0
+        n_abs_le2 = int(np.sum(np.abs(rstd_v) <= 2.0)) if n_rstd_valid else 0
+        n_abs_ge3 = int(np.sum(np.abs(rstd_v) >= 3.0)) if n_rstd_valid else 0
+
+        row.update(
+            {
+                "n_test_points": n_test,
+                "n_residual_valid": n_residual_valid,
+                "n_rstd_valid": n_rstd_valid,
+                "n_nlpd_valid": n_nlpd_valid,
+                "mean_residual": float(np.mean(resid_v)) if n_residual_valid else np.nan,
+                "rmse": float(np.sqrt(np.mean(resid_v ** 2))) if n_residual_valid else np.nan,
+                "mae": float(np.mean(np.abs(resid_v))) if n_residual_valid else np.nan,
+                "mean_rstd": float(np.mean(rstd_v)) if n_rstd_valid else np.nan,
+                "sd_rstd": float(np.std(rstd_v, ddof=0)) if n_rstd_valid else np.nan,
+                "n_abs_le1": n_abs_le1,
+                "n_abs_le2": n_abs_le2,
+                "n_abs_ge3": n_abs_ge3,
+                "pct_abs_le1": float(100.0 * n_abs_le1 / n_rstd_valid) if n_rstd_valid else np.nan,
+                "pct_abs_le2": float(100.0 * n_abs_le2 / n_rstd_valid) if n_rstd_valid else np.nan,
+                "pct_abs_ge3": float(100.0 * n_abs_ge3 / n_rstd_valid) if n_rstd_valid else np.nan,
+                "nlpd_mean": nlpd_mean,
+            }
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def run_blocked_cv_phase3c_smoke(
     all_voxel_wise_dose_df: pd.DataFrame,
     semivariogram_df: pd.DataFrame,
@@ -666,6 +780,8 @@ def run_blocked_cv_phase3c_smoke(
                 (all_voxel_wise_dose_df["Patient ID"] == patient_id)
                 & (all_voxel_wise_dose_df["Bx index"] == bx_index)
             ].copy()
+            bx_id_value = g_bx["Bx ID"].dropna().iloc[0] if ("Bx ID" in g_bx.columns and g_bx["Bx ID"].notna().any()) else None
+            cv_block_length_mm_value = float(config.block_length_mm) if config.block_length_mm is not None else np.nan
             fold_split_strategy = (
                 str(fold_rows["split_strategy"].iloc[0])
                 if ("split_strategy" in fold_rows.columns and not fold_rows.empty)
@@ -696,6 +812,7 @@ def run_blocked_cv_phase3c_smoke(
                 fold_status_rows.append(
                     {
                         "Patient ID": patient_id,
+                        "Bx ID": bx_id_value,
                         "Bx index": bx_index,
                         "fold_id": int(fold_id),
                         "kernel_label": kernel_label,
@@ -703,6 +820,16 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": kernel_param,
                         "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
+                        "block_mode": config.block_mode,
+                        "position_mode": config.position_mode,
+                        "cv_n_folds": int(config.n_folds),
+                        "cv_block_length_mm": cv_block_length_mm_value,
+                        "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                        "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                        "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                        "cv_min_test_voxels": int(config.min_test_voxels),
+                        "cv_min_test_block_mm": float(config.min_test_block_mm),
+                        "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
                         "split_strategy": fold_split_strategy,
                         "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                         "status": "skipped",
@@ -761,6 +888,7 @@ def run_blocked_cv_phase3c_smoke(
                     fold_status_rows.append(
                         {
                             "Patient ID": patient_id,
+                            "Bx ID": bx_id_value,
                             "Bx index": bx_index,
                             "fold_id": int(fold_id),
                             "kernel_label": kernel_label,
@@ -768,6 +896,16 @@ def run_blocked_cv_phase3c_smoke(
                             "kernel_param": kernel_param,
                             "primary_predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
+                            "block_mode": config.block_mode,
+                            "position_mode": config.position_mode,
+                            "cv_n_folds": int(config.n_folds),
+                            "cv_block_length_mm": cv_block_length_mm_value,
+                            "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                            "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                            "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                            "cv_min_test_voxels": int(config.min_test_voxels),
+                            "cv_min_test_block_mm": float(config.min_test_block_mm),
+                            "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
                             "split_strategy": fold_split_strategy,
                             "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                             "status": "skipped",
@@ -801,6 +939,7 @@ def run_blocked_cv_phase3c_smoke(
                     fold_status_rows.append(
                         {
                             "Patient ID": patient_id,
+                            "Bx ID": bx_id_value,
                             "Bx index": bx_index,
                             "fold_id": int(fold_id),
                             "kernel_label": kernel_label,
@@ -808,6 +947,16 @@ def run_blocked_cv_phase3c_smoke(
                             "kernel_param": kernel_param,
                             "primary_predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
+                            "block_mode": config.block_mode,
+                            "position_mode": config.position_mode,
+                            "cv_n_folds": int(config.n_folds),
+                            "cv_block_length_mm": cv_block_length_mm_value,
+                            "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                            "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                            "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                            "cv_min_test_voxels": int(config.min_test_voxels),
+                            "cv_min_test_block_mm": float(config.min_test_block_mm),
+                            "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
                             "split_strategy": fold_split_strategy,
                             "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                             "status": "skipped",
@@ -864,6 +1013,7 @@ def run_blocked_cv_phase3c_smoke(
                     pred_rows.append(
                         {
                             "Patient ID": patient_id,
+                            "Bx ID": bx_id_value,
                             "Bx index": bx_index,
                             "fold_id": int(fold_id),
                             "kernel_label": kernel_label,
@@ -883,6 +1033,16 @@ def run_blocked_cv_phase3c_smoke(
                             "abs_res_over_sd_used": abs_res_over_sd_used,
                             "gp_mean_mode": config.mean_mode,
                             "target_stat": config.target_stat,
+                            "block_mode": config.block_mode,
+                            "position_mode": config.position_mode,
+                            "cv_n_folds": int(config.n_folds),
+                            "cv_block_length_mm": cv_block_length_mm_value,
+                            "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                            "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                            "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                            "cv_min_test_voxels": int(config.min_test_voxels),
+                            "cv_min_test_block_mm": float(config.min_test_block_mm),
+                            "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
                             "predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
                             "split_strategy": fold_split_strategy,
@@ -910,6 +1070,7 @@ def run_blocked_cv_phase3c_smoke(
                             pred_compare_rows.append(
                                 {
                                     "Patient ID": patient_id,
+                                    "Bx ID": bx_id_value,
                                     "Bx index": bx_index,
                                     "fold_id": int(fold_id),
                                     "kernel_label": kernel_label,
@@ -930,6 +1091,17 @@ def run_blocked_cv_phase3c_smoke(
                                     "abs_res_over_sd_used": abs_res / max(float(sd_m[i]), 1e-12),
                                     "gp_mean_mode": config.mean_mode,
                                     "target_stat": config.target_stat,
+                                    "block_mode": config.block_mode,
+                                    "position_mode": config.position_mode,
+                                    "cv_n_folds": int(config.n_folds),
+                                    "cv_block_length_mm": cv_block_length_mm_value,
+                                    "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                                    "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                                    "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                                    "cv_min_test_voxels": int(config.min_test_voxels),
+                                    "cv_min_test_block_mm": float(config.min_test_block_mm),
+                                    "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
+                                    "primary_predictive_variance_mode": primary_mode,
                                     "split_strategy": fold_split_strategy,
                                     "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                                     "n_train_voxels": n_train_actual,
@@ -953,6 +1125,7 @@ def run_blocked_cv_phase3c_smoke(
                 fold_status_rows.append(
                     {
                         "Patient ID": patient_id,
+                        "Bx ID": bx_id_value,
                         "Bx index": bx_index,
                         "fold_id": int(fold_id),
                         "kernel_label": kernel_label,
@@ -960,6 +1133,16 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": kernel_param,
                         "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
+                        "block_mode": config.block_mode,
+                        "position_mode": config.position_mode,
+                        "cv_n_folds": int(config.n_folds),
+                        "cv_block_length_mm": cv_block_length_mm_value,
+                        "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                        "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                        "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                        "cv_min_test_voxels": int(config.min_test_voxels),
+                        "cv_min_test_block_mm": float(config.min_test_block_mm),
+                        "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
                         "split_strategy": fold_split_strategy,
                         "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                         "status": "ok",
@@ -982,6 +1165,7 @@ def run_blocked_cv_phase3c_smoke(
                 fold_status_rows.append(
                     {
                         "Patient ID": patient_id,
+                        "Bx ID": bx_id_value,
                         "Bx index": bx_index,
                         "fold_id": int(fold_id),
                         "kernel_label": kernel_label,
@@ -989,6 +1173,16 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": kernel_param,
                         "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
+                        "block_mode": config.block_mode,
+                        "position_mode": config.position_mode,
+                        "cv_n_folds": int(config.n_folds),
+                        "cv_block_length_mm": cv_block_length_mm_value,
+                        "cv_min_derived_block_mm": float(config.min_derived_block_mm),
+                        "cv_merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+                        "cv_rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
+                        "cv_min_test_voxels": int(config.min_test_voxels),
+                        "cv_min_test_block_mm": float(config.min_test_block_mm),
+                        "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
                         "split_strategy": fold_split_strategy,
                         "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                         "status": "error",
@@ -1012,6 +1206,7 @@ def run_blocked_cv_phase3c_smoke(
     if not fold_status_df.empty:
         fold_status_cols = [
             "Patient ID",
+            "Bx ID",
             "Bx index",
             "fold_id",
             "kernel_label",
@@ -1019,6 +1214,16 @@ def run_blocked_cv_phase3c_smoke(
             "kernel_param",
             "primary_predictive_variance_mode",
             "variance_modes_scored",
+            "block_mode",
+            "position_mode",
+            "cv_n_folds",
+            "cv_block_length_mm",
+            "cv_min_derived_block_mm",
+            "cv_merge_tiny_tail_folds",
+            "cv_rebalance_two_fold_splits",
+            "cv_min_test_voxels",
+            "cv_min_test_block_mm",
+            "cv_min_effective_folds_after_merge",
             "split_strategy",
             "rebalanced_two_fold_split",
             "status",
@@ -1104,6 +1309,26 @@ def run_blocked_cv_phase3c_smoke(
         compare_summary_path = csv_subdirs["metrics"].joinpath("blocked_cv_variance_mode_summary_all.csv")
         compare_summary_df.to_csv(compare_summary_path, index=False)
 
+    # Phase 4B: fold-level performance metrics from held-out prediction rows.
+    fold_metrics_df = _compute_fold_metrics_from_predictions(
+        pred_df,
+        variance_mode_col="predictive_variance_mode",
+    )
+    fold_metrics_path = csv_subdirs["metrics"].joinpath("blocked_cv_fold_metrics_all.csv")
+    fold_metrics_df.to_csv(fold_metrics_path, index=False)
+
+    compare_fold_metrics_df = pd.DataFrame()
+    compare_fold_metrics_path = None
+    if config.compare_variance_modes:
+        compare_fold_metrics_df = _compute_fold_metrics_from_predictions(
+            compare_df,
+            variance_mode_col="variance_mode",
+        )
+        compare_fold_metrics_path = csv_subdirs["metrics"].joinpath(
+            "blocked_cv_fold_metrics_variance_compare_all.csv"
+        )
+        compare_fold_metrics_df.to_csv(compare_fold_metrics_path, index=False)
+
     # Optional per-kernel slices (subsets of centralized *_all outputs).
     kernel_labels_run = sorted(pd.unique(pred_df["kernel_label"])) if not pred_df.empty else []
     if config.write_per_kernel_predictions_csvs and not pred_df.empty:
@@ -1148,10 +1373,14 @@ def run_blocked_cv_phase3c_smoke(
         "variance_modes_scored": scored_modes,
         "point_predictions_csv": str(pred_path),
         "fold_fit_status_csv": str(status_path),
+        "fold_metrics_csv": str(fold_metrics_path),
         "point_predictions_compare_csv": str(compare_path) if compare_path is not None else None,
+        "fold_metrics_compare_csv": str(compare_fold_metrics_path) if compare_fold_metrics_path is not None else None,
         "variance_mode_summary_csv": str(compare_summary_path) if compare_summary_path is not None else None,
         "n_point_prediction_rows": int(len(pred_df)),
+        "n_fold_metrics_rows": int(len(fold_metrics_df)),
         "n_point_prediction_compare_rows": int(len(compare_df)),
+        "n_fold_metrics_compare_rows": int(len(compare_fold_metrics_df)),
         "n_fold_status_rows": int(len(fold_status_df)),
         "n_fold_status_ok": int((fold_status_df.get("status", pd.Series(dtype=str)) == "ok").sum()) if len(fold_status_df) else 0,
         "n_fold_status_error": int((fold_status_df.get("status", pd.Series(dtype=str)) == "error").sum()) if len(fold_status_df) else 0,
