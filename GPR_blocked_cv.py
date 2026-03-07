@@ -2251,7 +2251,8 @@ def _draw_blocked_cv_profile_axis(
         x_min = float(np.nanmin(X_test))
         x_max = float(np.nanmax(X_test))
         if np.isfinite(x_min) and np.isfinite(x_max):
-            ax.axvspan(x_min, x_max, color="#bbbbbb", alpha=0.15, zorder=0, label="Held-out fold span")
+            # Keep fold span context without adding an extra legend entry.
+            ax.axvspan(x_min, x_max, color="#d0d0d0", alpha=0.08, zorder=0)
 
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=gpr_pp._fs_label())
     ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=gpr_pp._fs_label())
@@ -2517,13 +2518,13 @@ def run_blocked_cv_plots(
                         shared_handles,
                         shared_labels,
                         loc="upper center",
-                        bbox_to_anchor=(0.5, 1.03),
+                        bbox_to_anchor=(0.5, 1.07),
                         ncol=min(len(shared_handles), 6),
                         frameon=False,
                         fancybox=False,
                         fontsize=gpr_pp._fs_legend(),
                     )
-                fig.tight_layout(rect=[0, 0, 1, 0.90])
+                fig.tight_layout(rect=[0, 0, 1, 0.86])
                 patient_tok = _sanitize_token(patient_id)
                 bx_tok = _sanitize_token(bx_index)
                 fold_sel_token = _selection_token(config.plot_fold_ids, none_token="allfolds")
@@ -2624,13 +2625,13 @@ def run_blocked_cv_plots(
                         shared_handles,
                         shared_labels,
                         loc="upper center",
-                        bbox_to_anchor=(0.5, 1.03),
+                        bbox_to_anchor=(0.5, 1.07),
                         ncol=min(len(shared_handles), 6),
                         frameon=False,
                         fancybox=False,
                         fontsize=gpr_pp._fs_legend(),
                     )
-                fig.tight_layout(rect=[0, 0, 1, 0.90])
+                fig.tight_layout(rect=[0, 0, 1, 0.86])
                 bx_sel_token = _selection_token(
                     [f"{_sanitize_token(pid)}_{int(bx)}" for pid, bx in bx_order] if bx_order else None,
                     none_token="allbx",

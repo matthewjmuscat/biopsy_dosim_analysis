@@ -176,11 +176,20 @@ def main():
     # Labels must match kernel labels used by blocked_cv_kernel_specs (e.g., "matern_nu_1_5", "matern_nu_2_5", "rbf", "exp").
     blocked_cv_plot_kernel_labels = None
     blocked_cv_plot_variance_mode = "primary"  # options: "primary", "latent", "observed_mc", "observed_mc_plus_nugget"
-    blocked_cv_plot_make_paired_semivariogram_profile = True  # if True, produce blocked_CV paired semivariogram/profile figures
-    blocked_cv_plot_make_semivariogram_grids = True  # if True, produce blocked_CV semivariogram-only grids
-    blocked_cv_plot_make_profile_grids = True  # if True, produce blocked_CV profile-only grids
-    blocked_cv_plot_write_report_figures = True  # if True, write blocked_CV report-facing figures
-    blocked_cv_plot_write_diagnostic_figures = False  # if True, write blocked_CV diagnostic-only figures
+    # Centralized blocked_CV plot gating to avoid one variable per figure type.
+    # Implemented keys currently used: paired_semivariogram_profile, profile_grids, semivariogram_grids,
+    # write_report_figures, write_diagnostic_figures.
+    # Placeholder keys (for upcoming figure families): residuals, calibration, kernel_comparison.
+    blocked_cv_plot_options = {
+        "paired_semivariogram_profile": False,
+        "profile_grids": True,
+        "semivariogram_grids": True,
+        "residuals": False,
+        "calibration": False,
+        "kernel_comparison": False,
+        "write_report_figures": True,
+        "write_diagnostic_figures": False,
+    }
 
     # --- Plot presentation toggles ---
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
@@ -715,11 +724,11 @@ def main():
             plot_include_rebalanced_two_fold_splits=blocked_cv_plot_include_rebalanced_two_fold_splits,
             plot_kernel_labels=blocked_cv_plot_kernel_labels,
             plot_variance_mode=blocked_cv_plot_variance_mode,
-            plot_make_paired_semivariogram_profile=blocked_cv_plot_make_paired_semivariogram_profile,
-            plot_make_semivariogram_grids=blocked_cv_plot_make_semivariogram_grids,
-            plot_make_profile_grids=blocked_cv_plot_make_profile_grids,
-            plot_write_report_figures=blocked_cv_plot_write_report_figures,
-            plot_write_diagnostic_figures=blocked_cv_plot_write_diagnostic_figures,
+            plot_make_paired_semivariogram_profile=bool(blocked_cv_plot_options.get("paired_semivariogram_profile", False)),
+            plot_make_semivariogram_grids=bool(blocked_cv_plot_options.get("semivariogram_grids", False)),
+            plot_make_profile_grids=bool(blocked_cv_plot_options.get("profile_grids", False)),
+            plot_write_report_figures=bool(blocked_cv_plot_options.get("write_report_figures", True)),
+            plot_write_diagnostic_figures=bool(blocked_cv_plot_options.get("write_diagnostic_figures", False)),
         )
         blocked_cv_status = GPR_blocked_cv.run_blocked_cv_phase3b(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
