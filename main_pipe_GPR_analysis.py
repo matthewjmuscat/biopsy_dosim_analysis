@@ -137,6 +137,8 @@ def main():
         ("exp", None, "exp"),
     ]  # kernel list for blocked_CV run loop
 
+    # blocked_CV output toggles
+    write_blocked_cv_eligible_views = True  # if True, also write *_eligible CSV views and eligibility exclusions table
     # Debug-volume toggle: report/repro tables are always produced; this controls only large raw debug tables.
     write_blocked_cv_debug_csvs = True  # if False, skip fold-map and point-level prediction CSVs
 
@@ -628,10 +630,10 @@ def main():
 
 
     # ---------------------------------------
-    # # blocked_CV Phase 3B (fold map only; no model fitting)
+    # blocked_CV lane (fold mapping + optional all-kernel fit/predict)
     # ---------------------------------------
     if run_blocked_cv:
-        _print_section("BLOCKED_CV (Phase 3B: fold map)")
+        _print_section("BLOCKED_CV: Fold Mapping")
         blocked_cv_root, blocked_cv_figs_dir, blocked_cv_csv_dir = GPR_blocked_cv.init_blocked_cv_dirs(
             output_dir, subdir_name=blocked_cv_output_subdir
         )
@@ -655,6 +657,7 @@ def main():
             semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
             semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
             write_debug_csvs=write_blocked_cv_debug_csvs,
+            write_eligible_views=write_blocked_cv_eligible_views,
             write_per_kernel_predictions_csvs=write_blocked_cv_per_kernel_predictions_csvs,
             write_per_kernel_fit_status_csvs=write_blocked_cv_per_kernel_fit_status_csvs,
             write_per_kernel_variance_compare_csvs=write_blocked_cv_per_kernel_variance_compare_csvs,
@@ -668,9 +671,9 @@ def main():
             csv_dir=blocked_cv_csv_dir,
             config=blocked_cv_cfg,
         )
-        print(f"[blocked_CV] phase 3B status: {blocked_cv_status}")
+        print(f"[blocked_CV] fold-mapping status: {blocked_cv_status}")
         if run_blocked_cv_phase3c_smoke:
-            _print_section("BLOCKED_CV (Phase 3D: all-kernel fit/predict)")
+            _print_section("BLOCKED_CV: All-kernel Train-only Fit + Held-out Predict")
             blocked_cv_phase3c_status = GPR_blocked_cv.run_blocked_cv_phase3c_smoke(
                 all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                 semivariogram_df=semivariogram_df,
@@ -679,9 +682,9 @@ def main():
                 csv_dir=blocked_cv_csv_dir,
                 config=blocked_cv_cfg,
             )
-            print(f"[blocked_CV] phase 3C status: {blocked_cv_phase3c_status}")
+            print(f"[blocked_CV] fit/predict status: {blocked_cv_phase3c_status}")
     else:
-        _print_section("BLOCKED_CV (Phase 3B skipped)")
+        _print_section("BLOCKED_CV: Skipped")
 
 
 

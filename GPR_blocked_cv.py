@@ -38,6 +38,7 @@ class BlockedCVConfig:
     semivariogram_voxel_size_mm: float = 1.0
     semivariogram_lag_bin_width_mm: float | None = None
     write_debug_csvs: bool = True
+    write_eligible_views: bool = True
     write_per_kernel_predictions_csvs: bool = False
     write_per_kernel_fit_status_csvs: bool = False
     write_per_kernel_variance_compare_csvs: bool = False
@@ -108,7 +109,9 @@ def _write_blocked_cv_readme(
         "## Output policy",
         "- Report/repro tables are always written.",
         "- Large debug tables are controlled by `write_blocked_cv_debug_csvs`.",
+        "- Optional eligible-only views are controlled by `write_blocked_cv_eligible_views`.",
         f"- Current run setting: `write_blocked_cv_debug_csvs = {bool(config.write_debug_csvs)}`.",
+        f"- Current run setting: `write_blocked_cv_eligible_views = {bool(config.write_eligible_views)}`.",
         "",
         "## Report-facing CSVs (always produced)",
         "- `csv/metrics/blocked_cv_cohort_summary_all.csv`",
@@ -122,6 +125,15 @@ def _write_blocked_cv_readme(
         "- `csv/metrics/blocked_cv_biopsy_metrics_variance_compare_all.csv`",
         "- `csv/metrics/blocked_cv_fold_metrics_variance_compare_all.csv`",
         "- `csv/metrics/blocked_cv_variance_mode_summary_all.csv`",
+        "",
+        "## Eligible-view CSVs (when `write_blocked_cv_eligible_views=True`)",
+        "- `csv/metrics/blocked_cv_fold_metrics_eligible.csv`",
+        "- `csv/metrics/blocked_cv_biopsy_metrics_eligible.csv`",
+        "- `csv/metrics/blocked_cv_cohort_summary_eligible.csv`",
+        "- `csv/metrics/blocked_cv_fold_metrics_variance_compare_eligible.csv` (compare mode)",
+        "- `csv/metrics/blocked_cv_biopsy_metrics_variance_compare_eligible.csv` (compare mode)",
+        "- `csv/metrics/blocked_cv_cohort_summary_variance_compare_eligible.csv` (compare mode)",
+        "- `csv/diagnostics/blocked_cv_eligibility_exclusions_all.csv`",
         "",
         "## Debug CSVs (produced only if `write_blocked_cv_debug_csvs=True`)",
         "- `csv/folds/blocked_cv_fold_map.csv`",
@@ -157,7 +169,7 @@ def run_blocked_cv_scaffold(
     csv_subdirs = _blocked_cv_csv_subdirs(csv_dir)
 
     status = {
-        "phase": "3A_scaffold",
+        "phase": "blocked_cv_scaffold",
         "status": "ready",
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
@@ -183,6 +195,7 @@ def run_blocked_cv_scaffold(
         "compare_variance_modes": bool(config.compare_variance_modes),
         "variance_modes_to_compare": list(config.variance_modes_to_compare) if config.variance_modes_to_compare is not None else None,
         "write_debug_csvs": bool(config.write_debug_csvs),
+        "write_eligible_views": bool(config.write_eligible_views),
     }
 
     return status
@@ -549,7 +562,7 @@ def run_blocked_cv_phase3b(
         rebalanced_two_fold_bx_count = 0
 
     status = {
-        "phase": "3B_fold_map",
+        "phase": "blocked_cv_fold_mapping",
         "status": "ready",
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
@@ -579,6 +592,7 @@ def run_blocked_cv_phase3b(
         "compare_variance_modes": bool(config.compare_variance_modes),
         "variance_modes_to_compare": list(config.variance_modes_to_compare) if config.variance_modes_to_compare is not None else None,
         "write_debug_csvs": bool(config.write_debug_csvs),
+        "write_eligible_views": bool(config.write_eligible_views),
         "fold_map_csv": str(fold_map_path) if config.write_debug_csvs else None,
         "fold_summary_csv": str(fold_summary_path),
         "readme_path": str(readme_path),
@@ -972,6 +986,130 @@ def _compute_cohort_summary_from_biopsy_metrics(biopsy_df: pd.DataFrame) -> pd.D
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+def _normalize_bool_series(s: pd.Series, default: bool = False) -> pd.Series:
+    """Normalize mixed-type truthy/falsy column to boolean series."""
+    if s is None:
+        return pd.Series([], dtype=bool)
+    if s.dtype == bool:
+        return s.fillna(default)
+    txt = s.astype(str).str.strip().str.lower()
+    true_vals = {"true", "1", "yes", "y", "t"}
+    false_vals = {"false", "0", "no", "n", "f", "nan", "none", ""}
+    out = pd.Series(default, index=s.index, dtype=bool)
+    out[txt.isin(true_vals)] = True
+    out[txt.isin(false_vals)] = False
+    return out
+
+
+def _attach_fold_summary_flags_to_metrics(
+    metrics_df: pd.DataFrame,
+    fold_summary_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach fold-level structural flags from fold summary onto metrics rows."""
+    if metrics_df.empty or fold_summary_df.empty:
+        return metrics_df
+    keys = ["Patient ID", "Bx index", "fold_id"]
+    if not all(k in metrics_df.columns for k in keys):
+        return metrics_df
+    if not all(k in fold_summary_df.columns for k in keys):
+        return metrics_df
+    add_cols = [
+        "contiguous_test_block",
+        "test_meets_min_voxels_threshold",
+        "test_meets_min_span_threshold",
+        "merged_tail_fold",
+        "rebalanced_two_fold_split",
+        "split_strategy",
+    ]
+    use_cols = [c for c in add_cols if c in fold_summary_df.columns]
+    if not use_cols:
+        return metrics_df
+    fold_flags = fold_summary_df[keys + use_cols].drop_duplicates(subset=keys)
+    # keep metrics-side values when already present
+    existing = set(metrics_df.columns)
+    drop_right = [c for c in use_cols if c in existing]
+    fold_flags_for_merge = fold_flags.drop(columns=drop_right) if drop_right else fold_flags
+    return metrics_df.merge(fold_flags_for_merge, on=keys, how="left")
+
+
+def _evaluate_fold_eligibility(
+    fold_metrics_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Add eligibility flags and reasons to fold-level metrics.
+
+    Returns
+    -------
+    fold_metrics_with_eligibility:
+        input table with columns `eligible_for_primary` and `exclude_reason`.
+    exclusions_df:
+        subset where `eligible_for_primary == False`.
+    """
+    if fold_metrics_df.empty:
+        out = fold_metrics_df.copy()
+        out["eligible_for_primary"] = False
+        out["exclude_reason"] = ""
+        return out, out
+
+    out = fold_metrics_df.copy()
+    reasons_per_row: list[str] = []
+    eligible = np.ones(len(out), dtype=bool)
+
+    check_cols = [
+        ("train_test_total_match", "train_test_total_mismatch"),
+        ("train_count_matches_fold_map", "train_count_mismatch"),
+        ("test_count_matches_fold_map", "test_count_mismatch"),
+        ("contiguous_test_block", "non_contiguous_test_block"),
+        ("test_meets_min_voxels_threshold", "below_min_test_voxels"),
+        ("test_meets_min_span_threshold", "below_min_test_span_mm"),
+    ]
+    checks = []
+    for col, reason in check_cols:
+        if col in out.columns:
+            v = _normalize_bool_series(out[col], default=False).to_numpy(bool)
+            checks.append((v, reason))
+        else:
+            checks.append((np.ones(len(out), dtype=bool), reason))
+
+    n_rstd = pd.to_numeric(out.get("n_rstd_valid", pd.Series(dtype=float)), errors="coerce")
+    has_rstd = np.isfinite(n_rstd.to_numpy(float)) & (n_rstd.to_numpy(float) > 0)
+    checks.append((has_rstd, "no_valid_rstd"))
+
+    for i in range(len(out)):
+        row_reasons = []
+        row_ok = True
+        for mask, reason in checks:
+            if not bool(mask[i]):
+                row_ok = False
+                row_reasons.append(reason)
+        eligible[i] = row_ok
+        reasons_per_row.append(";".join(row_reasons))
+
+    out["eligible_for_primary"] = eligible
+    out["exclude_reason"] = reasons_per_row
+    exclusions = out.loc[~out["eligible_for_primary"]].copy()
+    return out, exclusions
+
+
+def _eligible_fold_keys_from_fold_metrics(fold_metrics_df: pd.DataFrame) -> pd.DataFrame:
+    """Return unique eligible fold keys for filtering point-level tables."""
+    if fold_metrics_df.empty or "eligible_for_primary" not in fold_metrics_df.columns:
+        return pd.DataFrame(columns=["Patient ID", "Bx index", "fold_id", "kernel_label"])
+    keys = ["Patient ID", "Bx index", "fold_id", "kernel_label"]
+    keys = [k for k in keys if k in fold_metrics_df.columns]
+    return fold_metrics_df.loc[fold_metrics_df["eligible_for_primary"], keys].drop_duplicates()
+
+
+def _filter_predictions_by_eligible_folds(pred_df: pd.DataFrame, eligible_keys_df: pd.DataFrame) -> pd.DataFrame:
+    """Filter prediction rows to eligible fold keys."""
+    if pred_df.empty or eligible_keys_df.empty:
+        return pred_df.iloc[0:0].copy()
+    merge_keys = [k for k in ["Patient ID", "Bx index", "fold_id", "kernel_label"] if k in pred_df.columns and k in eligible_keys_df.columns]
+    if not merge_keys:
+        return pred_df.iloc[0:0].copy()
+    return pred_df.merge(eligible_keys_df[merge_keys].drop_duplicates(), on=merge_keys, how="inner")
 
 
 def run_blocked_cv_phase3c_smoke(
@@ -1569,6 +1707,8 @@ def run_blocked_cv_phase3c_smoke(
         pred_df,
         variance_mode_col="predictive_variance_mode",
     )
+    fold_metrics_df = _attach_fold_summary_flags_to_metrics(fold_metrics_df, fold_summary_df)
+    fold_metrics_df, eligibility_exclusions_df = _evaluate_fold_eligibility(fold_metrics_df)
     fold_metrics_path = csv_subdirs["metrics"].joinpath("blocked_cv_fold_metrics_all.csv")
     fold_metrics_df.to_csv(fold_metrics_path, index=False)
 
@@ -1579,6 +1719,16 @@ def run_blocked_cv_phase3c_smoke(
             compare_df,
             variance_mode_col="variance_mode",
         )
+        compare_fold_metrics_df = _attach_fold_summary_flags_to_metrics(compare_fold_metrics_df, fold_summary_df)
+        if (not compare_fold_metrics_df.empty) and (not fold_metrics_df.empty):
+            join_keys = [k for k in ["Patient ID", "Bx index", "fold_id", "kernel_label"] if k in compare_fold_metrics_df.columns and k in fold_metrics_df.columns]
+            if join_keys:
+                elig_cols = join_keys + [c for c in ["eligible_for_primary", "exclude_reason"] if c in fold_metrics_df.columns]
+                compare_fold_metrics_df = compare_fold_metrics_df.merge(
+                    fold_metrics_df[elig_cols].drop_duplicates(),
+                    on=join_keys,
+                    how="left",
+                )
         compare_fold_metrics_path = csv_subdirs["metrics"].joinpath(
             "blocked_cv_fold_metrics_variance_compare_all.csv"
         )
@@ -1618,6 +1768,70 @@ def run_blocked_cv_phase3c_smoke(
         )
         compare_cohort_summary_df.to_csv(compare_cohort_summary_path, index=False)
 
+    # Phase 4E: optional eligible-only views for report-facing filtering.
+    eligibility_exclusions_path = None
+    fold_metrics_eligible_df = pd.DataFrame()
+    fold_metrics_eligible_path = None
+    biopsy_metrics_eligible_df = pd.DataFrame()
+    biopsy_metrics_eligible_path = None
+    cohort_summary_eligible_df = pd.DataFrame()
+    cohort_summary_eligible_path = None
+    compare_fold_metrics_eligible_df = pd.DataFrame()
+    compare_fold_metrics_eligible_path = None
+    compare_biopsy_metrics_eligible_df = pd.DataFrame()
+    compare_biopsy_metrics_eligible_path = None
+    compare_cohort_summary_eligible_df = pd.DataFrame()
+    compare_cohort_summary_eligible_path = None
+    if config.write_eligible_views:
+        eligibility_exclusions_path = csv_subdirs["diagnostics"].joinpath("blocked_cv_eligibility_exclusions_all.csv")
+        eligibility_exclusions_df.to_csv(eligibility_exclusions_path, index=False)
+
+        fold_metrics_eligible_df = fold_metrics_df.loc[
+            _normalize_bool_series(fold_metrics_df.get("eligible_for_primary", pd.Series(dtype=bool)), default=False)
+        ].copy()
+        fold_metrics_eligible_path = csv_subdirs["metrics"].joinpath("blocked_cv_fold_metrics_eligible.csv")
+        fold_metrics_eligible_df.to_csv(fold_metrics_eligible_path, index=False)
+
+        eligible_keys_df = _eligible_fold_keys_from_fold_metrics(fold_metrics_df)
+        pred_eligible_df = _filter_predictions_by_eligible_folds(pred_df, eligible_keys_df)
+        biopsy_metrics_eligible_df = _compute_biopsy_metrics_from_predictions(
+            pred_eligible_df,
+            variance_mode_col="predictive_variance_mode",
+        )
+        biopsy_metrics_eligible_path = csv_subdirs["metrics"].joinpath("blocked_cv_biopsy_metrics_eligible.csv")
+        biopsy_metrics_eligible_df.to_csv(biopsy_metrics_eligible_path, index=False)
+
+        cohort_summary_eligible_df = _compute_cohort_summary_from_biopsy_metrics(biopsy_metrics_eligible_df)
+        cohort_summary_eligible_path = csv_subdirs["metrics"].joinpath("blocked_cv_cohort_summary_eligible.csv")
+        cohort_summary_eligible_df.to_csv(cohort_summary_eligible_path, index=False)
+
+        if config.compare_variance_modes:
+            compare_fold_metrics_eligible_df = compare_fold_metrics_df.loc[
+                _normalize_bool_series(compare_fold_metrics_df.get("eligible_for_primary", pd.Series(dtype=bool)), default=False)
+            ].copy()
+            compare_fold_metrics_eligible_path = csv_subdirs["metrics"].joinpath(
+                "blocked_cv_fold_metrics_variance_compare_eligible.csv"
+            )
+            compare_fold_metrics_eligible_df.to_csv(compare_fold_metrics_eligible_path, index=False)
+
+            compare_pred_eligible_df = _filter_predictions_by_eligible_folds(compare_df, eligible_keys_df)
+            compare_biopsy_metrics_eligible_df = _compute_biopsy_metrics_from_predictions(
+                compare_pred_eligible_df,
+                variance_mode_col="variance_mode",
+            )
+            compare_biopsy_metrics_eligible_path = csv_subdirs["metrics"].joinpath(
+                "blocked_cv_biopsy_metrics_variance_compare_eligible.csv"
+            )
+            compare_biopsy_metrics_eligible_df.to_csv(compare_biopsy_metrics_eligible_path, index=False)
+
+            compare_cohort_summary_eligible_df = _compute_cohort_summary_from_biopsy_metrics(
+                compare_biopsy_metrics_eligible_df
+            )
+            compare_cohort_summary_eligible_path = csv_subdirs["metrics"].joinpath(
+                "blocked_cv_cohort_summary_variance_compare_eligible.csv"
+            )
+            compare_cohort_summary_eligible_df.to_csv(compare_cohort_summary_eligible_path, index=False)
+
     # Optional per-kernel slices (subsets of centralized *_all outputs).
     kernel_labels_run = sorted(pd.unique(pred_df["kernel_label"])) if not pred_df.empty else []
     if config.write_debug_csvs and config.write_per_kernel_predictions_csvs and not pred_df.empty:
@@ -1647,7 +1861,7 @@ def run_blocked_cv_phase3c_smoke(
                 )
 
     status = {
-        "phase": "3D_all_kernels_fit_predict",
+        "phase": "blocked_cv_all_kernel_fit_predict",
         "status": "ready",
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
@@ -1661,25 +1875,40 @@ def run_blocked_cv_phase3c_smoke(
         "primary_predictive_variance_mode": primary_mode,
         "variance_modes_scored": scored_modes,
         "write_debug_csvs": bool(config.write_debug_csvs),
+        "write_eligible_views": bool(config.write_eligible_views),
         "readme_path": str(readme_path),
         "point_predictions_csv": str(pred_path) if config.write_debug_csvs else None,
         "fold_fit_status_csv": str(status_path),
         "fold_metrics_csv": str(fold_metrics_path),
         "biopsy_metrics_csv": str(biopsy_metrics_path),
         "cohort_summary_csv": str(cohort_summary_path),
+        "eligibility_exclusions_csv": str(eligibility_exclusions_path) if eligibility_exclusions_path is not None else None,
+        "fold_metrics_eligible_csv": str(fold_metrics_eligible_path) if fold_metrics_eligible_path is not None else None,
+        "biopsy_metrics_eligible_csv": str(biopsy_metrics_eligible_path) if biopsy_metrics_eligible_path is not None else None,
+        "cohort_summary_eligible_csv": str(cohort_summary_eligible_path) if cohort_summary_eligible_path is not None else None,
         "point_predictions_compare_csv": (str(compare_path) if (compare_path is not None and config.write_debug_csvs) else None),
         "fold_metrics_compare_csv": str(compare_fold_metrics_path) if compare_fold_metrics_path is not None else None,
         "biopsy_metrics_compare_csv": str(compare_biopsy_metrics_path) if compare_biopsy_metrics_path is not None else None,
         "cohort_summary_compare_csv": str(compare_cohort_summary_path) if compare_cohort_summary_path is not None else None,
         "variance_mode_summary_csv": str(compare_summary_path) if compare_summary_path is not None else None,
+        "fold_metrics_compare_eligible_csv": str(compare_fold_metrics_eligible_path) if compare_fold_metrics_eligible_path is not None else None,
+        "biopsy_metrics_compare_eligible_csv": str(compare_biopsy_metrics_eligible_path) if compare_biopsy_metrics_eligible_path is not None else None,
+        "cohort_summary_compare_eligible_csv": str(compare_cohort_summary_eligible_path) if compare_cohort_summary_eligible_path is not None else None,
         "n_point_prediction_rows": int(len(pred_df)),
         "n_fold_metrics_rows": int(len(fold_metrics_df)),
         "n_biopsy_metrics_rows": int(len(biopsy_metrics_df)),
         "n_cohort_summary_rows": int(len(cohort_summary_df)),
+        "n_fold_metrics_eligible_rows": int(len(fold_metrics_eligible_df)),
+        "n_biopsy_metrics_eligible_rows": int(len(biopsy_metrics_eligible_df)),
+        "n_cohort_summary_eligible_rows": int(len(cohort_summary_eligible_df)),
+        "n_eligibility_exclusion_rows": int(len(eligibility_exclusions_df)),
         "n_point_prediction_compare_rows": int(len(compare_df)),
         "n_fold_metrics_compare_rows": int(len(compare_fold_metrics_df)),
         "n_biopsy_metrics_compare_rows": int(len(compare_biopsy_metrics_df)),
         "n_cohort_summary_compare_rows": int(len(compare_cohort_summary_df)),
+        "n_fold_metrics_compare_eligible_rows": int(len(compare_fold_metrics_eligible_df)),
+        "n_biopsy_metrics_compare_eligible_rows": int(len(compare_biopsy_metrics_eligible_df)),
+        "n_cohort_summary_compare_eligible_rows": int(len(compare_cohort_summary_eligible_df)),
         "n_fold_status_rows": int(len(fold_status_df)),
         "n_fold_status_ok": int((fold_status_df.get("status", pd.Series(dtype=str)) == "ok").sum()) if len(fold_status_df) else 0,
         "n_fold_status_error": int((fold_status_df.get("status", pd.Series(dtype=str)) == "error").sum()) if len(fold_status_df) else 0,
