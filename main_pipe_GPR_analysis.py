@@ -137,6 +137,9 @@ def main():
         ("exp", None, "exp"),
     ]  # kernel list for blocked_CV run loop
 
+    # Debug-volume toggle: report/repro tables are always produced; this controls only large raw debug tables.
+    write_blocked_cv_debug_csvs = True  # if False, skip fold-map and point-level prediction CSVs
+
     # blocked_CV optional per-kernel slices (all are strict subsets of *_all)
     write_blocked_cv_per_kernel_predictions_csvs = False
     write_blocked_cv_per_kernel_fit_status_csvs = False
@@ -651,6 +654,7 @@ def main():
             kernel_specs=blocked_cv_kernel_specs,
             semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
             semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
+            write_debug_csvs=write_blocked_cv_debug_csvs,
             write_per_kernel_predictions_csvs=write_blocked_cv_per_kernel_predictions_csvs,
             write_per_kernel_fit_status_csvs=write_blocked_cv_per_kernel_fit_status_csvs,
             write_per_kernel_variance_compare_csvs=write_blocked_cv_per_kernel_variance_compare_csvs,

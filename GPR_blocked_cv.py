@@ -37,6 +37,7 @@ class BlockedCVConfig:
     kernel_specs: Iterable[Tuple[str, float | None, str]] | None = None
     semivariogram_voxel_size_mm: float = 1.0
     semivariogram_lag_bin_width_mm: float | None = None
+    write_debug_csvs: bool = True
     write_per_kernel_predictions_csvs: bool = False
     write_per_kernel_fit_status_csvs: bool = False
     write_per_kernel_variance_compare_csvs: bool = False
@@ -81,6 +82,58 @@ def _blocked_cv_csv_subdirs(csv_root: Path) -> dict[str, Path]:
             continue
         p.mkdir(parents=True, exist_ok=True)
     return subdirs
+
+
+def _write_blocked_cv_readme(
+    blocked_cv_root: Path,
+    *,
+    config: BlockedCVConfig,
+) -> Path:
+    """
+    Write a concise README describing blocked_CV output organization and policy.
+    """
+    readme_path = blocked_cv_root.joinpath("README.md")
+    lines = [
+        "# blocked_CV outputs",
+        "",
+        "This folder contains blocked cross-validation artifacts for the GPR along-core pipeline.",
+        "",
+        "## Directory layout",
+        "- `csv/folds/`: fold assignment and fold-structure summaries.",
+        "- `csv/predictions/`: point-level held-out predictions (largest tables).",
+        "- `csv/metrics/`: fold/biopsy/cohort aggregated performance tables.",
+        "- `csv/diagnostics/`: fit status and integrity/audit tables.",
+        "- `figures/`: blocked_CV figures (when enabled in later phases).",
+        "",
+        "## Output policy",
+        "- Report/repro tables are always written.",
+        "- Large debug tables are controlled by `write_blocked_cv_debug_csvs`.",
+        f"- Current run setting: `write_blocked_cv_debug_csvs = {bool(config.write_debug_csvs)}`.",
+        "",
+        "## Report-facing CSVs (always produced)",
+        "- `csv/metrics/blocked_cv_cohort_summary_all.csv`",
+        "- `csv/metrics/blocked_cv_biopsy_metrics_all.csv`",
+        "- `csv/metrics/blocked_cv_fold_metrics_all.csv`",
+        "- `csv/diagnostics/blocked_cv_fold_fit_status_all.csv`",
+        "- `csv/folds/blocked_cv_fold_summary.csv`",
+        "",
+        "## Additional compare-mode CSVs (when enabled)",
+        "- `csv/metrics/blocked_cv_cohort_summary_variance_compare_all.csv`",
+        "- `csv/metrics/blocked_cv_biopsy_metrics_variance_compare_all.csv`",
+        "- `csv/metrics/blocked_cv_fold_metrics_variance_compare_all.csv`",
+        "- `csv/metrics/blocked_cv_variance_mode_summary_all.csv`",
+        "",
+        "## Debug CSVs (produced only if `write_blocked_cv_debug_csvs=True`)",
+        "- `csv/folds/blocked_cv_fold_map.csv`",
+        "- `csv/predictions/blocked_cv_point_predictions_all.csv`",
+        "- `csv/predictions/blocked_cv_point_predictions_variance_compare_all.csv`",
+        "",
+        "## Notes",
+        "- `Patient ID` + `Bx index` define biopsy identity in this pipeline; `Bx ID` is also carried for traceability.",
+        "- Kernel-specific slice files may be produced when per-kernel toggles are enabled.",
+    ]
+    readme_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return readme_path
 
 
 def run_blocked_cv_scaffold(
@@ -129,6 +182,7 @@ def run_blocked_cv_scaffold(
         "primary_predictive_variance_mode": config.primary_predictive_variance_mode,
         "compare_variance_modes": bool(config.compare_variance_modes),
         "variance_modes_to_compare": list(config.variance_modes_to_compare) if config.variance_modes_to_compare is not None else None,
+        "write_debug_csvs": bool(config.write_debug_csvs),
     }
 
     return status
@@ -473,8 +527,10 @@ def run_blocked_cv_phase3b(
     csv_subdirs = _blocked_cv_csv_subdirs(csv_dir)
     fold_map_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_map.csv")
     fold_summary_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_summary.csv")
-    fold_map_df.to_csv(fold_map_path, index=False)
+    if config.write_debug_csvs:
+        fold_map_df.to_csv(fold_map_path, index=False)
     fold_summary_df.to_csv(fold_summary_path, index=False)
+    readme_path = _write_blocked_cv_readme(output_dir, config=config)
     if not fold_summary_df.empty and {"Patient ID", "Bx index", "merged_tail_fold"}.issubset(fold_summary_df.columns):
         merged_bx_count = int(
             fold_summary_df.loc[fold_summary_df["merged_tail_fold"], ["Patient ID", "Bx index"]]
@@ -522,8 +578,10 @@ def run_blocked_cv_phase3b(
         "primary_predictive_variance_mode": config.primary_predictive_variance_mode,
         "compare_variance_modes": bool(config.compare_variance_modes),
         "variance_modes_to_compare": list(config.variance_modes_to_compare) if config.variance_modes_to_compare is not None else None,
-        "fold_map_csv": str(fold_map_path),
+        "write_debug_csvs": bool(config.write_debug_csvs),
+        "fold_map_csv": str(fold_map_path) if config.write_debug_csvs else None,
         "fold_summary_csv": str(fold_summary_path),
+        "readme_path": str(readme_path),
         "n_fold_map_rows": int(len(fold_map_df)),
         "n_fold_summary_rows": int(len(fold_summary_df)),
     }
@@ -939,10 +997,11 @@ def run_blocked_cv_phase3c_smoke(
     )
     fold_map_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_map.csv")
     fold_summary_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_summary.csv")
-    if not fold_map_path.exists():
+    if config.write_debug_csvs and (not fold_map_path.exists()):
         fold_map_df.to_csv(fold_map_path, index=False)
     if not fold_summary_path.exists():
         fold_summary_df.to_csv(fold_summary_path, index=False)
+    readme_path = _write_blocked_cv_readme(output_dir, config=config)
 
     kernel_specs_raw = list(config.kernel_specs) if config.kernel_specs is not None else _default_kernel_specs()
     if not kernel_specs_raw:
@@ -1438,7 +1497,8 @@ def run_blocked_cv_phase3c_smoke(
         fold_status_df = fold_status_df.reindex(columns=fold_status_cols + extra_cols)
     pred_path = csv_subdirs["predictions"].joinpath("blocked_cv_point_predictions_all.csv")
     status_path = csv_subdirs["diagnostics"].joinpath("blocked_cv_fold_fit_status_all.csv")
-    pred_df.to_csv(pred_path, index=False)
+    if config.write_debug_csvs:
+        pred_df.to_csv(pred_path, index=False)
     fold_status_df.to_csv(status_path, index=False)
 
     compare_path = None
@@ -1448,7 +1508,8 @@ def run_blocked_cv_phase3c_smoke(
     if config.compare_variance_modes:
         compare_df = pd.DataFrame(pred_compare_rows)
         compare_path = csv_subdirs["predictions"].joinpath("blocked_cv_point_predictions_variance_compare_all.csv")
-        compare_df.to_csv(compare_path, index=False)
+        if config.write_debug_csvs:
+            compare_df.to_csv(compare_path, index=False)
 
         summary_rows = []
         if not compare_df.empty and "variance_mode" in compare_df.columns:
@@ -1559,7 +1620,7 @@ def run_blocked_cv_phase3c_smoke(
 
     # Optional per-kernel slices (subsets of centralized *_all outputs).
     kernel_labels_run = sorted(pd.unique(pred_df["kernel_label"])) if not pred_df.empty else []
-    if config.write_per_kernel_predictions_csvs and not pred_df.empty:
+    if config.write_debug_csvs and config.write_per_kernel_predictions_csvs and not pred_df.empty:
         for k_label in kernel_labels_run:
             pred_df.loc[pred_df["kernel_label"] == k_label].to_csv(
                 csv_subdirs["predictions"].joinpath(f"blocked_cv_point_predictions_{k_label}.csv"),
@@ -1571,7 +1632,7 @@ def run_blocked_cv_phase3c_smoke(
                 csv_subdirs["diagnostics"].joinpath(f"blocked_cv_fold_fit_status_{k_label}.csv"),
                 index=False,
             )
-    if config.compare_variance_modes and config.write_per_kernel_variance_compare_csvs and not compare_df.empty:
+    if config.write_debug_csvs and config.compare_variance_modes and config.write_per_kernel_variance_compare_csvs and not compare_df.empty:
         for k_label in sorted(pd.unique(compare_df["kernel_label"])):
             compare_df.loc[compare_df["kernel_label"] == k_label].to_csv(
                 csv_subdirs["predictions"].joinpath(f"blocked_cv_point_predictions_variance_compare_{k_label}.csv"),
@@ -1599,12 +1660,14 @@ def run_blocked_cv_phase3c_smoke(
         "n_kernels_run": int(len(kernel_labels_run)),
         "primary_predictive_variance_mode": primary_mode,
         "variance_modes_scored": scored_modes,
-        "point_predictions_csv": str(pred_path),
+        "write_debug_csvs": bool(config.write_debug_csvs),
+        "readme_path": str(readme_path),
+        "point_predictions_csv": str(pred_path) if config.write_debug_csvs else None,
         "fold_fit_status_csv": str(status_path),
         "fold_metrics_csv": str(fold_metrics_path),
         "biopsy_metrics_csv": str(biopsy_metrics_path),
         "cohort_summary_csv": str(cohort_summary_path),
-        "point_predictions_compare_csv": str(compare_path) if compare_path is not None else None,
+        "point_predictions_compare_csv": (str(compare_path) if (compare_path is not None and config.write_debug_csvs) else None),
         "fold_metrics_compare_csv": str(compare_fold_metrics_path) if compare_fold_metrics_path is not None else None,
         "biopsy_metrics_compare_csv": str(compare_biopsy_metrics_path) if compare_biopsy_metrics_path is not None else None,
         "cohort_summary_compare_csv": str(compare_cohort_summary_path) if compare_cohort_summary_path is not None else None,
