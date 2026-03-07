@@ -1928,6 +1928,8 @@ def plot_variogram_and_profile_pair(
     metrics_row: pd.Series | None = None,
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
+    title_fontsize: float | None = None,
+    create_subdir_for_stem: bool = True,
 ):
     """
     Two-panel figure: semivariogram overlay (left) + GP profile (right),
@@ -2051,15 +2053,24 @@ def plot_variogram_and_profile_pair(
 
     # Per-axes titles (top-left, just above each subplot)
     title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
+    title_fs = _fs_title() if title_fontsize is None else title_fontsize
     for ax in axes:
-        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=_fs_title())
+        ax.text(0.0, 1.02, title_txt, transform=ax.transAxes, ha="left", va="bottom", fontsize=title_fs)
     # Ensure no figure-level suptitle remains
     fig = ax.figure
     if hasattr(fig, "_suptitle") and fig._suptitle:
         fig._suptitle.remove()
         fig._suptitle = None
 
-    return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, show=show, tight_layout=False)
+    return _save_figure(
+        fig,
+        Path(save_dir) / file_name_base,
+        formats=save_formats,
+        dpi=dpi,
+        show=show,
+        tight_layout=False,
+        create_subdir_for_stem=create_subdir_for_stem,
+    )
 
 
 # ----------------------------------------------------------------------

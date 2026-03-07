@@ -42,7 +42,7 @@ def main():
     run_cohort_plots = False  # if True, write cohort-level production figures
     run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
     run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
-    run_blocked_cv_plots = False  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
+    run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
 
     # --- Cohort filtering / plot cohort selection ---
     simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets
@@ -137,6 +137,10 @@ def main():
         ("rbf", None, "rbf"),
         ("exp", None, "exp"),
     ]  # kernel list for blocked_CV run loop
+    # None -> run all blocked_cv_kernel_specs; or explicit subset list of labels (3rd tuple entry in blocked_cv_kernel_specs).
+    # Valid labels with current defaults: ["matern_nu_1_5", "matern_nu_2_5", "rbf", "exp"].
+    # Example: blocked_cv_kernel_labels_to_run = ["rbf"] or ["matern_nu_1_5", "rbf"].
+    blocked_cv_kernel_labels_to_run = None
 
     # blocked_CV output toggles
     write_blocked_cv_eligible_views = True  # if True, also write *_eligible CSV views and eligibility exclusions table
@@ -168,7 +172,9 @@ def main():
     blocked_cv_plot_fold_sort_mode = "fold_id"  # options: "fold_id", "z_start_mm"; deterministic fold display order
     blocked_cv_plot_include_merged_tail_folds = True  # if False, exclude merged-tail folds from blocked_CV figure generation
     blocked_cv_plot_include_rebalanced_two_fold_splits = True  # if False, exclude rebalanced-two-fold cases from blocked_CV figure generation
-    blocked_cv_plot_kernel_labels = None  # None -> all kernels from blocked_CV run; or explicit subset list
+    # None -> all kernels included in this blocked_CV run; or explicit label subset.
+    # Labels must match kernel labels used by blocked_cv_kernel_specs (e.g., "matern_nu_1_5", "matern_nu_2_5", "rbf", "exp").
+    blocked_cv_plot_kernel_labels = None
     blocked_cv_plot_variance_mode = "primary"  # options: "primary", "latent", "observed_mc", "observed_mc_plus_nugget"
     blocked_cv_plot_make_paired_semivariogram_profile = True  # if True, produce blocked_CV paired semivariogram/profile figures
     blocked_cv_plot_make_semivariogram_grids = True  # if True, produce blocked_CV semivariogram-only grids
@@ -665,6 +671,15 @@ def main():
         blocked_cv_root, blocked_cv_figs_dir, blocked_cv_csv_dir = GPR_blocked_cv.init_blocked_cv_dirs(
             output_dir, subdir_name=blocked_cv_output_subdir
         )
+        blocked_cv_kernel_specs_use = list(blocked_cv_kernel_specs)
+        if blocked_cv_kernel_labels_to_run is not None:
+            allowed_kernel_labels = {str(k) for k in blocked_cv_kernel_labels_to_run}
+            blocked_cv_kernel_specs_use = [spec for spec in blocked_cv_kernel_specs_use if str(spec[2]) in allowed_kernel_labels]
+            if not blocked_cv_kernel_specs_use:
+                raise ValueError(
+                    "blocked_cv_kernel_labels_to_run filtered out all kernel specs. "
+                    "Provide labels that exist in blocked_cv_kernel_specs."
+                )
         blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
             block_mode=blocked_cv_block_mode,
             n_folds=blocked_cv_n_folds,
@@ -681,7 +696,7 @@ def main():
             primary_predictive_variance_mode=blocked_cv_primary_predictive_variance_mode,
             compare_variance_modes=blocked_cv_compare_variance_modes,
             variance_modes_to_compare=blocked_cv_variance_modes_to_compare,
-            kernel_specs=blocked_cv_kernel_specs,
+            kernel_specs=blocked_cv_kernel_specs_use,
             semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
             semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
             write_debug_csvs=write_blocked_cv_debug_csvs,

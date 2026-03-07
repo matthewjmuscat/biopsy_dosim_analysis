@@ -2143,6 +2143,8 @@ def _plot_blocked_cv_variogram_profile_pair(
         metrics_row=pd.Series({"ell": ell, "nugget": nugget}),
         include_kernel_legend=True,
         kernel_legend_label=kernel_label,
+        title_fontsize=max(float(getattr(gpr_pp, "TITLE_FONTSIZE", 14)) - 2.0, 1.0),
+        create_subdir_for_stem=False,
     )
     return [Path(p) for p in out_paths]
 
@@ -2244,7 +2246,7 @@ def run_blocked_cv_plots(
             bx_tok = _sanitize_token(bx_index)
             file_name_base = (
                 f"blocked_cv_variogram_profile_pair_patient_{patient_tok}"
-                f"_bx_{bx_tok}_fold_{fold_tok}_kernel_{kernel_tok}"
+                f"_bx_{bx_tok}_fold_{fold_tok}"
             )
             biopsy_label = _blocked_cv_biopsy_label(
                 patient_id=patient_id,
@@ -2259,6 +2261,7 @@ def run_blocked_cv_plots(
                 .joinpath(f"patient_{patient_tok}")
                 .joinpath(f"bx_{bx_tok}")
                 .joinpath("paired_semivariogram_profile")
+                .joinpath(f"kernel_{kernel_tok}")
             )
             try:
                 out_paths = _plot_blocked_cv_variogram_profile_pair(
