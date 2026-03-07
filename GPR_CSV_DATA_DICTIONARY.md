@@ -61,7 +61,38 @@ If sensitivity is disabled, baseline calibration-only path writes:
 
 - `kernel_sensitivity/csv/calibration_metrics_<BASE_KERNEL_LABEL>.csv`
 
-## 1.3 Redundancy relationship
+## 1.3 blocked_CV output directory
+
+Base directory: `output_data_GPR_analysis/blocked_CV/csv/`
+
+Phase 3B currently produces:
+
+- `blocked_cv_fold_map.csv`
+- `blocked_cv_fold_summary.csv`
+
+Phase 3D all-kernel fit/predict path produces:
+
+- `blocked_cv_point_predictions_all.csv`
+- `blocked_cv_fold_fit_status_all.csv`
+- `blocked_cv_point_predictions_variance_compare_all.csv` (when variance-mode comparison is enabled)
+- `blocked_cv_variance_mode_summary_all.csv` (when variance-mode comparison is enabled)
+
+Optional per-kernel slices (gated by blocked_CV booleans in main):
+
+- `blocked_cv_point_predictions_<kernel>.csv`
+- `blocked_cv_fold_fit_status_<kernel>.csv`
+- `blocked_cv_point_predictions_variance_compare_<kernel>.csv`
+- `blocked_cv_variance_mode_summary_<kernel>.csv`
+
+Notes:
+
+- These files are generated only when `run_blocked_cv=True`.
+- At Phase 3B, these are split-definition artifacts only (no CV model fitting).
+- Phase 3D adds strict train-only fold fit/predict outputs for all configured kernels.
+- Optional per-kernel CSV slices can be enabled from main; they are subsets of
+  the centralized `_all` files.
+
+## 1.4 Redundancy relationship
 
 For sensitivity outputs, every per-kernel CSV is a subset of its `_all`
 counterpart filtered by `kernel_label`.
@@ -462,7 +493,154 @@ These controls are defined near the top of `main_pipe_GPR_analysis.py`:
 
 ---
 
-## 11) Notes on aliases and equivalences
+## 11) blocked_CV fold map schemas (Phase 3B)
+
+Files (under `blocked_CV/csv/`):
+
+- `blocked_cv_fold_map.csv`
+- `blocked_cv_fold_summary.csv`
+- `blocked_cv_point_predictions_all.csv` (Phase 3D)
+- `blocked_cv_fold_fit_status_all.csv` (Phase 3D)
+- `blocked_cv_point_predictions_variance_compare_all.csv` (Phase 3D; optional)
+- `blocked_cv_variance_mode_summary_all.csv` (Phase 3D; optional)
+
+## 11.1 `blocked_cv_fold_map.csv` columns
+
+One row per `(Patient ID, Bx index, fold_id, voxel)`:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `Voxel index`
+- `x_mm`
+- `is_test` (True if voxel is in held-out block for this fold)
+- `n_train`
+- `n_test`
+- `effective_n_folds`
+- `merged_tail_fold` (True when tiny tail fold merge was applied for this biopsy)
+- `test_z_min_mm`
+- `test_z_max_mm`
+- `block_mode` (`equal_voxels` or `fixed_mm`)
+- `position_mode` (`begin` or `center`)
+
+## 11.2 `blocked_cv_fold_summary.csv` columns
+
+One row per `(Patient ID, Bx index, fold_id)`:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `block_mode`
+- `position_mode`
+- `n_voxels`
+- `n_train`
+- `n_test`
+- `effective_n_folds`
+- `merged_tail_fold`
+- `test_z_min_mm`
+- `test_z_max_mm`
+- `contiguous_test_block`
+
+## 11.3 `blocked_cv_point_predictions_all.csv` columns
+
+One row per held-out voxel prediction from strict train-only fold fit:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
+- `Voxel index`
+- `x_mm`
+- `y_test` (held-out MC voxel target)
+- `mu_test` (GP predictive mean at held-out voxel)
+- `sd_test_latent` (latent GP predictive SD)
+- `var_obs_test` (held-out MC observation variance)
+- `var_pred_used` (variance used for standardization/NLPD mode)
+- `sd_pred_used`
+- `residual` (`y_test - mu_test`)
+- `rstd` (`residual / sd_pred_used`)
+- `abs_res_over_sd_latent` (`|residual| / sd_test_latent`)
+- `abs_res_over_sd_used` (`|residual| / sd_pred_used`)
+- `gp_mean_mode`
+- `target_stat`
+- `predictive_variance_mode` (primary mode selected in main)
+- `variance_modes_scored` (pipe-separated list of modes scored in this run)
+- `n_train_voxels`
+- `n_test_voxels`
+- `ell`
+- `sigma_f2`
+- `nugget`
+- `nu`
+
+## 11.4 `blocked_cv_fold_fit_status_all.csv` columns
+
+One row per `(Patient ID, Bx index, fold_id)` attempt:
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
+- `primary_predictive_variance_mode`
+- `variance_modes_scored`
+- `status` (`ok`, `skipped`, or `error`)
+- `message`
+- `n_train_voxels` (when status is `ok`)
+- `n_test_voxels` (when status is `ok`)
+
+## 11.5 `blocked_cv_point_predictions_variance_compare_all.csv` columns
+
+One row per held-out voxel *per variance mode* (same folds/predictions):
+
+- `Patient ID`
+- `Bx index`
+- `fold_id`
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
+- `Voxel index`
+- `x_mm`
+- `y_test`
+- `mu_test`
+- `sd_test_latent`
+- `var_obs_test`
+- `variance_mode` (`latent`, `observed_mc`, `observed_mc_plus_nugget`)
+- `var_pred_used`
+- `sd_pred_used`
+- `residual`
+- `rstd`
+- `abs_res_over_sd_latent`
+- `abs_res_over_sd_used`
+- `gp_mean_mode`
+- `target_stat`
+- `n_train_voxels`
+- `n_test_voxels`
+- `ell`
+- `sigma_f2`
+- `nugget`
+- `nu`
+
+## 11.6 `blocked_cv_variance_mode_summary_all.csv` columns
+
+One row per `variance_mode` aggregated over all held-out points:
+
+- `kernel_label`
+- `kernel_name`
+- `kernel_param`
+- `variance_mode`
+- `n_points`
+- `mean_rstd`
+- `sd_rstd`
+- `pct_abs_le1`
+- `pct_abs_le2`
+- `median_abs_res_over_sd_used`
+
+---
+
+## 12) Notes on aliases and equivalences
 
 These columns intentionally duplicate the same values for compatibility:
 
