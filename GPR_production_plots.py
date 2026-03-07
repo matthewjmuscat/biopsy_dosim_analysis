@@ -839,6 +839,7 @@ def plot_variogram_from_df(
         ax.tick_params(axis="both", which="minor", length=2, width=0.6)
         ax.minorticks_on()
         _apply_per_biopsy_ticks(ax)
+        _enforce_integer_major_xticks(ax)
 
         if xlim:
             ax.set_xlim(xlim)
@@ -928,6 +929,11 @@ def _apply_per_biopsy_ticks(ax):
     ax.tick_params(axis="both", which="major", length=5, width=0.9, bottom=True, left=True)
     ax.tick_params(axis="both", which="minor", length=3, width=0.6, bottom=True, left=True)
     ax.tick_params(axis="both", which="both", direction="out", top=False, right=False)
+
+
+def _enforce_integer_major_xticks(ax):
+    """Force integer-valued major x ticks (used for semivariogram lag axes)."""
+    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
 
 
 def _grid_shape(n_items: int, n_cols: int) -> tuple[int, int]:
@@ -1894,6 +1900,7 @@ def plot_variogram_overlay_production(
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
+    _enforce_integer_major_xticks(ax)
     if metrics_str is None:
         metrics_str = (
             rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}},\ "
@@ -1928,6 +1935,8 @@ def plot_variogram_and_profile_pair(
     metrics_row: pd.Series | None = None,
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
+    annotate_semivariogram_n_pairs: bool = False,
+    semivariogram_n_pairs_fontsize: float | None = None,
     title_fontsize: float | None = None,
     create_subdir_for_stem: bool = True,
 ):
@@ -1963,6 +1972,23 @@ def plot_variogram_and_profile_pair(
 
     ax.plot(h, gamma_hat, "o", ms=4, color=PRIMARY_LINE_COLOR, label=r"Empirical $\widehat{\gamma}_b(h)$")
     ax.plot(h, gamma_model, "-", lw=2.0, color=OVERLAY_LINE_COLOR, label=label_model)
+    if annotate_semivariogram_n_pairs and ("n_pairs" in sv.columns):
+        n_pairs = pd.to_numeric(sv["n_pairs"], errors="coerce").to_numpy(float)
+        fs_np = max((_fs_tick() - 2.0), 1.0) if semivariogram_n_pairs_fontsize is None else float(semivariogram_n_pairs_fontsize)
+        for hh, gg, nn in zip(h, gamma_hat, n_pairs):
+            if np.isfinite(hh) and np.isfinite(gg) and np.isfinite(nn) and nn > 0:
+                ax.annotate(
+                    f"n={int(nn)}",
+                    xy=(hh, gg),
+                    xytext=(0, -7),
+                    textcoords="offset points",
+                    ha="center",
+                    va="top",
+                    fontsize=fs_np,
+                    color="#6f6f6f",
+                    alpha=0.55,
+                    clip_on=True,
+                )
     if add_sill:
         ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
     if add_nugget:
@@ -1971,6 +1997,7 @@ def plot_variogram_and_profile_pair(
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
+    _enforce_integer_major_xticks(ax)
     ell_val = hyperparams.ell
     nug_val = hyperparams.nugget
     if metrics_row is not None:
@@ -2245,6 +2272,7 @@ def plot_variogram_overlays_grid(
         ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
         _apply_axis_style(ax)
         _apply_per_biopsy_ticks(ax)
+        _enforce_integer_major_xticks(ax)
         title_txt = label_map.get((pid, bx)) if label_map else None
         if not title_txt:
             title_txt = f"P{pid} Bx{bx}"

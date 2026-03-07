@@ -184,6 +184,8 @@ def main():
         "paired_semivariogram_profile": False,
         "profile_grids": True,
         "semivariogram_grids": True,
+        "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
+        "semivariogram_n_pairs_fontsize": 5.0,  # fontsize for semivariogram n-pairs annotations
         "residuals": False,
         "calibration": False,
         "kernel_comparison": False,
@@ -727,6 +729,8 @@ def main():
             plot_make_paired_semivariogram_profile=bool(blocked_cv_plot_options.get("paired_semivariogram_profile", False)),
             plot_make_semivariogram_grids=bool(blocked_cv_plot_options.get("semivariogram_grids", False)),
             plot_make_profile_grids=bool(blocked_cv_plot_options.get("profile_grids", False)),
+            plot_semivariogram_show_n_pairs=bool(blocked_cv_plot_options.get("semivariogram_show_n_pairs", False)),
+            plot_semivariogram_n_pairs_fontsize=float(blocked_cv_plot_options.get("semivariogram_n_pairs_fontsize", 5.0)),
             plot_write_report_figures=bool(blocked_cv_plot_options.get("write_report_figures", True)),
             plot_write_diagnostic_figures=bool(blocked_cv_plot_options.get("write_diagnostic_figures", False)),
         )

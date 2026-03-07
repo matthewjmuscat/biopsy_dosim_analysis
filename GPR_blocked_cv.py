@@ -58,6 +58,8 @@ class BlockedCVConfig:
     plot_make_paired_semivariogram_profile: bool = True
     plot_make_semivariogram_grids: bool = True
     plot_make_profile_grids: bool = True
+    plot_semivariogram_show_n_pairs: bool = False
+    plot_semivariogram_n_pairs_fontsize: float = 5.0
     plot_write_report_figures: bool = True
     plot_write_diagnostic_figures: bool = False
 
@@ -2201,6 +2203,8 @@ def _plot_blocked_cv_variogram_profile_pair(
         metrics_row=pd.Series({"ell": ell, "nugget": nugget}),
         include_kernel_legend=True,
         kernel_legend_label=kernel_label,
+        annotate_semivariogram_n_pairs=bool(config.plot_semivariogram_show_n_pairs),
+        semivariogram_n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
         title_fontsize=max(float(getattr(gpr_pp, "TITLE_FONTSIZE", 14)) - 2.0, 1.0),
         create_subdir_for_stem=False,
     )
@@ -2217,6 +2221,31 @@ def _selection_token(values, *, none_token: str = "all") -> str:
     if len(vals) <= 4:
         return _sanitize_token("-".join(vals))
     return _sanitize_token(f"n{len(vals)}")
+
+
+def _annotate_semivariogram_n_pairs(
+    ax,
+    *,
+    h: np.ndarray,
+    gamma_hat: np.ndarray,
+    n_pairs: np.ndarray,
+    fontsize: float,
+) -> None:
+    """Add faint per-lag pair-count labels under semivariogram points."""
+    for hh, gg, nn in zip(h, gamma_hat, n_pairs):
+        if np.isfinite(hh) and np.isfinite(gg) and np.isfinite(nn) and nn > 0:
+            ax.annotate(
+                f"n={int(nn)}",
+                xy=(hh, gg),
+                xytext=(0, -7),
+                textcoords="offset points",
+                ha="center",
+                va="top",
+                fontsize=float(fontsize),
+                color="#6f6f6f",
+                alpha=0.55,
+                clip_on=True,
+            )
 
 
 def _draw_blocked_cv_profile_axis(
@@ -2285,6 +2314,65 @@ def _draw_blocked_cv_profile_axis(
     return ax.get_legend_handles_labels()
 
 
+def _draw_blocked_cv_semivariogram_axis(
+    ax,
+    *,
+    payload: dict,
+    title_label: str,
+    show_n_pairs: bool = False,
+    n_pairs_fontsize: float = 5.0,
+) -> tuple[list, list]:
+    """Draw one blocked_CV semivariogram panel on an existing axis."""
+    sv = payload["sv_train"].sort_values("h_mm")
+    h = sv["h_mm"].to_numpy(float)
+    gamma_hat = sv["semivariance"].to_numpy(float)
+    hyperparams = payload["gp_res"]["hyperparams"]
+    kernel = getattr(hyperparams, "kernel", "matern")
+    if kernel == "rbf":
+        gamma_model = gpr_pf.rbf_semivariogram(h, hyperparams.sigma_f2, hyperparams.ell, 0.0) + hyperparams.nugget
+        label_model = r"Fitted $\gamma_b(h)$ (RBF)"
+    elif kernel == "exp":
+        gamma_model = gpr_pf.exp_semivariogram(h, hyperparams.sigma_f2, hyperparams.ell, 0.0) + hyperparams.nugget
+        label_model = r"Fitted $\gamma_b(h)$ (Exp)"
+    else:
+        gamma_model = gpr_pf.matern_semivariogram(h, hyperparams.sigma_f2, hyperparams.ell, 0.0, hyperparams.nu) + hyperparams.nugget
+        label_model = rf"Fitted $\gamma_b(h)$ (Matérn, $\nu={hyperparams.nu}$)"
+
+    ax.plot(h, gamma_hat, "o", ms=4, color=gpr_pp.PRIMARY_LINE_COLOR, label=r"Empirical $\widehat{\gamma}_b(h)$")
+    ax.plot(h, gamma_model, "-", lw=2.0, color=gpr_pp.OVERLAY_LINE_COLOR, label=label_model)
+    if show_n_pairs and ("n_pairs" in sv.columns):
+        n_pairs = pd.to_numeric(sv["n_pairs"], errors="coerce").to_numpy(float)
+        _annotate_semivariogram_n_pairs(
+            ax,
+            h=h,
+            gamma_hat=gamma_hat,
+            n_pairs=n_pairs,
+            fontsize=float(n_pairs_fontsize),
+        )
+    ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=gpr_pp._fs_label())
+    ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=gpr_pp._fs_label())
+    gpr_pp._apply_axis_style(ax)
+    gpr_pp._apply_per_biopsy_ticks(ax)
+    gpr_pp._enforce_integer_major_xticks(ax)
+    metrics_str = (
+        rf"$\hat{{\ell}}_b = {payload['ell']:.1f}~\mathrm{{mm}},\ "
+        rf"\hat{{\tau}}_b^2 = {gpr_pp._format_nugget(payload['nugget'])}\ \mathrm{{Gy}}^2$"
+    )
+    ax.text(
+        0.98,
+        1.04,
+        metrics_str,
+        ha="right",
+        va="bottom",
+        transform=ax.transAxes,
+        fontsize=gpr_pp._fs_legend(),
+        bbox=gpr_pp.ANNOT_BBOX,
+    )
+    title_fs = max(float(getattr(gpr_pp, "TITLE_FONTSIZE", 14)) - 2.0, 1.0)
+    ax.set_title(title_label, fontsize=title_fs, loc="left")
+    return ax.get_legend_handles_labels()
+
+
 def run_blocked_cv_plots(
     *,
     fit_predict_artifacts: dict,
@@ -2310,6 +2398,8 @@ def run_blocked_cv_plots(
     paired_errors = []
     profile_grid_saved = []
     profile_grid_errors = []
+    semivariogram_grid_saved = []
+    semivariogram_grid_errors = []
     n_candidates = 0
     n_selected = 0
     plot_keys_df = pd.DataFrame()
@@ -2664,9 +2754,241 @@ def run_blocked_cv_plots(
                         f"grid_by_fold fold={fold_id}, kernel={kernel_label}: {e}"
                     )
 
+    if config.plot_make_semivariogram_grids and config.plot_write_report_figures and not plot_keys_df.empty:
+        gpr_pp._setup_matplotlib_defaults()
+        kernels = sorted(pd.unique(plot_keys_df["kernel_label"]))
+        if config.plot_patient_bx_list is None:
+            bx_order = [
+                (r["Patient ID"], int(r["Bx index"]))
+                for _, r in plot_keys_df[["Patient ID", "Bx index"]].drop_duplicates().sort_values(["Patient ID", "Bx index"]).iterrows()
+            ]
+        else:
+            available = {
+                (r["Patient ID"], int(r["Bx index"]))
+                for _, r in plot_keys_df[["Patient ID", "Bx index"]].drop_duplicates().iterrows()
+            }
+            bx_order = []
+            for pid, bx in config.plot_patient_bx_list:
+                key = (pid, int(bx))
+                if key in available:
+                    bx_order.append(key)
+            if not bx_order:
+                bx_order = [
+                    (r["Patient ID"], int(r["Bx index"]))
+                    for _, r in plot_keys_df[["Patient ID", "Bx index"]].drop_duplicates().sort_values(["Patient ID", "Bx index"]).iterrows()
+                ]
+
+        # Mode A: one biopsy across folds
+        for kernel_label in kernels:
+            kernel_tok = _sanitize_token(kernel_label)
+            for patient_id, bx_index in bx_order:
+                panel_df = plot_keys_df[
+                    (plot_keys_df["Patient ID"] == patient_id)
+                    & (plot_keys_df["Bx index"] == bx_index)
+                    & (plot_keys_df["kernel_label"] == kernel_label)
+                ].copy()
+                if panel_df.empty:
+                    continue
+                if config.plot_fold_sort_mode == "z_start_mm" and "test_z_min_mm" in panel_df.columns:
+                    panel_df = panel_df.sort_values(["test_z_min_mm", "fold_id"])
+                else:
+                    panel_df = panel_df.sort_values(["fold_id"])
+
+                n_rows, n_cols = gpr_pp._grid_shape(len(panel_df), int(config.plot_grid_ncols))
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(gpr_pp.GRID_PER_BIOPSY_FIGSIZE[0] * n_cols, gpr_pp.GRID_PER_BIOPSY_FIGSIZE[1] * n_rows))
+                axes = np.atleast_1d(axes).ravel()
+                shared_handles, shared_labels = None, None
+                for ax, (_, prow) in zip(axes, panel_df.iterrows()):
+                    fold_id = int(prow["fold_id"])
+                    kernel_name = str(prow["kernel_name"])
+                    kernel_param = prow["kernel_param"]
+                    pred_group_df = pred_df[
+                        (pred_df["Patient ID"] == patient_id)
+                        & (pred_df["Bx index"] == bx_index)
+                        & (pred_df["fold_id"] == fold_id)
+                        & (pred_df["kernel_label"] == kernel_label)
+                    ].copy()
+                    payload = _build_blocked_cv_fold_plot_payload(
+                        all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+                        fold_map_df=fold_map_df,
+                        pred_group_df=pred_group_df,
+                        patient_id=patient_id,
+                        bx_index=bx_index,
+                        fold_id=fold_id,
+                        kernel_name=kernel_name,
+                        kernel_param=kernel_param,
+                        config=config,
+                    )
+                    if payload is None:
+                        ax.text(0.5, 0.5, f"Missing fold {fold_id}", ha="center", va="center")
+                        ax.axis("off")
+                        continue
+                    biopsy_label = _blocked_cv_biopsy_label(patient_id, bx_index, config.plot_grid_label_map)
+                    title_label = f"{biopsy_label} | Fold {fold_id}"
+                    h, l = _draw_blocked_cv_semivariogram_axis(
+                        ax,
+                        payload=payload,
+                        title_label=title_label,
+                        show_n_pairs=bool(config.plot_semivariogram_show_n_pairs),
+                        n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
+                    )
+                    if shared_handles is None and h:
+                        shared_handles, shared_labels = h, l
+                for ax in axes[len(panel_df):]:
+                    ax.axis("off")
+                if shared_handles:
+                    fig.legend(
+                        shared_handles,
+                        shared_labels,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 1.07),
+                        ncol=min(len(shared_handles), 6),
+                        frameon=False,
+                        fancybox=False,
+                        fontsize=gpr_pp._fs_legend(),
+                    )
+                fig.tight_layout(rect=[0, 0, 1, 0.86])
+                patient_tok = _sanitize_token(patient_id)
+                bx_tok = _sanitize_token(bx_index)
+                fold_sel_token = _selection_token(config.plot_fold_ids, none_token="allfolds")
+                save_dir = (
+                    figs_dir
+                    .joinpath("report")
+                    .joinpath("cohort")
+                    .joinpath("grid_semivariograms")
+                    .joinpath("by_biopsy_across_folds")
+                    .joinpath(f"kernel_{kernel_tok}")
+                )
+                file_name_base = (
+                    f"blocked_cv_semivariogram_grid_by_biopsy_patient_{patient_tok}"
+                    f"_bx_{bx_tok}_kernel_{kernel_tok}_foldsel_{fold_sel_token}"
+                )
+                try:
+                    out_paths = gpr_pp._save_figure(
+                        fig,
+                        save_dir.joinpath(file_name_base),
+                        formats=("pdf", "svg"),
+                        dpi=400,
+                        show=False,
+                        create_subdir_for_stem=False,
+                    )
+                    semivariogram_grid_saved.extend([str(p) for p in out_paths])
+                except Exception as e:
+                    plt.close(fig)
+                    semivariogram_grid_errors.append(
+                        f"semivar_grid_by_biopsy patient={patient_id}, bx={bx_index}, kernel={kernel_label}: {e}"
+                    )
+
+        # Mode B: one fold across biopsies
+        if config.plot_fold_ids is not None:
+            fold_values = [int(f) for f in config.plot_fold_ids]
+        else:
+            fold_values = sorted(int(v) for v in pd.unique(plot_keys_df["fold_id"]))
+        bx_order_map = {bx_key: i for i, bx_key in enumerate(bx_order)}
+        for kernel_label in kernels:
+            kernel_tok = _sanitize_token(kernel_label)
+            for fold_id in fold_values:
+                panel_df = plot_keys_df[
+                    (plot_keys_df["fold_id"].astype(int) == int(fold_id))
+                    & (plot_keys_df["kernel_label"] == kernel_label)
+                ].copy()
+                if panel_df.empty:
+                    continue
+                panel_df["__ord"] = panel_df.apply(
+                    lambda r: bx_order_map.get((r["Patient ID"], int(r["Bx index"])), 10**9),
+                    axis=1,
+                )
+                panel_df = panel_df.sort_values(["__ord", "Patient ID", "Bx index"]).drop(columns=["__ord"])
+                if panel_df.empty:
+                    continue
+                n_rows, n_cols = gpr_pp._grid_shape(len(panel_df), int(config.plot_grid_ncols))
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(gpr_pp.GRID_PER_BIOPSY_FIGSIZE[0] * n_cols, gpr_pp.GRID_PER_BIOPSY_FIGSIZE[1] * n_rows))
+                axes = np.atleast_1d(axes).ravel()
+                shared_handles, shared_labels = None, None
+                for ax, (_, prow) in zip(axes, panel_df.iterrows()):
+                    patient_id = prow["Patient ID"]
+                    bx_index = int(prow["Bx index"])
+                    kernel_name = str(prow["kernel_name"])
+                    kernel_param = prow["kernel_param"]
+                    pred_group_df = pred_df[
+                        (pred_df["Patient ID"] == patient_id)
+                        & (pred_df["Bx index"] == bx_index)
+                        & (pred_df["fold_id"] == int(fold_id))
+                        & (pred_df["kernel_label"] == kernel_label)
+                    ].copy()
+                    payload = _build_blocked_cv_fold_plot_payload(
+                        all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+                        fold_map_df=fold_map_df,
+                        pred_group_df=pred_group_df,
+                        patient_id=patient_id,
+                        bx_index=bx_index,
+                        fold_id=int(fold_id),
+                        kernel_name=kernel_name,
+                        kernel_param=kernel_param,
+                        config=config,
+                    )
+                    if payload is None:
+                        ax.text(0.5, 0.5, f"Missing {patient_id},{bx_index}", ha="center", va="center")
+                        ax.axis("off")
+                        continue
+                    biopsy_label = _blocked_cv_biopsy_label(patient_id, bx_index, config.plot_grid_label_map)
+                    title_label = f"{biopsy_label} | Fold {int(fold_id)}"
+                    h, l = _draw_blocked_cv_semivariogram_axis(
+                        ax,
+                        payload=payload,
+                        title_label=title_label,
+                        show_n_pairs=bool(config.plot_semivariogram_show_n_pairs),
+                        n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
+                    )
+                    if shared_handles is None and h:
+                        shared_handles, shared_labels = h, l
+                for ax in axes[len(panel_df):]:
+                    ax.axis("off")
+                if shared_handles:
+                    fig.legend(
+                        shared_handles,
+                        shared_labels,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 1.07),
+                        ncol=min(len(shared_handles), 6),
+                        frameon=False,
+                        fancybox=False,
+                        fontsize=gpr_pp._fs_legend(),
+                    )
+                fig.tight_layout(rect=[0, 0, 1, 0.86])
+                bx_sel_token = _selection_token(
+                    [f"{_sanitize_token(pid)}_{int(bx)}" for pid, bx in bx_order] if bx_order else None,
+                    none_token="allbx",
+                )
+                save_dir = (
+                    figs_dir
+                    .joinpath("report")
+                    .joinpath("cohort")
+                    .joinpath("grid_semivariograms")
+                    .joinpath("by_fold_across_biopsies")
+                    .joinpath(f"kernel_{kernel_tok}")
+                )
+                file_name_base = (
+                    f"blocked_cv_semivariogram_grid_by_fold_fold_{_sanitize_token(fold_id)}"
+                    f"_kernel_{kernel_tok}_bxsel_{bx_sel_token}"
+                )
+                try:
+                    out_paths = gpr_pp._save_figure(
+                        fig,
+                        save_dir.joinpath(file_name_base),
+                        formats=("pdf", "svg"),
+                        dpi=400,
+                        show=False,
+                        create_subdir_for_stem=False,
+                    )
+                    semivariogram_grid_saved.extend([str(p) for p in out_paths])
+                except Exception as e:
+                    plt.close(fig)
+                    semivariogram_grid_errors.append(
+                        f"semivar_grid_by_fold fold={fold_id}, kernel={kernel_label}: {e}"
+                    )
+
     unimplemented = []
-    if config.plot_make_semivariogram_grids:
-        unimplemented.append("semivariogram_grids")
     if config.plot_write_diagnostic_figures:
         unimplemented.append("diagnostic_figure_lane")
 
@@ -2686,6 +3008,10 @@ def run_blocked_cv_plots(
         "n_profile_grid_errors": int(len(profile_grid_errors)),
         "profile_grid_example_paths": profile_grid_saved[:4],
         "profile_grid_error_examples": profile_grid_errors[:4],
+        "n_semivariogram_grid_saved_files": int(len(semivariogram_grid_saved)),
+        "n_semivariogram_grid_errors": int(len(semivariogram_grid_errors)),
+        "semivariogram_grid_example_paths": semivariogram_grid_saved[:4],
+        "semivariogram_grid_error_examples": semivariogram_grid_errors[:4],
         "unimplemented_plot_families": unimplemented,
         "plot_patient_bx_list": (list(config.plot_patient_bx_list) if config.plot_patient_bx_list is not None else None),
         "plot_grid_ncols": int(config.plot_grid_ncols),
@@ -2700,6 +3026,8 @@ def run_blocked_cv_plots(
         "plot_make_paired_semivariogram_profile": bool(config.plot_make_paired_semivariogram_profile),
         "plot_make_semivariogram_grids": bool(config.plot_make_semivariogram_grids),
         "plot_make_profile_grids": bool(config.plot_make_profile_grids),
+        "plot_semivariogram_show_n_pairs": bool(config.plot_semivariogram_show_n_pairs),
+        "plot_semivariogram_n_pairs_fontsize": float(config.plot_semivariogram_n_pairs_fontsize),
         "plot_write_report_figures": bool(config.plot_write_report_figures),
         "plot_write_diagnostic_figures": bool(config.plot_write_diagnostic_figures),
     }

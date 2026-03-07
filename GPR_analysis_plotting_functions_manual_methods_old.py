@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import GPR_analysis_pipeline_functions
 
@@ -251,6 +252,7 @@ def plot_variogram_overlay(semivariogram_df, patient_id, bx_index, hyperparams,
     ax.plot(h, gamma_model, '-', lw=2, label=f"Implied Matérn γ(h), ν={nu_use}")
 
     ax.set_xlabel("Lag h (mm)"); ax.set_ylabel("Semivariance γ(h) (Gy²)")
+    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
     ax.set_title(f"Variogram overlay — Patient {patient_id}, Bx {bx_index}")
     ax.legend()
 
