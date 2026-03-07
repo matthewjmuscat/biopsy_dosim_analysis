@@ -69,7 +69,7 @@ def main():
     # blocked_CV options
     # Common blocked_CV knobs (apply regardless of split mode)
     run_blocked_cv = True  # master switch for blocked_CV pathway
-    run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict smoke path
+    run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict pathway (all kernels; centralized *_all CSVs)
     blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
     blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels" (split each biopsy into contiguous blocks with similar voxel counts; no tiny-tail merge applied because contiguous blocks differ by at most 1 voxel so no tiny tails exist), "fixed_mm" (split by physical z-length in mm); fixed_mm is preferred for spatially correlated models (consistent physical holdout difficulty)
     blocked_cv_target_stat = "median"  # options: "median", "mean" (voxel target summary statistic)
@@ -96,9 +96,10 @@ def main():
         ("rbf", None, "rbf"),
         ("exp", None, "exp"),
     ]  # kernel loop for blocked_CV runs
-    write_blocked_cv_per_kernel_point_csvs = False  # redundant when *_all exists
-    write_blocked_cv_per_kernel_metrics_csvs = False  # redundant when *_all exists
-    write_blocked_cv_per_kernel_summary_csvs = False  # redundant when *_all exists
+    write_blocked_cv_per_kernel_predictions_csvs = False  # optional: write per-kernel slices in addition to *_all predictions CSV
+    write_blocked_cv_per_kernel_fit_status_csvs = False  # optional: write per-kernel slices in addition to *_all fold-status CSV
+    write_blocked_cv_per_kernel_variance_compare_csvs = False  # optional: write per-kernel slices in addition to *_all variance-compare CSV
+    write_blocked_cv_per_kernel_variance_summary_csvs = False  # optional: write per-kernel slices in addition to *_all variance-summary CSV
 
     # plotting options
     include_kernel_legend_in_primary_histograms = True
@@ -631,9 +632,10 @@ def main():
             kernel_specs=blocked_cv_kernel_specs,
             semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
             semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
-            write_per_kernel_point_csvs=write_blocked_cv_per_kernel_point_csvs,
-            write_per_kernel_metrics_csvs=write_blocked_cv_per_kernel_metrics_csvs,
-            write_per_kernel_summary_csvs=write_blocked_cv_per_kernel_summary_csvs,
+            write_per_kernel_predictions_csvs=write_blocked_cv_per_kernel_predictions_csvs,
+            write_per_kernel_fit_status_csvs=write_blocked_cv_per_kernel_fit_status_csvs,
+            write_per_kernel_variance_compare_csvs=write_blocked_cv_per_kernel_variance_compare_csvs,
+            write_per_kernel_variance_summary_csvs=write_blocked_cv_per_kernel_variance_summary_csvs,
         )
         blocked_cv_status = GPR_blocked_cv.run_blocked_cv_phase3b(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
@@ -645,7 +647,7 @@ def main():
         )
         print(f"[blocked_CV] phase 3B status: {blocked_cv_status}")
         if run_blocked_cv_phase3c_smoke:
-            _print_section("BLOCKED_CV (Phase 3C: smoke fit/predict)")
+            _print_section("BLOCKED_CV (Phase 3D: all-kernel fit/predict)")
             blocked_cv_phase3c_status = GPR_blocked_cv.run_blocked_cv_phase3c_smoke(
                 all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                 semivariogram_df=semivariogram_df,

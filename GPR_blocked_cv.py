@@ -36,9 +36,10 @@ class BlockedCVConfig:
     kernel_specs: Iterable[Tuple[str, float | None, str]] | None = None
     semivariogram_voxel_size_mm: float = 1.0
     semivariogram_lag_bin_width_mm: float | None = None
-    write_per_kernel_point_csvs: bool = False
-    write_per_kernel_metrics_csvs: bool = False
-    write_per_kernel_summary_csvs: bool = False
+    write_per_kernel_predictions_csvs: bool = False
+    write_per_kernel_fit_status_csvs: bool = False
+    write_per_kernel_variance_compare_csvs: bool = False
+    write_per_kernel_variance_summary_csvs: bool = False
 
 
 def init_blocked_cv_dirs(output_dir: Path, subdir_name: str = "blocked_CV") -> tuple[Path, Path, Path]:
@@ -477,10 +478,10 @@ def run_blocked_cv_phase3c_smoke(
     config: BlockedCVConfig,
 ) -> dict:
     """
-    Phase 3C smoke path:
+    Phase 3C/3D blocked_CV path:
     - uses fold map from 3B logic,
-    - runs strict train-only fit/predict for a single kernel,
-    - writes point-level held-out prediction CSV + fold status CSV.
+    - runs strict train-only fit/predict for configured kernel specs,
+    - writes centralized *_all CSV outputs (plus optional per-kernel slices).
     """
     del semivariogram_df  # phase 3C uses per-fold train-only semivariograms
     fold_map_df, fold_summary_df = build_blocked_cv_fold_map(
@@ -494,10 +495,22 @@ def run_blocked_cv_phase3c_smoke(
     if not fold_summary_path.exists():
         fold_summary_df.to_csv(fold_summary_path, index=False)
 
-    kernel_specs = list(config.kernel_specs) if config.kernel_specs is not None else _default_kernel_specs()
-    if not kernel_specs:
+    kernel_specs_raw = list(config.kernel_specs) if config.kernel_specs is not None else _default_kernel_specs()
+    if not kernel_specs_raw:
         raise ValueError("blocked_CV Phase 3C needs at least one kernel spec.")
-    kernel_name, kernel_param, kernel_label = kernel_specs[0]
+    kernel_specs: list[tuple[str, float | None, str]] = []
+    for spec in kernel_specs_raw:
+        if len(spec) == 3:
+            k_name, k_param, k_label = spec
+        elif len(spec) == 2:
+            k_name, k_param = spec
+            k_label = f"{k_name}_{k_param}" if k_param is not None else str(k_name)
+        else:
+            raise ValueError(
+                "Each blocked_CV kernel spec must be (kernel_name, kernel_param, kernel_label) "
+                "or (kernel_name, kernel_param)."
+            )
+        kernel_specs.append((str(k_name), None if k_param is None else float(k_param), str(k_label)))
     primary_mode, scored_modes = _resolve_variance_modes(config)
 
     pred_rows = []
@@ -505,121 +518,17 @@ def run_blocked_cv_phase3c_smoke(
     fold_status_rows = []
 
     grp_cols = ["Patient ID", "Bx index", "fold_id"]
-    for (patient_id, bx_index, fold_id), fold_rows in fold_map_df.groupby(grp_cols):
-        g_bx = all_voxel_wise_dose_df[
-            (all_voxel_wise_dose_df["Patient ID"] == patient_id)
-            & (all_voxel_wise_dose_df["Bx index"] == bx_index)
-        ].copy()
-        test_voxels = set(
-            fold_rows.loc[fold_rows["is_test"], "Voxel index"].astype(int).tolist()
-        )
-        if not test_voxels:
-            fold_status_rows.append(
-                {
-                    "Patient ID": patient_id,
-                    "Bx index": bx_index,
-                    "fold_id": int(fold_id),
-                    "kernel_label": kernel_label,
-                    "primary_predictive_variance_mode": primary_mode,
-                    "variance_modes_scored": "|".join(scored_modes),
-                    "status": "skipped",
-                    "message": "no test voxels",
-                }
+    for kernel_name, kernel_param, kernel_label in kernel_specs:
+        for (patient_id, bx_index, fold_id), fold_rows in fold_map_df.groupby(grp_cols):
+            g_bx = all_voxel_wise_dose_df[
+                (all_voxel_wise_dose_df["Patient ID"] == patient_id)
+                & (all_voxel_wise_dose_df["Bx index"] == bx_index)
+            ].copy()
+            test_voxels = set(
+                fold_rows.loc[fold_rows["is_test"], "Voxel index"].astype(int).tolist()
             )
-            continue
-        train_df = g_bx[~g_bx["Voxel index"].isin(test_voxels)].copy()
-        test_df = g_bx[g_bx["Voxel index"].isin(test_voxels)].copy()
-
-        try:
-            X_train, y_train, var_n_train, _pv_train = gpr_pf.build_voxel_targets_and_noise(
-                train_df,
-                patient_id=patient_id,
-                bx_index=bx_index,
-                target_stat=config.target_stat,
-                position_mode=config.position_mode,
-            )
-            X_test, y_test, var_n_test, pv_test = gpr_pf.build_voxel_targets_and_noise(
-                test_df,
-                patient_id=patient_id,
-                bx_index=bx_index,
-                target_stat=config.target_stat,
-                position_mode=config.position_mode,
-            )
-            if len(X_train) < 3 or len(X_test) < 1:
+            if not test_voxels:
                 fold_status_rows.append(
-                    {
-                        "Patient ID": patient_id,
-                        "Bx index": bx_index,
-                        "fold_id": int(fold_id),
-                        "kernel_label": kernel_label,
-                        "primary_predictive_variance_mode": primary_mode,
-                        "variance_modes_scored": "|".join(scored_modes),
-                        "status": "skipped",
-                        "message": f"insufficient voxels (train={len(X_train)}, test={len(X_test)})",
-                    }
-                )
-                continue
-
-            sv_train = gpr_sv.compute_semivariogram_pairwise(
-                train_df,
-                voxel_size_mm=float(config.semivariogram_voxel_size_mm),
-                max_lag_voxels=None,
-                position_mode=config.position_mode,
-                lag_bin_width_mm=config.semivariogram_lag_bin_width_mm,
-            )
-            sv_train["Patient ID"] = patient_id
-            sv_train["Bx index"] = bx_index
-            sv_train = sv_train[np.isfinite(sv_train["semivariance"])].copy()
-            if len(sv_train) < 3:
-                fold_status_rows.append(
-                    {
-                        "Patient ID": patient_id,
-                        "Bx index": bx_index,
-                        "fold_id": int(fold_id),
-                        "kernel_label": kernel_label,
-                        "primary_predictive_variance_mode": primary_mode,
-                        "variance_modes_scored": "|".join(scored_modes),
-                        "status": "skipped",
-                        "message": f"insufficient semivariogram bins (n={len(sv_train)})",
-                    }
-                )
-                continue
-
-            hyp = _fit_hyperparams_from_train_sv(
-                sv_train,
-                patient_id=patient_id,
-                bx_index=bx_index,
-                kernel_name=kernel_name,
-                kernel_param=kernel_param,
-            )
-            mu_test, sd_test = gpr_pf.gp_posterior(
-                X_train,
-                y_train,
-                var_n_train,
-                hyp,
-                X_star=X_test,
-                mean_mode=config.mean_mode,
-            )
-            resid = y_test - mu_test
-            mode_arrays: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-            for mode in scored_modes:
-                pred_var_mode = _predictive_variance_for_mode(
-                    latent_sd=sd_test,
-                    obs_var=var_n_test,
-                    nugget=float(getattr(hyp, "nugget", 0.0)),
-                    mode=mode,
-                )
-                pred_sd_mode = np.sqrt(np.maximum(pred_var_mode, 1e-12))
-                rstd_mode = resid / pred_sd_mode
-                mode_arrays[mode] = (pred_var_mode, pred_sd_mode, rstd_mode)
-            pred_var_primary, pred_sd_primary, rstd_primary = mode_arrays[primary_mode]
-
-            pv_test = pv_test.sort_values("x_mm").reset_index(drop=True)
-            for i in range(len(X_test)):
-                abs_res = float(np.abs(resid[i]))
-                abs_res_over_sd_latent = abs_res / max(float(sd_test[i]), 1e-12)
-                abs_res_over_sd_used = abs_res / max(float(pred_sd_primary[i]), 1e-12)
-                pred_rows.append(
                     {
                         "Patient ID": patient_id,
                         "Bx index": bx_index,
@@ -627,98 +536,213 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_label": kernel_label,
                         "kernel_name": kernel_name,
                         "kernel_param": kernel_param,
-                        "Voxel index": int(pv_test.loc[i, "Voxel index"]),
-                        "x_mm": float(X_test[i]),
-                        "y_test": float(y_test[i]),
-                        "mu_test": float(mu_test[i]),
-                        "sd_test_latent": float(sd_test[i]),
-                        "var_obs_test": float(var_n_test[i]),
-                        "var_pred_used": float(pred_var_primary[i]),
-                        "sd_pred_used": float(pred_sd_primary[i]),
-                        "residual": float(resid[i]),
-                        "rstd": float(rstd_primary[i]),
-                        "abs_res_over_sd_latent": abs_res_over_sd_latent,
-                        "abs_res_over_sd_used": abs_res_over_sd_used,
-                        "gp_mean_mode": config.mean_mode,
-                        "target_stat": config.target_stat,
-                        "predictive_variance_mode": primary_mode,
+                        "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
-                        "n_train_voxels": int(len(X_train)),
-                        "n_test_voxels": int(len(X_test)),
-                        "ell": float(getattr(hyp, "ell", np.nan)),
-                        "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
-                        "nugget": float(getattr(hyp, "nugget", np.nan)),
-                        "nu": float(getattr(hyp, "nu", np.nan)),
+                        "status": "skipped",
+                        "message": "no test voxels",
                     }
                 )
-                if config.compare_variance_modes:
-                    for mode in scored_modes:
-                        var_m, sd_m, rstd_m = mode_arrays[mode]
-                        pred_compare_rows.append(
-                            {
-                                "Patient ID": patient_id,
-                                "Bx index": bx_index,
-                                "fold_id": int(fold_id),
-                                "kernel_label": kernel_label,
-                                "kernel_name": kernel_name,
-                                "kernel_param": kernel_param,
-                                "Voxel index": int(pv_test.loc[i, "Voxel index"]),
-                                "x_mm": float(X_test[i]),
-                                "y_test": float(y_test[i]),
-                                "mu_test": float(mu_test[i]),
-                                "sd_test_latent": float(sd_test[i]),
-                                "var_obs_test": float(var_n_test[i]),
-                                "variance_mode": mode,
-                                "var_pred_used": float(var_m[i]),
-                                "sd_pred_used": float(sd_m[i]),
-                                "residual": float(resid[i]),
-                                "rstd": float(rstd_m[i]),
-                                "abs_res_over_sd_latent": abs_res_over_sd_latent,
-                                "abs_res_over_sd_used": abs_res / max(float(sd_m[i]), 1e-12),
-                                "gp_mean_mode": config.mean_mode,
-                                "target_stat": config.target_stat,
-                                "n_train_voxels": int(len(X_train)),
-                                "n_test_voxels": int(len(X_test)),
-                                "ell": float(getattr(hyp, "ell", np.nan)),
-                                "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
-                                "nugget": float(getattr(hyp, "nugget", np.nan)),
-                                "nu": float(getattr(hyp, "nu", np.nan)),
-                            }
-                        )
+                continue
+            train_df = g_bx[~g_bx["Voxel index"].isin(test_voxels)].copy()
+            test_df = g_bx[g_bx["Voxel index"].isin(test_voxels)].copy()
 
-            fold_status_rows.append(
-                {
-                    "Patient ID": patient_id,
-                    "Bx index": bx_index,
-                    "fold_id": int(fold_id),
-                    "kernel_label": kernel_label,
-                    "primary_predictive_variance_mode": primary_mode,
-                    "variance_modes_scored": "|".join(scored_modes),
-                    "status": "ok",
-                    "message": "",
-                    "n_train_voxels": int(len(X_train)),
-                    "n_test_voxels": int(len(X_test)),
-                }
-            )
+            try:
+                X_train, y_train, var_n_train, _pv_train = gpr_pf.build_voxel_targets_and_noise(
+                    train_df,
+                    patient_id=patient_id,
+                    bx_index=bx_index,
+                    target_stat=config.target_stat,
+                    position_mode=config.position_mode,
+                )
+                X_test, y_test, var_n_test, pv_test = gpr_pf.build_voxel_targets_and_noise(
+                    test_df,
+                    patient_id=patient_id,
+                    bx_index=bx_index,
+                    target_stat=config.target_stat,
+                    position_mode=config.position_mode,
+                )
+                if len(X_train) < 3 or len(X_test) < 1:
+                    fold_status_rows.append(
+                        {
+                            "Patient ID": patient_id,
+                            "Bx index": bx_index,
+                            "fold_id": int(fold_id),
+                            "kernel_label": kernel_label,
+                            "kernel_name": kernel_name,
+                            "kernel_param": kernel_param,
+                            "primary_predictive_variance_mode": primary_mode,
+                            "variance_modes_scored": "|".join(scored_modes),
+                            "status": "skipped",
+                            "message": f"insufficient voxels (train={len(X_train)}, test={len(X_test)})",
+                        }
+                    )
+                    continue
 
-        except Exception as e:  # keep smoke run resilient and auditable
-            fold_status_rows.append(
-                {
-                    "Patient ID": patient_id,
-                    "Bx index": bx_index,
-                    "fold_id": int(fold_id),
-                    "kernel_label": kernel_label,
-                    "primary_predictive_variance_mode": primary_mode,
-                    "variance_modes_scored": "|".join(scored_modes),
-                    "status": "error",
-                    "message": str(e),
-                }
-            )
+                sv_train = gpr_sv.compute_semivariogram_pairwise(
+                    train_df,
+                    voxel_size_mm=float(config.semivariogram_voxel_size_mm),
+                    max_lag_voxels=None,
+                    position_mode=config.position_mode,
+                    lag_bin_width_mm=config.semivariogram_lag_bin_width_mm,
+                )
+                sv_train["Patient ID"] = patient_id
+                sv_train["Bx index"] = bx_index
+                sv_train = sv_train[np.isfinite(sv_train["semivariance"])].copy()
+                if len(sv_train) < 3:
+                    fold_status_rows.append(
+                        {
+                            "Patient ID": patient_id,
+                            "Bx index": bx_index,
+                            "fold_id": int(fold_id),
+                            "kernel_label": kernel_label,
+                            "kernel_name": kernel_name,
+                            "kernel_param": kernel_param,
+                            "primary_predictive_variance_mode": primary_mode,
+                            "variance_modes_scored": "|".join(scored_modes),
+                            "status": "skipped",
+                            "message": f"insufficient semivariogram bins (n={len(sv_train)})",
+                        }
+                    )
+                    continue
+
+                hyp = _fit_hyperparams_from_train_sv(
+                    sv_train,
+                    patient_id=patient_id,
+                    bx_index=bx_index,
+                    kernel_name=kernel_name,
+                    kernel_param=kernel_param,
+                )
+                mu_test, sd_test = gpr_pf.gp_posterior(
+                    X_train,
+                    y_train,
+                    var_n_train,
+                    hyp,
+                    X_star=X_test,
+                    mean_mode=config.mean_mode,
+                )
+                resid = y_test - mu_test
+                mode_arrays: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+                for mode in scored_modes:
+                    pred_var_mode = _predictive_variance_for_mode(
+                        latent_sd=sd_test,
+                        obs_var=var_n_test,
+                        nugget=float(getattr(hyp, "nugget", 0.0)),
+                        mode=mode,
+                    )
+                    pred_sd_mode = np.sqrt(np.maximum(pred_var_mode, 1e-12))
+                    rstd_mode = resid / pred_sd_mode
+                    mode_arrays[mode] = (pred_var_mode, pred_sd_mode, rstd_mode)
+                pred_var_primary, pred_sd_primary, rstd_primary = mode_arrays[primary_mode]
+
+                pv_test = pv_test.sort_values("x_mm").reset_index(drop=True)
+                for i in range(len(X_test)):
+                    abs_res = float(np.abs(resid[i]))
+                    abs_res_over_sd_latent = abs_res / max(float(sd_test[i]), 1e-12)
+                    abs_res_over_sd_used = abs_res / max(float(pred_sd_primary[i]), 1e-12)
+                    pred_rows.append(
+                        {
+                            "Patient ID": patient_id,
+                            "Bx index": bx_index,
+                            "fold_id": int(fold_id),
+                            "kernel_label": kernel_label,
+                            "kernel_name": kernel_name,
+                            "kernel_param": kernel_param,
+                            "Voxel index": int(pv_test.loc[i, "Voxel index"]),
+                            "x_mm": float(X_test[i]),
+                            "y_test": float(y_test[i]),
+                            "mu_test": float(mu_test[i]),
+                            "sd_test_latent": float(sd_test[i]),
+                            "var_obs_test": float(var_n_test[i]),
+                            "var_pred_used": float(pred_var_primary[i]),
+                            "sd_pred_used": float(pred_sd_primary[i]),
+                            "residual": float(resid[i]),
+                            "rstd": float(rstd_primary[i]),
+                            "abs_res_over_sd_latent": abs_res_over_sd_latent,
+                            "abs_res_over_sd_used": abs_res_over_sd_used,
+                            "gp_mean_mode": config.mean_mode,
+                            "target_stat": config.target_stat,
+                            "predictive_variance_mode": primary_mode,
+                            "variance_modes_scored": "|".join(scored_modes),
+                            "n_train_voxels": int(len(X_train)),
+                            "n_test_voxels": int(len(X_test)),
+                            "ell": float(getattr(hyp, "ell", np.nan)),
+                            "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
+                            "nugget": float(getattr(hyp, "nugget", np.nan)),
+                            "nu": float(getattr(hyp, "nu", np.nan)),
+                        }
+                    )
+                    if config.compare_variance_modes:
+                        for mode in scored_modes:
+                            var_m, sd_m, rstd_m = mode_arrays[mode]
+                            pred_compare_rows.append(
+                                {
+                                    "Patient ID": patient_id,
+                                    "Bx index": bx_index,
+                                    "fold_id": int(fold_id),
+                                    "kernel_label": kernel_label,
+                                    "kernel_name": kernel_name,
+                                    "kernel_param": kernel_param,
+                                    "Voxel index": int(pv_test.loc[i, "Voxel index"]),
+                                    "x_mm": float(X_test[i]),
+                                    "y_test": float(y_test[i]),
+                                    "mu_test": float(mu_test[i]),
+                                    "sd_test_latent": float(sd_test[i]),
+                                    "var_obs_test": float(var_n_test[i]),
+                                    "variance_mode": mode,
+                                    "var_pred_used": float(var_m[i]),
+                                    "sd_pred_used": float(sd_m[i]),
+                                    "residual": float(resid[i]),
+                                    "rstd": float(rstd_m[i]),
+                                    "abs_res_over_sd_latent": abs_res_over_sd_latent,
+                                    "abs_res_over_sd_used": abs_res / max(float(sd_m[i]), 1e-12),
+                                    "gp_mean_mode": config.mean_mode,
+                                    "target_stat": config.target_stat,
+                                    "n_train_voxels": int(len(X_train)),
+                                    "n_test_voxels": int(len(X_test)),
+                                    "ell": float(getattr(hyp, "ell", np.nan)),
+                                    "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
+                                    "nugget": float(getattr(hyp, "nugget", np.nan)),
+                                    "nu": float(getattr(hyp, "nu", np.nan)),
+                                }
+                            )
+
+                fold_status_rows.append(
+                    {
+                        "Patient ID": patient_id,
+                        "Bx index": bx_index,
+                        "fold_id": int(fold_id),
+                        "kernel_label": kernel_label,
+                        "kernel_name": kernel_name,
+                        "kernel_param": kernel_param,
+                        "primary_predictive_variance_mode": primary_mode,
+                        "variance_modes_scored": "|".join(scored_modes),
+                        "status": "ok",
+                        "message": "",
+                        "n_train_voxels": int(len(X_train)),
+                        "n_test_voxels": int(len(X_test)),
+                    }
+                )
+
+            except Exception as e:  # keep run resilient and auditable
+                fold_status_rows.append(
+                    {
+                        "Patient ID": patient_id,
+                        "Bx index": bx_index,
+                        "fold_id": int(fold_id),
+                        "kernel_label": kernel_label,
+                        "kernel_name": kernel_name,
+                        "kernel_param": kernel_param,
+                        "primary_predictive_variance_mode": primary_mode,
+                        "variance_modes_scored": "|".join(scored_modes),
+                        "status": "error",
+                        "message": str(e),
+                    }
+                )
 
     pred_df = pd.DataFrame(pred_rows)
     fold_status_df = pd.DataFrame(fold_status_rows)
-    pred_path = csv_dir.joinpath("blocked_cv_point_predictions_smoke_all.csv")
-    status_path = csv_dir.joinpath("blocked_cv_fold_fit_status_smoke_all.csv")
+    pred_path = csv_dir.joinpath("blocked_cv_point_predictions_all.csv")
+    status_path = csv_dir.joinpath("blocked_cv_fold_fit_status_all.csv")
     pred_df.to_csv(pred_path, index=False)
     fold_status_df.to_csv(status_path, index=False)
 
@@ -727,7 +751,7 @@ def run_blocked_cv_phase3c_smoke(
     compare_df = pd.DataFrame()
     if config.compare_variance_modes:
         compare_df = pd.DataFrame(pred_compare_rows)
-        compare_path = csv_dir.joinpath("blocked_cv_point_predictions_smoke_variance_compare_all.csv")
+        compare_path = csv_dir.joinpath("blocked_cv_point_predictions_variance_compare_all.csv")
         compare_df.to_csv(compare_path, index=False)
 
         summary_rows = []
@@ -767,16 +791,46 @@ def run_blocked_cv_phase3c_smoke(
                     }
                 )
         compare_summary_df = pd.DataFrame(summary_rows)
-        compare_summary_path = csv_dir.joinpath("blocked_cv_variance_mode_summary_smoke_all.csv")
+        compare_summary_path = csv_dir.joinpath("blocked_cv_variance_mode_summary_all.csv")
         compare_summary_df.to_csv(compare_summary_path, index=False)
 
+    # Optional per-kernel slices (subsets of centralized *_all outputs).
+    kernel_labels_run = sorted(pd.unique(pred_df["kernel_label"])) if not pred_df.empty else []
+    if config.write_per_kernel_predictions_csvs and not pred_df.empty:
+        for k_label in kernel_labels_run:
+            pred_df.loc[pred_df["kernel_label"] == k_label].to_csv(
+                csv_dir.joinpath(f"blocked_cv_point_predictions_{k_label}.csv"),
+                index=False,
+            )
+    if config.write_per_kernel_fit_status_csvs and not fold_status_df.empty:
+        for k_label in sorted(pd.unique(fold_status_df["kernel_label"])):
+            fold_status_df.loc[fold_status_df["kernel_label"] == k_label].to_csv(
+                csv_dir.joinpath(f"blocked_cv_fold_fit_status_{k_label}.csv"),
+                index=False,
+            )
+    if config.compare_variance_modes and config.write_per_kernel_variance_compare_csvs and not compare_df.empty:
+        for k_label in sorted(pd.unique(compare_df["kernel_label"])):
+            compare_df.loc[compare_df["kernel_label"] == k_label].to_csv(
+                csv_dir.joinpath(f"blocked_cv_point_predictions_variance_compare_{k_label}.csv"),
+                index=False,
+            )
+    if config.compare_variance_modes and config.write_per_kernel_variance_summary_csvs and compare_summary_path is not None:
+        compare_summary_df = pd.read_csv(compare_summary_path)
+        if not compare_summary_df.empty and "kernel_label" in compare_summary_df.columns:
+            for k_label in sorted(pd.unique(compare_summary_df["kernel_label"])):
+                compare_summary_df.loc[compare_summary_df["kernel_label"] == k_label].to_csv(
+                    csv_dir.joinpath(f"blocked_cv_variance_mode_summary_{k_label}.csv"),
+                    index=False,
+                )
+
     status = {
-        "phase": "3C_smoke_fit_predict",
+        "phase": "3D_all_kernels_fit_predict",
         "status": "ready",
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
         "blocked_cv_csv_dir": str(csv_dir),
-        "kernel_label": kernel_label,
+        "kernels_run": kernel_labels_run,
+        "n_kernels_run": int(len(kernel_labels_run)),
         "primary_predictive_variance_mode": primary_mode,
         "variance_modes_scored": scored_modes,
         "point_predictions_csv": str(pred_path),

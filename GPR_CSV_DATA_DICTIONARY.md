@@ -70,18 +70,27 @@ Phase 3B currently produces:
 - `blocked_cv_fold_map.csv`
 - `blocked_cv_fold_summary.csv`
 
-Optional Phase 3C smoke path also produces:
+Phase 3D all-kernel fit/predict path produces:
 
-- `blocked_cv_point_predictions_smoke_all.csv`
-- `blocked_cv_fold_fit_status_smoke_all.csv`
-- `blocked_cv_point_predictions_smoke_variance_compare_all.csv`
-- `blocked_cv_variance_mode_summary_smoke_all.csv`
+- `blocked_cv_point_predictions_all.csv`
+- `blocked_cv_fold_fit_status_all.csv`
+- `blocked_cv_point_predictions_variance_compare_all.csv` (when variance-mode comparison is enabled)
+- `blocked_cv_variance_mode_summary_all.csv` (when variance-mode comparison is enabled)
+
+Optional per-kernel slices (gated by blocked_CV booleans in main):
+
+- `blocked_cv_point_predictions_<kernel>.csv`
+- `blocked_cv_fold_fit_status_<kernel>.csv`
+- `blocked_cv_point_predictions_variance_compare_<kernel>.csv`
+- `blocked_cv_variance_mode_summary_<kernel>.csv`
 
 Notes:
 
 - These files are generated only when `run_blocked_cv=True`.
 - At Phase 3B, these are split-definition artifacts only (no CV model fitting).
-- Phase 3C smoke adds strict train-only fold fit/predict outputs for one kernel.
+- Phase 3D adds strict train-only fold fit/predict outputs for all configured kernels.
+- Optional per-kernel CSV slices can be enabled from main; they are subsets of
+  the centralized `_all` files.
 
 ## 1.4 Redundancy relationship
 
@@ -490,10 +499,10 @@ Files (under `blocked_CV/csv/`):
 
 - `blocked_cv_fold_map.csv`
 - `blocked_cv_fold_summary.csv`
-- `blocked_cv_point_predictions_smoke_all.csv` (Phase 3C smoke)
-- `blocked_cv_fold_fit_status_smoke_all.csv` (Phase 3C smoke)
-- `blocked_cv_point_predictions_smoke_variance_compare_all.csv` (Phase 3C.5)
-- `blocked_cv_variance_mode_summary_smoke_all.csv` (Phase 3C.5)
+- `blocked_cv_point_predictions_all.csv` (Phase 3D)
+- `blocked_cv_fold_fit_status_all.csv` (Phase 3D)
+- `blocked_cv_point_predictions_variance_compare_all.csv` (Phase 3D; optional)
+- `blocked_cv_variance_mode_summary_all.csv` (Phase 3D; optional)
 
 ## 11.1 `blocked_cv_fold_map.csv` columns
 
@@ -532,7 +541,7 @@ One row per `(Patient ID, Bx index, fold_id)`:
 - `test_z_max_mm`
 - `contiguous_test_block`
 
-## 11.3 `blocked_cv_point_predictions_smoke_all.csv` columns
+## 11.3 `blocked_cv_point_predictions_all.csv` columns
 
 One row per held-out voxel prediction from strict train-only fold fit:
 
@@ -565,7 +574,7 @@ One row per held-out voxel prediction from strict train-only fold fit:
 - `nugget`
 - `nu`
 
-## 11.4 `blocked_cv_fold_fit_status_smoke_all.csv` columns
+## 11.4 `blocked_cv_fold_fit_status_all.csv` columns
 
 One row per `(Patient ID, Bx index, fold_id)` attempt:
 
@@ -573,6 +582,8 @@ One row per `(Patient ID, Bx index, fold_id)` attempt:
 - `Bx index`
 - `fold_id`
 - `kernel_label`
+- `kernel_name`
+- `kernel_param`
 - `primary_predictive_variance_mode`
 - `variance_modes_scored`
 - `status` (`ok`, `skipped`, or `error`)
@@ -580,7 +591,7 @@ One row per `(Patient ID, Bx index, fold_id)` attempt:
 - `n_train_voxels` (when status is `ok`)
 - `n_test_voxels` (when status is `ok`)
 
-## 11.5 `blocked_cv_point_predictions_smoke_variance_compare_all.csv` columns
+## 11.5 `blocked_cv_point_predictions_variance_compare_all.csv` columns
 
 One row per held-out voxel *per variance mode* (same folds/predictions):
 
@@ -612,7 +623,7 @@ One row per held-out voxel *per variance mode* (same folds/predictions):
 - `nugget`
 - `nu`
 
-## 11.6 `blocked_cv_variance_mode_summary_smoke_all.csv` columns
+## 11.6 `blocked_cv_variance_mode_summary_all.csv` columns
 
 One row per `variance_mode` aggregated over all held-out points:
 
