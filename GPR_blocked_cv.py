@@ -275,9 +275,15 @@ def build_blocked_cv_fold_map(
             test_mask = vox["test_fold_id"] == fold_id
             n_test = int(test_mask.sum())
             n_train = int(n_vox - n_test)
+            n_train_plus_test = int(n_train + n_test)
+            train_test_total_match = bool(n_train_plus_test == n_vox)
             z_test = vox.loc[test_mask, "x_mm"].to_numpy(float)
             z_min = float(np.nanmin(z_test)) if z_test.size else np.nan
             z_max = float(np.nanmax(z_test)) if z_test.size else np.nan
+            test_span_mm = float(z_max - z_min) if np.isfinite(z_min) and np.isfinite(z_max) else np.nan
+            tail_merge_rule_active = bool(config.block_mode == "fixed_mm" and config.merge_tiny_tail_folds)
+            test_meets_min_voxels_threshold = bool(n_test >= int(config.min_test_voxels))
+            test_meets_min_span_threshold = bool(test_span_mm >= float(config.min_test_block_mm)) if np.isfinite(test_span_mm) else False
             idx_test = np.flatnonzero(test_mask.to_numpy())
             contiguous = bool(idx_test.size and np.all(np.diff(idx_test) == 1))
 
@@ -291,10 +297,16 @@ def build_blocked_cv_fold_map(
                     "n_voxels": n_vox,
                     "n_train": n_train,
                     "n_test": n_test,
+                    "n_train_plus_test": n_train_plus_test,
+                    "train_test_total_match": train_test_total_match,
                     "effective_n_folds": effective_n_folds,
                     "merged_tail_fold": bool(merged_tail_fold),
                     "test_z_min_mm": z_min,
                     "test_z_max_mm": z_max,
+                    "test_span_mm": test_span_mm,
+                    "tail_merge_rule_active": tail_merge_rule_active,
+                    "test_meets_min_voxels_threshold": test_meets_min_voxels_threshold,
+                    "test_meets_min_span_threshold": test_meets_min_span_threshold,
                     "contiguous_test_block": contiguous,
                 }
             )
@@ -309,12 +321,19 @@ def build_blocked_cv_fold_map(
                         "Voxel index": int(r["Voxel index"]),
                         "x_mm": float(r["x_mm"]),
                         "is_test": is_test,
+                        "n_voxels": n_vox,
                         "n_train": n_train,
                         "n_test": n_test,
+                        "n_train_plus_test": n_train_plus_test,
+                        "train_test_total_match": train_test_total_match,
                         "effective_n_folds": effective_n_folds,
                         "merged_tail_fold": bool(merged_tail_fold),
                         "test_z_min_mm": z_min,
                         "test_z_max_mm": z_max,
+                        "test_span_mm": test_span_mm,
+                        "tail_merge_rule_active": tail_merge_rule_active,
+                        "test_meets_min_voxels_threshold": test_meets_min_voxels_threshold,
+                        "test_meets_min_span_threshold": test_meets_min_span_threshold,
                         "block_mode": config.block_mode,
                         "position_mode": config.position_mode,
                     }
@@ -524,6 +543,19 @@ def run_blocked_cv_phase3c_smoke(
                 (all_voxel_wise_dose_df["Patient ID"] == patient_id)
                 & (all_voxel_wise_dose_df["Bx index"] == bx_index)
             ].copy()
+            n_total_voxels_bx = int(g_bx["Voxel index"].nunique()) if "Voxel index" in g_bx.columns else None
+            n_train_expected = int(fold_rows["n_train"].iloc[0]) if ("n_train" in fold_rows.columns and not fold_rows.empty) else None
+            n_test_expected = int(fold_rows["n_test"].iloc[0]) if ("n_test" in fold_rows.columns and not fold_rows.empty) else None
+            n_train_plus_test_expected = (
+                int(n_train_expected + n_test_expected)
+                if n_train_expected is not None and n_test_expected is not None
+                else None
+            )
+            expected_train_test_total_match = (
+                bool(n_train_plus_test_expected == n_total_voxels_bx)
+                if n_train_plus_test_expected is not None and n_total_voxels_bx is not None
+                else None
+            )
             test_voxels = set(
                 fold_rows.loc[fold_rows["is_test"], "Voxel index"].astype(int).tolist()
             )
@@ -540,11 +572,22 @@ def run_blocked_cv_phase3c_smoke(
                         "variance_modes_scored": "|".join(scored_modes),
                         "status": "skipped",
                         "message": "no test voxels",
+                        "n_total_voxels_bx": n_total_voxels_bx,
+                        "n_train_voxels_expected_from_fold_map": n_train_expected,
+                        "n_test_voxels_expected_from_fold_map": n_test_expected,
+                        "n_train_plus_test_expected": n_train_plus_test_expected,
+                        "expected_train_test_total_match": expected_train_test_total_match,
                     }
                 )
                 continue
             train_df = g_bx[~g_bx["Voxel index"].isin(test_voxels)].copy()
             test_df = g_bx[g_bx["Voxel index"].isin(test_voxels)].copy()
+            n_train_actual = None
+            n_test_actual = None
+            n_train_plus_test_actual = None
+            train_test_total_match = None
+            train_count_matches_fold_map = None
+            test_count_matches_fold_map = None
 
             try:
                 X_train, y_train, var_n_train, _pv_train = gpr_pf.build_voxel_targets_and_noise(
@@ -561,7 +604,25 @@ def run_blocked_cv_phase3c_smoke(
                     target_stat=config.target_stat,
                     position_mode=config.position_mode,
                 )
-                if len(X_train) < 3 or len(X_test) < 1:
+                n_train_actual = int(len(X_train))
+                n_test_actual = int(len(X_test))
+                n_train_plus_test_actual = int(n_train_actual + n_test_actual)
+                train_test_total_match = (
+                    bool(n_train_plus_test_actual == n_total_voxels_bx)
+                    if n_total_voxels_bx is not None
+                    else None
+                )
+                train_count_matches_fold_map = (
+                    bool(n_train_actual == n_train_expected)
+                    if n_train_expected is not None
+                    else None
+                )
+                test_count_matches_fold_map = (
+                    bool(n_test_actual == n_test_expected)
+                    if n_test_expected is not None
+                    else None
+                )
+                if n_train_actual < 3 or n_test_actual < 1:
                     fold_status_rows.append(
                         {
                             "Patient ID": patient_id,
@@ -573,7 +634,18 @@ def run_blocked_cv_phase3c_smoke(
                             "primary_predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
                             "status": "skipped",
-                            "message": f"insufficient voxels (train={len(X_train)}, test={len(X_test)})",
+                            "message": f"insufficient voxels (train={n_train_actual}, test={n_test_actual})",
+                            "n_total_voxels_bx": n_total_voxels_bx,
+                            "n_train_voxels_expected_from_fold_map": n_train_expected,
+                            "n_test_voxels_expected_from_fold_map": n_test_expected,
+                            "n_train_plus_test_expected": n_train_plus_test_expected,
+                            "expected_train_test_total_match": expected_train_test_total_match,
+                            "n_train_voxels": n_train_actual,
+                            "n_test_voxels": n_test_actual,
+                            "n_train_plus_test_voxels": n_train_plus_test_actual,
+                            "train_test_total_match": train_test_total_match,
+                            "train_count_matches_fold_map": train_count_matches_fold_map,
+                            "test_count_matches_fold_map": test_count_matches_fold_map,
                         }
                     )
                     continue
@@ -601,6 +673,17 @@ def run_blocked_cv_phase3c_smoke(
                             "variance_modes_scored": "|".join(scored_modes),
                             "status": "skipped",
                             "message": f"insufficient semivariogram bins (n={len(sv_train)})",
+                            "n_total_voxels_bx": n_total_voxels_bx,
+                            "n_train_voxels_expected_from_fold_map": n_train_expected,
+                            "n_test_voxels_expected_from_fold_map": n_test_expected,
+                            "n_train_plus_test_expected": n_train_plus_test_expected,
+                            "expected_train_test_total_match": expected_train_test_total_match,
+                            "n_train_voxels": n_train_actual,
+                            "n_test_voxels": n_test_actual,
+                            "n_train_plus_test_voxels": n_train_plus_test_actual,
+                            "train_test_total_match": train_test_total_match,
+                            "train_count_matches_fold_map": train_count_matches_fold_map,
+                            "test_count_matches_fold_map": test_count_matches_fold_map,
                         }
                     )
                     continue
@@ -663,8 +746,17 @@ def run_blocked_cv_phase3c_smoke(
                             "target_stat": config.target_stat,
                             "predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
-                            "n_train_voxels": int(len(X_train)),
-                            "n_test_voxels": int(len(X_test)),
+                            "n_train_voxels": n_train_actual,
+                            "n_test_voxels": n_test_actual,
+                            "n_total_voxels_bx": n_total_voxels_bx,
+                            "n_train_plus_test_voxels": n_train_plus_test_actual,
+                            "train_test_total_match": train_test_total_match,
+                            "n_train_voxels_expected_from_fold_map": n_train_expected,
+                            "n_test_voxels_expected_from_fold_map": n_test_expected,
+                            "n_train_plus_test_expected": n_train_plus_test_expected,
+                            "expected_train_test_total_match": expected_train_test_total_match,
+                            "train_count_matches_fold_map": train_count_matches_fold_map,
+                            "test_count_matches_fold_map": test_count_matches_fold_map,
                             "ell": float(getattr(hyp, "ell", np.nan)),
                             "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
                             "nugget": float(getattr(hyp, "nugget", np.nan)),
@@ -697,8 +789,17 @@ def run_blocked_cv_phase3c_smoke(
                                     "abs_res_over_sd_used": abs_res / max(float(sd_m[i]), 1e-12),
                                     "gp_mean_mode": config.mean_mode,
                                     "target_stat": config.target_stat,
-                                    "n_train_voxels": int(len(X_train)),
-                                    "n_test_voxels": int(len(X_test)),
+                                    "n_train_voxels": n_train_actual,
+                                    "n_test_voxels": n_test_actual,
+                                    "n_total_voxels_bx": n_total_voxels_bx,
+                                    "n_train_plus_test_voxels": n_train_plus_test_actual,
+                                    "train_test_total_match": train_test_total_match,
+                                    "n_train_voxels_expected_from_fold_map": n_train_expected,
+                                    "n_test_voxels_expected_from_fold_map": n_test_expected,
+                                    "n_train_plus_test_expected": n_train_plus_test_expected,
+                                    "expected_train_test_total_match": expected_train_test_total_match,
+                                    "train_count_matches_fold_map": train_count_matches_fold_map,
+                                    "test_count_matches_fold_map": test_count_matches_fold_map,
                                     "ell": float(getattr(hyp, "ell", np.nan)),
                                     "sigma_f2": float(getattr(hyp, "sigma_f2", np.nan)),
                                     "nugget": float(getattr(hyp, "nugget", np.nan)),
@@ -718,8 +819,17 @@ def run_blocked_cv_phase3c_smoke(
                         "variance_modes_scored": "|".join(scored_modes),
                         "status": "ok",
                         "message": "",
-                        "n_train_voxels": int(len(X_train)),
-                        "n_test_voxels": int(len(X_test)),
+                        "n_total_voxels_bx": n_total_voxels_bx,
+                        "n_train_voxels_expected_from_fold_map": n_train_expected,
+                        "n_test_voxels_expected_from_fold_map": n_test_expected,
+                        "n_train_plus_test_expected": n_train_plus_test_expected,
+                        "expected_train_test_total_match": expected_train_test_total_match,
+                        "n_train_voxels": n_train_actual,
+                        "n_test_voxels": n_test_actual,
+                        "n_train_plus_test_voxels": n_train_plus_test_actual,
+                        "train_test_total_match": train_test_total_match,
+                        "train_count_matches_fold_map": train_count_matches_fold_map,
+                        "test_count_matches_fold_map": test_count_matches_fold_map,
                     }
                 )
 
@@ -736,11 +846,48 @@ def run_blocked_cv_phase3c_smoke(
                         "variance_modes_scored": "|".join(scored_modes),
                         "status": "error",
                         "message": str(e),
+                        "n_total_voxels_bx": n_total_voxels_bx,
+                        "n_train_voxels_expected_from_fold_map": n_train_expected,
+                        "n_test_voxels_expected_from_fold_map": n_test_expected,
+                        "n_train_plus_test_expected": n_train_plus_test_expected,
+                        "expected_train_test_total_match": expected_train_test_total_match,
+                        "n_train_voxels": n_train_actual,
+                        "n_test_voxels": n_test_actual,
+                        "n_train_plus_test_voxels": n_train_plus_test_actual,
+                        "train_test_total_match": train_test_total_match,
+                        "train_count_matches_fold_map": train_count_matches_fold_map,
+                        "test_count_matches_fold_map": test_count_matches_fold_map,
                     }
                 )
 
     pred_df = pd.DataFrame(pred_rows)
     fold_status_df = pd.DataFrame(fold_status_rows)
+    if not fold_status_df.empty:
+        fold_status_cols = [
+            "Patient ID",
+            "Bx index",
+            "fold_id",
+            "kernel_label",
+            "kernel_name",
+            "kernel_param",
+            "primary_predictive_variance_mode",
+            "variance_modes_scored",
+            "status",
+            "message",
+            "n_train_voxels",
+            "n_test_voxels",
+            "n_total_voxels_bx",
+            "n_train_plus_test_voxels",
+            "train_test_total_match",
+            "n_train_voxels_expected_from_fold_map",
+            "n_test_voxels_expected_from_fold_map",
+            "n_train_plus_test_expected",
+            "expected_train_test_total_match",
+            "train_count_matches_fold_map",
+            "test_count_matches_fold_map",
+        ]
+        extra_cols = [c for c in fold_status_df.columns if c not in fold_status_cols]
+        fold_status_df = fold_status_df.reindex(columns=fold_status_cols + extra_cols)
     pred_path = csv_dir.joinpath("blocked_cv_point_predictions_all.csv")
     status_path = csv_dir.joinpath("blocked_cv_fold_fit_status_all.csv")
     pred_df.to_csv(pred_path, index=False)
@@ -781,6 +928,12 @@ def run_blocked_cv_phase3c_smoke(
                     errors="coerce",
                 ).to_numpy(float)
                 abs_ratio_v = abs_ratio[np.isfinite(abs_ratio)]
+                n_unique_folds = int(
+                    g_mode[["Patient ID", "Bx index", "fold_id"]].drop_duplicates().shape[0]
+                ) if {"Patient ID", "Bx index", "fold_id"}.issubset(g_mode.columns) else 0
+                n_unique_biopsies = int(
+                    g_mode[["Patient ID", "Bx index"]].drop_duplicates().shape[0]
+                ) if {"Patient ID", "Bx index"}.issubset(g_mode.columns) else 0
                 summary_rows.append(
                     {
                         "kernel_label": k_label,
@@ -788,6 +941,8 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": k_param,
                         "variance_mode": mode,
                         "n_points": int(rstd_v.size),
+                        "n_unique_folds": n_unique_folds,
+                        "n_unique_biopsies": n_unique_biopsies,
                         "mean_rstd": mean_rstd,
                         "sd_rstd": sd_rstd,
                         "pct_abs_le1": pct_abs_le1,
