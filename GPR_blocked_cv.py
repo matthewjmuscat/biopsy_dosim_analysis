@@ -54,7 +54,33 @@ def init_blocked_cv_dirs(output_dir: Path, subdir_name: str = "blocked_CV") -> t
     root.mkdir(parents=True, exist_ok=True)
     figs.mkdir(parents=True, exist_ok=True)
     csv.mkdir(parents=True, exist_ok=True)
+    _blocked_cv_csv_subdirs(csv)
     return root, figs, csv
+
+
+def _blocked_cv_csv_subdirs(csv_root: Path) -> dict[str, Path]:
+    """
+    Ensure blocked_CV CSV subfolders exist and return their paths.
+
+    Layout:
+    - folds: fold assignments and fold-map summaries
+    - predictions: held-out point prediction tables
+    - metrics: aggregated performance summaries
+    - diagnostics: fit status and troubleshooting telemetry
+    """
+    csv_root.mkdir(parents=True, exist_ok=True)
+    subdirs = {
+        "root": csv_root,
+        "folds": csv_root.joinpath("folds"),
+        "predictions": csv_root.joinpath("predictions"),
+        "metrics": csv_root.joinpath("metrics"),
+        "diagnostics": csv_root.joinpath("diagnostics"),
+    }
+    for key, p in subdirs.items():
+        if key == "root":
+            continue
+        p.mkdir(parents=True, exist_ok=True)
+    return subdirs
 
 
 def run_blocked_cv_scaffold(
@@ -75,6 +101,7 @@ def run_blocked_cv_scaffold(
     n_bx = int(
         all_voxel_wise_dose_df[["Patient ID", "Bx index"]].drop_duplicates().shape[0]
     ) if {"Patient ID", "Bx index"}.issubset(all_voxel_wise_dose_df.columns) else 0
+    csv_subdirs = _blocked_cv_csv_subdirs(csv_dir)
 
     status = {
         "phase": "3A_scaffold",
@@ -82,6 +109,10 @@ def run_blocked_cv_scaffold(
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
         "blocked_cv_csv_dir": str(csv_dir),
+        "blocked_cv_csv_folds_dir": str(csv_subdirs["folds"]),
+        "blocked_cv_csv_predictions_dir": str(csv_subdirs["predictions"]),
+        "blocked_cv_csv_metrics_dir": str(csv_subdirs["metrics"]),
+        "blocked_cv_csv_diagnostics_dir": str(csv_subdirs["diagnostics"]),
         "n_biopsies_seen": n_bx,
         "semivariogram_rows_seen": int(len(semivariogram_df)),
         "block_mode": config.block_mode,
@@ -436,8 +467,9 @@ def run_blocked_cv_phase3b(
         all_voxel_wise_dose_df,
         config=config,
     )
-    fold_map_path = csv_dir.joinpath("blocked_cv_fold_map.csv")
-    fold_summary_path = csv_dir.joinpath("blocked_cv_fold_summary.csv")
+    csv_subdirs = _blocked_cv_csv_subdirs(csv_dir)
+    fold_map_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_map.csv")
+    fold_summary_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_summary.csv")
     fold_map_df.to_csv(fold_map_path, index=False)
     fold_summary_df.to_csv(fold_summary_path, index=False)
     if not fold_summary_df.empty and {"Patient ID", "Bx index", "merged_tail_fold"}.issubset(fold_summary_df.columns):
@@ -463,6 +495,10 @@ def run_blocked_cv_phase3b(
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
         "blocked_cv_csv_dir": str(csv_dir),
+        "blocked_cv_csv_folds_dir": str(csv_subdirs["folds"]),
+        "blocked_cv_csv_predictions_dir": str(csv_subdirs["predictions"]),
+        "blocked_cv_csv_metrics_dir": str(csv_subdirs["metrics"]),
+        "blocked_cv_csv_diagnostics_dir": str(csv_subdirs["diagnostics"]),
         "n_biopsies_seen": int(
             all_voxel_wise_dose_df[["Patient ID", "Bx index"]].drop_duplicates().shape[0]
         ) if {"Patient ID", "Bx index"}.issubset(all_voxel_wise_dose_df.columns) else 0,
@@ -589,12 +625,13 @@ def run_blocked_cv_phase3c_smoke(
     - writes centralized *_all CSV outputs (plus optional per-kernel slices).
     """
     del semivariogram_df  # phase 3C uses per-fold train-only semivariograms
+    csv_subdirs = _blocked_cv_csv_subdirs(csv_dir)
     fold_map_df, fold_summary_df = build_blocked_cv_fold_map(
         all_voxel_wise_dose_df,
         config=config,
     )
-    fold_map_path = csv_dir.joinpath("blocked_cv_fold_map.csv")
-    fold_summary_path = csv_dir.joinpath("blocked_cv_fold_summary.csv")
+    fold_map_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_map.csv")
+    fold_summary_path = csv_subdirs["folds"].joinpath("blocked_cv_fold_summary.csv")
     if not fold_map_path.exists():
         fold_map_df.to_csv(fold_map_path, index=False)
     if not fold_summary_path.exists():
@@ -1000,17 +1037,18 @@ def run_blocked_cv_phase3c_smoke(
         ]
         extra_cols = [c for c in fold_status_df.columns if c not in fold_status_cols]
         fold_status_df = fold_status_df.reindex(columns=fold_status_cols + extra_cols)
-    pred_path = csv_dir.joinpath("blocked_cv_point_predictions_all.csv")
-    status_path = csv_dir.joinpath("blocked_cv_fold_fit_status_all.csv")
+    pred_path = csv_subdirs["predictions"].joinpath("blocked_cv_point_predictions_all.csv")
+    status_path = csv_subdirs["diagnostics"].joinpath("blocked_cv_fold_fit_status_all.csv")
     pred_df.to_csv(pred_path, index=False)
     fold_status_df.to_csv(status_path, index=False)
 
     compare_path = None
     compare_summary_path = None
     compare_df = pd.DataFrame()
+    compare_summary_df = pd.DataFrame()
     if config.compare_variance_modes:
         compare_df = pd.DataFrame(pred_compare_rows)
-        compare_path = csv_dir.joinpath("blocked_cv_point_predictions_variance_compare_all.csv")
+        compare_path = csv_subdirs["predictions"].joinpath("blocked_cv_point_predictions_variance_compare_all.csv")
         compare_df.to_csv(compare_path, index=False)
 
         summary_rows = []
@@ -1063,7 +1101,7 @@ def run_blocked_cv_phase3c_smoke(
                     }
                 )
         compare_summary_df = pd.DataFrame(summary_rows)
-        compare_summary_path = csv_dir.joinpath("blocked_cv_variance_mode_summary_all.csv")
+        compare_summary_path = csv_subdirs["metrics"].joinpath("blocked_cv_variance_mode_summary_all.csv")
         compare_summary_df.to_csv(compare_summary_path, index=False)
 
     # Optional per-kernel slices (subsets of centralized *_all outputs).
@@ -1071,27 +1109,26 @@ def run_blocked_cv_phase3c_smoke(
     if config.write_per_kernel_predictions_csvs and not pred_df.empty:
         for k_label in kernel_labels_run:
             pred_df.loc[pred_df["kernel_label"] == k_label].to_csv(
-                csv_dir.joinpath(f"blocked_cv_point_predictions_{k_label}.csv"),
+                csv_subdirs["predictions"].joinpath(f"blocked_cv_point_predictions_{k_label}.csv"),
                 index=False,
             )
     if config.write_per_kernel_fit_status_csvs and not fold_status_df.empty:
         for k_label in sorted(pd.unique(fold_status_df["kernel_label"])):
             fold_status_df.loc[fold_status_df["kernel_label"] == k_label].to_csv(
-                csv_dir.joinpath(f"blocked_cv_fold_fit_status_{k_label}.csv"),
+                csv_subdirs["diagnostics"].joinpath(f"blocked_cv_fold_fit_status_{k_label}.csv"),
                 index=False,
             )
     if config.compare_variance_modes and config.write_per_kernel_variance_compare_csvs and not compare_df.empty:
         for k_label in sorted(pd.unique(compare_df["kernel_label"])):
             compare_df.loc[compare_df["kernel_label"] == k_label].to_csv(
-                csv_dir.joinpath(f"blocked_cv_point_predictions_variance_compare_{k_label}.csv"),
+                csv_subdirs["predictions"].joinpath(f"blocked_cv_point_predictions_variance_compare_{k_label}.csv"),
                 index=False,
             )
     if config.compare_variance_modes and config.write_per_kernel_variance_summary_csvs and compare_summary_path is not None:
-        compare_summary_df = pd.read_csv(compare_summary_path)
         if not compare_summary_df.empty and "kernel_label" in compare_summary_df.columns:
             for k_label in sorted(pd.unique(compare_summary_df["kernel_label"])):
                 compare_summary_df.loc[compare_summary_df["kernel_label"] == k_label].to_csv(
-                    csv_dir.joinpath(f"blocked_cv_variance_mode_summary_{k_label}.csv"),
+                    csv_subdirs["metrics"].joinpath(f"blocked_cv_variance_mode_summary_{k_label}.csv"),
                     index=False,
                 )
 
@@ -1101,6 +1138,10 @@ def run_blocked_cv_phase3c_smoke(
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
         "blocked_cv_csv_dir": str(csv_dir),
+        "blocked_cv_csv_folds_dir": str(csv_subdirs["folds"]),
+        "blocked_cv_csv_predictions_dir": str(csv_subdirs["predictions"]),
+        "blocked_cv_csv_metrics_dir": str(csv_subdirs["metrics"]),
+        "blocked_cv_csv_diagnostics_dir": str(csv_subdirs["diagnostics"]),
         "kernels_run": kernel_labels_run,
         "n_kernels_run": int(len(kernel_labels_run)),
         "primary_predictive_variance_mode": primary_mode,
