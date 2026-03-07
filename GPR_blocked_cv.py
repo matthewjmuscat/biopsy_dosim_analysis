@@ -1112,7 +1112,7 @@ def _filter_predictions_by_eligible_folds(pred_df: pd.DataFrame, eligible_keys_d
     return pred_df.merge(eligible_keys_df[merge_keys].drop_duplicates(), on=merge_keys, how="inner")
 
 
-def run_blocked_cv_phase3c_smoke(
+def run_blocked_cv_fit_predict(
     all_voxel_wise_dose_df: pd.DataFrame,
     semivariogram_df: pd.DataFrame,
     *,
@@ -1122,10 +1122,14 @@ def run_blocked_cv_phase3c_smoke(
     config: BlockedCVConfig,
 ) -> dict:
     """
-    Phase 3C/3D blocked_CV path:
+    blocked_CV fit/predict path:
     - uses fold map from 3B logic,
     - runs strict train-only fit/predict for configured kernel specs,
     - writes centralized *_all CSV outputs (plus optional per-kernel slices).
+
+    Returns a dict with:
+    - status: compact status/path/count metadata for logging
+    - artifacts: in-memory dataframes for downstream plotting without CSV rereads
     """
     del semivariogram_df  # phase 3C uses per-fold train-only semivariograms
     csv_subdirs = _blocked_cv_csv_subdirs(csv_dir)
@@ -1860,8 +1864,29 @@ def run_blocked_cv_phase3c_smoke(
                     index=False,
                 )
 
+    artifacts = {
+        "fold_map_df": fold_map_df,
+        "fold_summary_df": fold_summary_df,
+        "pred_df": pred_df,
+        "compare_df": compare_df,
+        "fold_status_df": fold_status_df,
+        "fold_metrics_df": fold_metrics_df,
+        "compare_fold_metrics_df": compare_fold_metrics_df,
+        "biopsy_metrics_df": biopsy_metrics_df,
+        "compare_biopsy_metrics_df": compare_biopsy_metrics_df,
+        "cohort_summary_df": cohort_summary_df,
+        "compare_cohort_summary_df": compare_cohort_summary_df,
+        "fold_metrics_eligible_df": fold_metrics_eligible_df,
+        "compare_fold_metrics_eligible_df": compare_fold_metrics_eligible_df,
+        "biopsy_metrics_eligible_df": biopsy_metrics_eligible_df,
+        "compare_biopsy_metrics_eligible_df": compare_biopsy_metrics_eligible_df,
+        "cohort_summary_eligible_df": cohort_summary_eligible_df,
+        "compare_cohort_summary_eligible_df": compare_cohort_summary_eligible_df,
+        "eligibility_exclusions_df": eligibility_exclusions_df,
+    }
+
     status = {
-        "phase": "blocked_cv_all_kernel_fit_predict",
+        "phase": "blocked_cv_fit_predict",
         "status": "ready",
         "blocked_cv_root": str(output_dir),
         "blocked_cv_figs_dir": str(figs_dir),
@@ -1913,4 +1938,55 @@ def run_blocked_cv_phase3c_smoke(
         "n_fold_status_ok": int((fold_status_df.get("status", pd.Series(dtype=str)) == "ok").sum()) if len(fold_status_df) else 0,
         "n_fold_status_error": int((fold_status_df.get("status", pd.Series(dtype=str)) == "error").sum()) if len(fold_status_df) else 0,
     }
-    return status
+    return {"status": status, "artifacts": artifacts}
+
+
+def run_blocked_cv_phase3c_smoke(
+    all_voxel_wise_dose_df: pd.DataFrame,
+    semivariogram_df: pd.DataFrame,
+    *,
+    output_dir: Path,
+    figs_dir: Path,
+    csv_dir: Path,
+    config: BlockedCVConfig,
+) -> dict:
+    """
+    Backward-compatible alias returning status-only payload.
+    """
+    result = run_blocked_cv_fit_predict(
+        all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+        semivariogram_df=semivariogram_df,
+        output_dir=output_dir,
+        figs_dir=figs_dir,
+        csv_dir=csv_dir,
+        config=config,
+    )
+    return result["status"]
+
+
+def run_blocked_cv_plots(
+    *,
+    fit_predict_artifacts: dict,
+    output_dir: Path,
+    figs_dir: Path,
+    csv_dir: Path,
+    config: BlockedCVConfig,
+) -> dict:
+    """
+    blocked_CV plotting lane placeholder.
+
+    This is intentionally a no-op in first-pass plumbing, but it validates that
+    in-memory artifacts are available for plot generation without CSV rereads.
+    """
+    del output_dir, csv_dir, config
+    n_pred = 0
+    if isinstance(fit_predict_artifacts, dict):
+        pred_df = fit_predict_artifacts.get("pred_df", pd.DataFrame())
+        if isinstance(pred_df, pd.DataFrame):
+            n_pred = int(len(pred_df))
+    return {
+        "phase": "blocked_cv_plots",
+        "status": "not_implemented",
+        "figs_dir": str(figs_dir),
+        "n_point_prediction_rows_available": n_pred,
+    }

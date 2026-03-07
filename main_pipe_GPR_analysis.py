@@ -41,7 +41,8 @@ def main():
     run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
     run_cohort_plots = False  # if True, write cohort-level production figures
     run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
-    run_blocked_cv_phase3c_smoke = True  # if True, run blocked_CV all-kernel train/test fit+predict outputs after fold map stage
+    run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
+    run_blocked_cv_plots = False  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
 
     # --- Cohort filtering / plot cohort selection ---
     simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets
@@ -672,9 +673,9 @@ def main():
             config=blocked_cv_cfg,
         )
         print(f"[blocked_CV] fold-mapping status: {blocked_cv_status}")
-        if run_blocked_cv_phase3c_smoke:
+        if run_blocked_cv_fit_predict:
             _print_section("BLOCKED_CV: All-kernel Train-only Fit + Held-out Predict")
-            blocked_cv_phase3c_status = GPR_blocked_cv.run_blocked_cv_phase3c_smoke(
+            blocked_cv_fit_predict_result = GPR_blocked_cv.run_blocked_cv_fit_predict(
                 all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                 semivariogram_df=semivariogram_df,
                 output_dir=blocked_cv_root,
@@ -682,7 +683,19 @@ def main():
                 csv_dir=blocked_cv_csv_dir,
                 config=blocked_cv_cfg,
             )
-            print(f"[blocked_CV] fit/predict status: {blocked_cv_phase3c_status}")
+            blocked_cv_fit_predict_status = blocked_cv_fit_predict_result["status"]
+            blocked_cv_fit_predict_artifacts = blocked_cv_fit_predict_result["artifacts"]
+            print(f"[blocked_CV] fit/predict status: {blocked_cv_fit_predict_status}")
+            if run_blocked_cv_plots:
+                _print_section("BLOCKED_CV: Plots")
+                blocked_cv_plot_status = GPR_blocked_cv.run_blocked_cv_plots(
+                    fit_predict_artifacts=blocked_cv_fit_predict_artifacts,
+                    output_dir=blocked_cv_root,
+                    figs_dir=blocked_cv_figs_dir,
+                    csv_dir=blocked_cv_csv_dir,
+                    config=blocked_cv_cfg,
+                )
+                print(f"[blocked_CV] plot status: {blocked_cv_plot_status}")
     else:
         _print_section("BLOCKED_CV: Skipped")
 
