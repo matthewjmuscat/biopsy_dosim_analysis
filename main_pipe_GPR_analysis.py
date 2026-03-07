@@ -31,92 +31,58 @@ def main():
         print(f"\n{line}\n{title}\n{line}")
 
 
-    # For grids of patient-level plots
-    patient_bx_list = [
+    # =========================================================================
+    # Runtime configuration (single-source knobs; keep synchronized with docs)
+    # =========================================================================
+
+    # --- Pipeline lane switches ---
+    run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
+    run_patient_plots = False  # if True, write per-biopsy and paired patient figures
+    run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
+    run_cohort_plots = False  # if True, write cohort-level production figures
+    run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
+    run_blocked_cv_phase3c_smoke = True  # if True, run blocked_CV all-kernel train/test fit+predict outputs after fold map stage
+
+    # --- Cohort filtering / plot cohort selection ---
+    simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets
+    patient_bx_list = [  # biopsy list used by grid plotters
         ("189 (F2)", 0),
         ("200 (F2)", 0),
         ("201 (F2)", 1),
-        ("198 (F2)", 0),]
-    grid_ncols = 2  # columns for multi-patient grid plots
-    grid_label_map = {("189 (F2)", 0): "Biopsy 3",
-                      ("200 (F2)", 0): "Biopsy 4",
-                      ("201 (F2)", 1): "Biopsy 5",
-                      ("198 (F2)", 0): "Biopsy 6"}  # optional: {(patient_id, bx_index): "Custom label"}
-    
-    # Per biopsy label maps
-    per_biopsy_label_map = {("188 (F2)", 0): "Biopsy 1",
-                        ("201 (F2)", 0): "Biopsy 2",
-    }
-                        
+        ("198 (F2)", 0),
+    ]
+    grid_ncols = 2  # number of columns for multi-biopsy grid plots
+    grid_label_map = {
+        ("189 (F2)", 0): "Biopsy 3",
+        ("200 (F2)", 0): "Biopsy 4",
+        ("201 (F2)", 1): "Biopsy 5",
+        ("198 (F2)", 0): "Biopsy 6",
+    }  # optional override labels for grid plots
+    per_biopsy_label_map = {
+        ("188 (F2)", 0): "Biopsy 1",
+        ("201 (F2)", 0): "Biopsy 2",
+    }  # optional override labels for per-biopsy and paired plots
 
-    # filter by simulated types
-    simulated_types = ['Real']  # options: 'Real', 'Centroid DIL' 'Optimal DIL'
+    # --- GP core methodology ---
+    # Recommended default: ordinary kriging on this cohort.
+    # Rationale: biopsy-level baseline dose can be nonzero/unknown; zero-mean mode
+    # can bias profile level downward when baseline shift exists.
+    gp_mean_mode = "ordinary"  # options: "ordinary", "zero"
+    gp_target_stat = "median"  # options: "median", "mean"; MC summary used as voxel target y
+    gp_position_mode = "begin"  # options: "begin", "center"; voxel z-position used by GP/metrics/plots
 
-    # plotting / analysis gates (speed control)
-    run_semivariogram_plots = False
-    run_patient_plots = False
-    run_kernel_sensitivity_and_calibtration_flag = False
-    run_cohort_plots = False
+    # Recommended default: pairwise semivariogram.
+    # Rationale: robust with non-contiguous voxel subsets (blocked_CV train folds) and
+    # physically meaningful lag binning in mm.
+    semivariogram_method = "pairwise"  # options: "shift", "pairwise"
+    run_semivariogram_method_parity_check = True  # if True, save shift-vs-pairwise parity CSVs for QC
+    semivariogram_voxel_size_mm = 1.0  # lag axis spacing (mm) used by semivariogram computation
+    semivariogram_pairwise_position_mode = gp_position_mode  # pairwise-only z-position mode; kept aligned with gp_position_mode by default
+    semivariogram_pairwise_lag_bin_width_mm = None  # pairwise-only lag bin width (mm); None -> semivariogram_voxel_size_mm
 
-    # GP methodology options
-    gp_mean_mode = "ordinary"  # IMPORTANT: Can be "ordinary" or "zero", affects GP mean selection (kriging style simple vs ordinary kriging). It should be "ordinary", we have tested for this and zero displays artificially pushed down regression profiles
-    semivariogram_method = "pairwise"  # options: "shift" (legacy contiguous-lag), "pairwise" (gap-safe; recommended for blocked_CV)
-    run_semivariogram_method_parity_check = True
-    semivariogram_voxel_size_mm = 1.0  # lag spacing in mm used by semivariogram lag axis/bin centers
-    semivariogram_pairwise_position_mode = "begin"  # pairwise only: options {"begin", "center"} for voxel z-position
-    semivariogram_pairwise_lag_bin_width_mm = None  # pairwise only: lag bin width in mm; None defaults to semivariogram_voxel_size_mm
-
-    # blocked_CV options
-    # Common blocked_CV knobs (apply regardless of split mode)
-    run_blocked_cv = True  # master switch for blocked_CV pathway
-    run_blocked_cv_phase3c_smoke = True  # if True, run strict train-only blocked_CV fit/predict pathway (all kernels; centralized *_all CSVs)
-    blocked_cv_output_subdir = "blocked_CV"  # subfolder under output_data_GPR_analysis
-    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels" (split each biopsy into contiguous blocks with similar voxel counts; no tiny-tail merge applied because contiguous blocks differ by at most 1 voxel so no tiny tails exist), "fixed_mm" (split by physical z-length in mm); fixed_mm is preferred for spatially correlated models (consistent physical holdout difficulty)
-    blocked_cv_target_stat = "median"  # options: "median", "mean" (voxel target summary statistic)
-    blocked_cv_mean_mode = gp_mean_mode  # options: "zero", "ordinary" (GP mean handling)
-    blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; controls canonical rstd denominator
-    blocked_cv_compare_variance_modes = True  # if True, also score each mode listed in blocked_cv_variance_modes_to_compare on identical folds/predictions
-    blocked_cv_variance_modes_to_compare = ["latent", "observed_mc"]  # each entry must be one of: "latent", "observed_mc", "observed_mc_plus_nugget"
-
-    # Fold-count split knobs (used by equal_voxels directly, and by fixed_mm only when block_length_mm is None)
-    blocked_cv_n_folds = 5  # equal_voxels: direct fold count; fixed_mm + block_length_mm=None: derive length from span / n_folds
-    blocked_cv_min_derived_block_mm = 5.0  # fixed_mm + block_length_mm=None only: floor on derived block length
-
-    # fixed_mm-specific split knobs
-    blocked_cv_block_length_mm = 8.0  # fixed_mm only: explicit block length in mm; set None to derive from span / n_folds
-
-    # fixed_mm tiny-tail merge knobs
-    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds to avoid overly easy small tail holdouts (not used for equal_voxels)
-    blocked_cv_min_test_voxels = 3  # minimum held-out voxel count per fold for fixed_mm cleanup logic (tail merge and optional two-fold rebalance)
-    blocked_cv_min_test_block_mm = 5.0  # minimum held-out physical span (mm) per fold for fixed_mm cleanup logic (tail merge and optional two-fold rebalance)
-    blocked_cv_min_effective_folds_after_merge = 2  # tiny-tail merge guard: do not collapse a biopsy below this many folds
-    blocked_cv_rebalance_two_fold_splits = True  # fixed_mm only: if exactly 2 folds remain and one violates min_test_* thresholds, rebalance to contiguous n/n or n/(n+1) voxel folds
-    blocked_cv_kernel_specs = [
-        ("matern", 1.5, "matern_nu_1_5"),
-        ("matern", 2.5, "matern_nu_2_5"),
-        ("rbf", None, "rbf"),
-        ("exp", None, "exp"),
-    ]  # kernel loop for blocked_CV runs
-    write_blocked_cv_per_kernel_predictions_csvs = False  # optional: write per-kernel slices in addition to *_all predictions CSV
-    write_blocked_cv_per_kernel_fit_status_csvs = False  # optional: write per-kernel slices in addition to *_all fold-status CSV
-    write_blocked_cv_per_kernel_variance_compare_csvs = False  # optional: write per-kernel slices in addition to *_all variance-compare CSV
-    write_blocked_cv_per_kernel_variance_summary_csvs = False  # optional: write per-kernel slices in addition to *_all variance-summary CSV
-
-    # plotting options
-    include_kernel_legend_in_primary_histograms = True
-
-    # csv output options for GP metrics and calibration results, should we produce redunadant csvs for each kernel and other split csvs (they are redundant, they are essentially just different slices of the same dataframe)
-    # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
-    write_split_main_cohort_summary_csvs = False
-    write_sensitivity_per_kernel_metrics_csvs = False
-    write_sensitivity_per_kernel_calibration_csvs = False
-
-    # Baseline kernel selection (change here to switch kernels globally)
-    #   ("matern", 1.5) -> Matérn ν = 3/2 (default)
-    #   ("matern", 2.5) -> Matérn ν = 5/2
-    #   ("rbf", None)   -> RBF / squared-exponential
-    #   ("exp", None)   -> Exponential (approximately Matérn ν = 0.5)
-    BASE_KERNEL_SPEC = ("rbf", None) # turns out RBF is best based on sensitivity analysis
+    # --- Baseline kernel identity + kernel metadata ---
+    # Recommended default from sensitivity runs on this cohort.
+    BASE_KERNEL_SPEC = ("rbf", None)  # options: ("matern", 1.5), ("matern", 2.5), ("rbf", None), ("exp", None)
     _KERNEL_LABEL_MAP = {
         ("matern", 1.5): "matern_nu_1_5",
         ("matern", 2.5): "matern_nu_2_5",
@@ -126,13 +92,65 @@ def main():
     if BASE_KERNEL_SPEC not in _KERNEL_LABEL_MAP:
         raise ValueError(f"Unsupported BASE_KERNEL_SPEC {BASE_KERNEL_SPEC}. Update _KERNEL_LABEL_MAP to include it.")
     BASE_KERNEL_LABEL = _KERNEL_LABEL_MAP[BASE_KERNEL_SPEC]
-    # Consistent kernel colors across sensitivity plots
     KERNEL_COLOR_MAP = {
         "matern_nu_1_5": "#0b3b8a",  # blue
         "matern_nu_2_5": "#c75000",  # orange
         "rbf": "#2a9d8f",            # green
         "exp": "#7a5195",            # purple
-    }
+    }  # consistent kernel colors across sensitivity/calibration plot families
+
+    # --- Kernel sensitivity + baseline calibration controls ---
+    # When full sensitivity is off, these still control baseline-only calibration outputs.
+    calibration_mean_bounds = (-1.0, 1.0)  # heuristic acceptable range for mean standardized residual per biopsy
+    calibration_sd_bounds = (0.5, 1.5)  # heuristic acceptable range for SD of standardized residual per biopsy
+    calibration_modes_list = [("histogram",), ("histogram", "kde"), ("kde",)]  # output variants for calibration plots
+
+    # --- blocked_CV controls ---
+    blocked_cv_output_subdir = "blocked_CV"  # output_data_GPR_analysis subfolder for blocked_CV artifacts
+
+    # Recommended default: fixed_mm with explicit block length.
+    # Rationale: in spatial models, holdout difficulty is governed by physical
+    # separation distance, not raw voxel count.
+    blocked_cv_block_mode = "fixed_mm"  # options: "equal_voxels", "fixed_mm"
+    blocked_cv_n_folds = 5  # equal_voxels: direct fold count; fixed_mm + block_length_mm=None: derive length from span / n_folds
+    blocked_cv_min_derived_block_mm = 5.0  # fixed_mm + block_length_mm=None only: floor on derived block length
+    blocked_cv_block_length_mm = 8.0  # fixed_mm only: explicit block length in mm; set None to derive from span / n_folds
+
+    # fixed_mm cleanup controls
+    blocked_cv_merge_tiny_tail_folds = True  # fixed_mm only: merge tiny remainder tail folds
+    blocked_cv_min_test_voxels = 3  # fixed_mm cleanup threshold: minimum held-out voxel count per fold
+    blocked_cv_min_test_block_mm = 5.0  # fixed_mm cleanup threshold: minimum held-out physical span (mm) per fold
+    blocked_cv_min_effective_folds_after_merge = 2  # fixed_mm cleanup guard: never collapse below this effective fold count
+    blocked_cv_rebalance_two_fold_splits = True  # fixed_mm only: if 2 folds remain and one violates min_test_* threshold, rebalance to contiguous n/n or n/(n+1) folds
+
+    blocked_cv_target_stat = gp_target_stat  # options: "median", "mean"; blocked_CV target summary statistic
+    blocked_cv_mean_mode = gp_mean_mode  # options: "ordinary", "zero"; blocked_CV mean-mode for GP posterior
+    blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; canonical blocked_CV standardization mode
+    # Recommended default: observed_mc for observed-target calibration reporting.
+    # Rationale: denominator matches uncertainty of the observed MC summary target.
+    blocked_cv_compare_variance_modes = True  # if True, also score additional variance modes on identical folds/predictions
+    blocked_cv_variance_modes_to_compare = ["latent", "observed_mc"]  # each entry must be one of: "latent", "observed_mc", "observed_mc_plus_nugget"
+    blocked_cv_kernel_specs = [
+        ("matern", 1.5, "matern_nu_1_5"),
+        ("matern", 2.5, "matern_nu_2_5"),
+        ("rbf", None, "rbf"),
+        ("exp", None, "exp"),
+    ]  # kernel list for blocked_CV run loop
+
+    # blocked_CV optional per-kernel slices (all are strict subsets of *_all)
+    write_blocked_cv_per_kernel_predictions_csvs = False
+    write_blocked_cv_per_kernel_fit_status_csvs = False
+    write_blocked_cv_per_kernel_variance_compare_csvs = False
+    write_blocked_cv_per_kernel_variance_summary_csvs = False
+
+    # --- Plot presentation toggles ---
+    include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
+
+    # --- CSV output toggles ---
+    # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
+    write_split_main_cohort_summary_csvs = False  # if True, write cohort summary split CSVs in addition to consolidated summary
+    write_sensitivity_per_kernel_metrics_csvs = False  # if True, write per-kernel metric slices for sensitivity lane
+    write_sensitivity_per_kernel_calibration_csvs = False  # if True, write per-kernel calibration slices for sensitivity lane
 
 
 
@@ -515,17 +533,16 @@ def main():
     _print_section("GP: Run per-biopsy + metrics")
     # Run per-biopsy Matérn GP on the filtered cohort, derive per-biopsy metrics,
     # and write cohort-level summary/rollup CSVs (metrics, summary numbers, patient rollups).
-    position_mode = "begin"  # use voxel begin positions for plotting/GP (options: "center", "begin")
     nu_arg = BASE_KERNEL_SPEC[1] if BASE_KERNEL_SPEC[0] == "matern" else None
     results, metrics_df, cohort_summary_df, by_patient = GPR_analysis_helpers.run_gp_and_collect_metrics(
         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
         semivariogram_df=semivariogram_df,
         output_dir=output_dir,
-        target_stat="median",  # or "mean"
+        target_stat=gp_target_stat,
         nu=nu_arg,
         kernel_spec=BASE_KERNEL_SPEC,
         kernel_label=BASE_KERNEL_LABEL,
-        position_mode=position_mode,
+        position_mode=gp_position_mode,
         mean_mode=gp_mean_mode,
         save_split_cohort_summary_csvs=write_split_main_cohort_summary_csvs,
     )
@@ -564,8 +581,8 @@ def main():
             output_dir=kernel_sens_dir,
             figs_dir=kernel_figs_dir,
             csv_dir=kernel_csv_dir,
-            target_stat="median",
-            position_mode=position_mode,
+            target_stat=gp_target_stat,
+            position_mode=gp_position_mode,
             mean_mode=gp_mean_mode,
             kernel_color_map=KERNEL_COLOR_MAP,
             save_per_kernel_metrics_csvs=write_sensitivity_per_kernel_metrics_csvs,
@@ -578,8 +595,8 @@ def main():
         
         calib_df_base = GPR_calibration.build_calibration_metrics(
             results,
-            mean_bounds=(-1.0, 1.0),
-            sd_bounds=(0.5, 1.5),
+            mean_bounds=calibration_mean_bounds,
+            sd_bounds=calibration_sd_bounds,
         )
         calib_csv_base = kernel_csv_dir / f"calibration_metrics_{BASE_KERNEL_LABEL}.csv"
         calib_df_base.to_csv(calib_csv_base, index=False)
@@ -589,9 +606,9 @@ def main():
             calib_df=calib_df_base,
             save_dir=calib_fig_dir_base,
             save_formats=("pdf", "svg"),
-            mean_bounds=(-1.0, 1.0),
-            sd_bounds=(0.5, 1.5),
-            modes_list=[("histogram",), ("histogram", "kde"), ("kde",)],
+            mean_bounds=calibration_mean_bounds,
+            sd_bounds=calibration_sd_bounds,
+            modes_list=calibration_modes_list,
             kernel_color_map=KERNEL_COLOR_MAP,
             kernel_suffix=BASE_KERNEL_LABEL,
         )
