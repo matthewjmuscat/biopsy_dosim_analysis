@@ -643,6 +643,7 @@ def _compute_fold_metrics_from_predictions(
     meta_cols = [
         "gp_mean_mode",
         "target_stat",
+        "primary_predictive_variance_mode",
         "block_mode",
         "position_mode",
         "split_strategy",
@@ -718,6 +719,198 @@ def _compute_fold_metrics_from_predictions(
                 "nlpd_mean": nlpd_mean,
             }
         )
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def _compute_biopsy_metrics_from_predictions(
+    pred_df: pd.DataFrame,
+    *,
+    variance_mode_col: str,
+) -> pd.DataFrame:
+    """
+    Aggregate held-out point predictions into one row per biopsy group.
+
+    Biopsy metrics are computed from concatenated held-out points across all folds
+    for a given biopsy/kernel/variance-mode group.
+    """
+    if pred_df.empty:
+        return pd.DataFrame()
+    if variance_mode_col not in pred_df.columns:
+        raise ValueError(f"Missing required variance-mode column '{variance_mode_col}' in predictions table.")
+
+    group_cols = [
+        "Patient ID",
+        "Bx ID",
+        "Bx index",
+        "kernel_label",
+        "kernel_name",
+        "kernel_param",
+        variance_mode_col,
+    ]
+    group_cols = [c for c in group_cols if c in pred_df.columns]
+
+    meta_cols = [
+        "gp_mean_mode",
+        "target_stat",
+        "primary_predictive_variance_mode",
+        "block_mode",
+        "position_mode",
+        "cv_n_folds",
+        "cv_block_length_mm",
+        "cv_min_derived_block_mm",
+        "cv_merge_tiny_tail_folds",
+        "cv_rebalance_two_fold_splits",
+        "cv_min_test_voxels",
+        "cv_min_test_block_mm",
+        "cv_min_effective_folds_after_merge",
+    ]
+    meta_cols = [c for c in meta_cols if c in pred_df.columns]
+
+    rows = []
+    for keys, g in pred_df.groupby(group_cols, sort=True, dropna=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        row = {col: val for col, val in zip(group_cols, keys)}
+        if variance_mode_col in row and variance_mode_col != "variance_mode":
+            row["variance_mode"] = row[variance_mode_col]
+        for col in meta_cols:
+            row[col] = g[col].iloc[0]
+
+        residual = pd.to_numeric(g.get("residual", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        rstd = pd.to_numeric(g.get("rstd", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        var_pred_used = pd.to_numeric(g.get("var_pred_used", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        resid_v = residual[np.isfinite(residual)]
+        rstd_v = rstd[np.isfinite(rstd)]
+
+        valid_nlpd = np.isfinite(residual) & np.isfinite(var_pred_used)
+        eps = 1e-12
+        if np.any(valid_nlpd):
+            resid_nlpd = residual[valid_nlpd]
+            var_nlpd = np.maximum(var_pred_used[valid_nlpd], eps)
+            nlpd = 0.5 * np.log(2.0 * np.pi * var_nlpd) + 0.5 * ((resid_nlpd ** 2) / var_nlpd)
+            nlpd_mean = float(np.mean(nlpd))
+        else:
+            nlpd_mean = np.nan
+
+        n_points = int(len(g))
+        n_residual_valid = int(resid_v.size)
+        n_rstd_valid = int(rstd_v.size)
+        n_nlpd_valid = int(np.sum(valid_nlpd))
+        n_abs_le1 = int(np.sum(np.abs(rstd_v) <= 1.0)) if n_rstd_valid else 0
+        n_abs_le2 = int(np.sum(np.abs(rstd_v) <= 2.0)) if n_rstd_valid else 0
+        n_abs_ge3 = int(np.sum(np.abs(rstd_v) >= 3.0)) if n_rstd_valid else 0
+        n_folds_contributing = int(
+            g[["Patient ID", "Bx index", "fold_id"]].drop_duplicates().shape[0]
+        ) if {"Patient ID", "Bx index", "fold_id"}.issubset(g.columns) else np.nan
+
+        row.update(
+            {
+                "n_points": n_points,
+                "n_folds_contributing": n_folds_contributing,
+                "n_residual_valid": n_residual_valid,
+                "n_rstd_valid": n_rstd_valid,
+                "n_nlpd_valid": n_nlpd_valid,
+                "mean_residual": float(np.mean(resid_v)) if n_residual_valid else np.nan,
+                "rmse": float(np.sqrt(np.mean(resid_v ** 2))) if n_residual_valid else np.nan,
+                "mae": float(np.mean(np.abs(resid_v))) if n_residual_valid else np.nan,
+                "mean_rstd": float(np.mean(rstd_v)) if n_rstd_valid else np.nan,
+                "sd_rstd": float(np.std(rstd_v, ddof=0)) if n_rstd_valid else np.nan,
+                "n_abs_le1": n_abs_le1,
+                "n_abs_le2": n_abs_le2,
+                "n_abs_ge3": n_abs_ge3,
+                "pct_abs_le1": float(100.0 * n_abs_le1 / n_rstd_valid) if n_rstd_valid else np.nan,
+                "pct_abs_le2": float(100.0 * n_abs_le2 / n_rstd_valid) if n_rstd_valid else np.nan,
+                "pct_abs_ge3": float(100.0 * n_abs_ge3 / n_rstd_valid) if n_rstd_valid else np.nan,
+                "nlpd_mean": nlpd_mean,
+            }
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def _compute_cohort_summary_from_biopsy_metrics(biopsy_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Summarize biopsy-level metrics across biopsies per kernel/variance-mode group.
+    """
+    if biopsy_df.empty:
+        return pd.DataFrame()
+
+    group_cols = [
+        "kernel_label",
+        "kernel_name",
+        "kernel_param",
+        "variance_mode",
+        "gp_mean_mode",
+        "target_stat",
+        "primary_predictive_variance_mode",
+        "block_mode",
+        "position_mode",
+        "cv_n_folds",
+        "cv_block_length_mm",
+        "cv_min_derived_block_mm",
+        "cv_merge_tiny_tail_folds",
+        "cv_rebalance_two_fold_splits",
+        "cv_min_test_voxels",
+        "cv_min_test_block_mm",
+        "cv_min_effective_folds_after_merge",
+    ]
+    group_cols = [c for c in group_cols if c in biopsy_df.columns]
+
+    metric_cols = [
+        "n_points",
+        "n_folds_contributing",
+        "n_residual_valid",
+        "n_rstd_valid",
+        "n_nlpd_valid",
+        "mean_residual",
+        "rmse",
+        "mae",
+        "mean_rstd",
+        "sd_rstd",
+        "n_abs_le1",
+        "n_abs_le2",
+        "n_abs_ge3",
+        "pct_abs_le1",
+        "pct_abs_le2",
+        "pct_abs_ge3",
+        "nlpd_mean",
+    ]
+    metric_cols = [c for c in metric_cols if c in biopsy_df.columns]
+
+    rows = []
+    for keys, g in biopsy_df.groupby(group_cols, sort=True, dropna=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        row = {col: val for col, val in zip(group_cols, keys)}
+        row["n_biopsies"] = int(len(g))
+
+        for col in metric_cols:
+            arr = pd.to_numeric(g[col], errors="coerce").to_numpy(float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size == 0:
+                row[f"{col}_mean"] = np.nan
+                row[f"{col}_median"] = np.nan
+                row[f"{col}_q05"] = np.nan
+                row[f"{col}_q25"] = np.nan
+                row[f"{col}_q75"] = np.nan
+                row[f"{col}_q95"] = np.nan
+                row[f"{col}_iqr"] = np.nan
+                continue
+            q05 = float(np.quantile(arr, 0.05))
+            q25 = float(np.quantile(arr, 0.25))
+            q75 = float(np.quantile(arr, 0.75))
+            q95 = float(np.quantile(arr, 0.95))
+            row[f"{col}_mean"] = float(np.mean(arr))
+            row[f"{col}_median"] = float(np.median(arr))
+            row[f"{col}_q05"] = q05
+            row[f"{col}_q25"] = q25
+            row[f"{col}_q75"] = q75
+            row[f"{col}_q95"] = q95
+            row[f"{col}_iqr"] = float(q75 - q25)
+
         rows.append(row)
 
     return pd.DataFrame(rows)
@@ -1043,6 +1236,7 @@ def run_blocked_cv_phase3c_smoke(
                             "cv_min_test_voxels": int(config.min_test_voxels),
                             "cv_min_test_block_mm": float(config.min_test_block_mm),
                             "cv_min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
+                            "primary_predictive_variance_mode": primary_mode,
                             "predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
                             "split_strategy": fold_split_strategy,
@@ -1329,6 +1523,40 @@ def run_blocked_cv_phase3c_smoke(
         )
         compare_fold_metrics_df.to_csv(compare_fold_metrics_path, index=False)
 
+    # Phase 4C: biopsy-level pooled metrics (concatenate held-out points across folds).
+    biopsy_metrics_df = _compute_biopsy_metrics_from_predictions(
+        pred_df,
+        variance_mode_col="predictive_variance_mode",
+    )
+    biopsy_metrics_path = csv_subdirs["metrics"].joinpath("blocked_cv_biopsy_metrics_all.csv")
+    biopsy_metrics_df.to_csv(biopsy_metrics_path, index=False)
+
+    compare_biopsy_metrics_df = pd.DataFrame()
+    compare_biopsy_metrics_path = None
+    if config.compare_variance_modes:
+        compare_biopsy_metrics_df = _compute_biopsy_metrics_from_predictions(
+            compare_df,
+            variance_mode_col="variance_mode",
+        )
+        compare_biopsy_metrics_path = csv_subdirs["metrics"].joinpath(
+            "blocked_cv_biopsy_metrics_variance_compare_all.csv"
+        )
+        compare_biopsy_metrics_df.to_csv(compare_biopsy_metrics_path, index=False)
+
+    # Phase 4D: cohort summaries from biopsy-level metrics.
+    cohort_summary_df = _compute_cohort_summary_from_biopsy_metrics(biopsy_metrics_df)
+    cohort_summary_path = csv_subdirs["metrics"].joinpath("blocked_cv_cohort_summary_all.csv")
+    cohort_summary_df.to_csv(cohort_summary_path, index=False)
+
+    compare_cohort_summary_df = pd.DataFrame()
+    compare_cohort_summary_path = None
+    if config.compare_variance_modes:
+        compare_cohort_summary_df = _compute_cohort_summary_from_biopsy_metrics(compare_biopsy_metrics_df)
+        compare_cohort_summary_path = csv_subdirs["metrics"].joinpath(
+            "blocked_cv_cohort_summary_variance_compare_all.csv"
+        )
+        compare_cohort_summary_df.to_csv(compare_cohort_summary_path, index=False)
+
     # Optional per-kernel slices (subsets of centralized *_all outputs).
     kernel_labels_run = sorted(pd.unique(pred_df["kernel_label"])) if not pred_df.empty else []
     if config.write_per_kernel_predictions_csvs and not pred_df.empty:
@@ -1374,13 +1602,21 @@ def run_blocked_cv_phase3c_smoke(
         "point_predictions_csv": str(pred_path),
         "fold_fit_status_csv": str(status_path),
         "fold_metrics_csv": str(fold_metrics_path),
+        "biopsy_metrics_csv": str(biopsy_metrics_path),
+        "cohort_summary_csv": str(cohort_summary_path),
         "point_predictions_compare_csv": str(compare_path) if compare_path is not None else None,
         "fold_metrics_compare_csv": str(compare_fold_metrics_path) if compare_fold_metrics_path is not None else None,
+        "biopsy_metrics_compare_csv": str(compare_biopsy_metrics_path) if compare_biopsy_metrics_path is not None else None,
+        "cohort_summary_compare_csv": str(compare_cohort_summary_path) if compare_cohort_summary_path is not None else None,
         "variance_mode_summary_csv": str(compare_summary_path) if compare_summary_path is not None else None,
         "n_point_prediction_rows": int(len(pred_df)),
         "n_fold_metrics_rows": int(len(fold_metrics_df)),
+        "n_biopsy_metrics_rows": int(len(biopsy_metrics_df)),
+        "n_cohort_summary_rows": int(len(cohort_summary_df)),
         "n_point_prediction_compare_rows": int(len(compare_df)),
         "n_fold_metrics_compare_rows": int(len(compare_fold_metrics_df)),
+        "n_biopsy_metrics_compare_rows": int(len(compare_biopsy_metrics_df)),
+        "n_cohort_summary_compare_rows": int(len(compare_cohort_summary_df)),
         "n_fold_status_rows": int(len(fold_status_df)),
         "n_fold_status_ok": int((fold_status_df.get("status", pd.Series(dtype=str)) == "ok").sum()) if len(fold_status_df) else 0,
         "n_fold_status_error": int((fold_status_df.get("status", pd.Series(dtype=str)) == "error").sum()) if len(fold_status_df) else 0,
