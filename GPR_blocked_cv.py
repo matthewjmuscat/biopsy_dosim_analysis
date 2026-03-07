@@ -27,6 +27,7 @@ class BlockedCVConfig:
     min_test_voxels: int = 1
     min_test_block_mm: float = 0.0
     min_effective_folds_after_merge: int = 2
+    rebalance_two_fold_splits: bool = False
     position_mode: str = "begin"
     target_stat: str = "median"
     mean_mode: str = "ordinary"
@@ -87,6 +88,7 @@ def run_blocked_cv_scaffold(
         "n_folds": int(config.n_folds),
         "min_derived_block_mm": float(config.min_derived_block_mm),
         "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+        "rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
         "min_test_voxels": int(config.min_test_voxels),
         "min_test_block_mm": float(config.min_test_block_mm),
         "min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
@@ -167,6 +169,61 @@ def _assign_folds_fixed_mm(
     return fold_ids.astype(int)
 
 
+def _rebalance_two_fold_splits_by_voxel_count(
+    fold_ids: np.ndarray,
+    x_mm: np.ndarray,
+    *,
+    min_test_voxels: int,
+    min_test_block_mm: float,
+) -> tuple[np.ndarray, bool]:
+    """
+    Rebalance fixed-mm two-fold cases into near-equal contiguous voxel-count halves.
+
+    This avoids pathological tiny second folds when fixed bins leave short remainders.
+    The override only triggers when exactly two folds exist and one fold violates
+    count/span thresholds.
+    """
+    ids = np.asarray(fold_ids, dtype=int).copy()
+    x = np.asarray(x_mm, dtype=float)
+    uniq = np.sort(np.unique(ids))
+    if uniq.size != 2:
+        return ids, False
+
+    min_vox = max(int(min_test_voxels), 1)
+    min_span = max(float(min_test_block_mm), 0.0)
+
+    def _fold_metrics(mask: np.ndarray) -> tuple[int, float]:
+        n = int(mask.sum())
+        if n > 1 and np.any(np.isfinite(x[mask])):
+            span = float(np.nanmax(x[mask]) - np.nanmin(x[mask]))
+        else:
+            span = 0.0
+        return n, span
+
+    m1 = ids == int(uniq[0])
+    m2 = ids == int(uniq[1])
+    n1, s1 = _fold_metrics(m1)
+    n2, s2 = _fold_metrics(m2)
+    need_rebalance = (n1 < min_vox) or (n2 < min_vox) or (s1 < min_span) or (s2 < min_span)
+    if not need_rebalance:
+        return ids, False
+
+    # Split contiguously by ordered axial position to n/n or n/(n+1).
+    order = np.argsort(x, kind="stable")
+    n = int(len(order))
+    if n < 2:
+        return ids, False
+    n_left = n // 2
+    if n_left < 1 or (n - n_left) < 1:
+        return ids, False
+
+    left_id, right_id = int(uniq[0]), int(uniq[1])
+    new_ids = np.empty(n, dtype=int)
+    new_ids[order[:n_left]] = left_id
+    new_ids[order[n_left:]] = right_id
+    return new_ids, True
+
+
 def _merge_tiny_tail_fold_ids(
     fold_ids: np.ndarray,
     x_mm: np.ndarray,
@@ -242,6 +299,8 @@ def build_blocked_cv_fold_map(
         if n_vox == 0:
             continue
         merged_tail_fold = False
+        rebalance_two_fold_applied = False
+        split_strategy = config.block_mode
 
         if config.block_mode == "equal_voxels":
             fold_of_voxel = _assign_folds_equal_voxels(n_vox, config.n_folds)
@@ -260,6 +319,19 @@ def build_blocked_cv_fold_map(
                     min_test_block_mm=config.min_test_block_mm,
                     min_effective_folds_after_merge=config.min_effective_folds_after_merge,
                 )
+            if config.rebalance_two_fold_splits:
+                fold_of_voxel, rebalance_two_fold_applied = _rebalance_two_fold_splits_by_voxel_count(
+                    fold_of_voxel,
+                    vox["x_mm"].to_numpy(float),
+                    min_test_voxels=config.min_test_voxels,
+                    min_test_block_mm=config.min_test_block_mm,
+                )
+            if rebalance_two_fold_applied:
+                split_strategy = "fixed_mm_rebalanced_two_fold"
+            elif merged_tail_fold:
+                split_strategy = "fixed_mm_tail_merge"
+            else:
+                split_strategy = "fixed_mm"
         else:
             raise ValueError(
                 f"Unsupported blocked_CV block_mode '{config.block_mode}'. "
@@ -301,6 +373,8 @@ def build_blocked_cv_fold_map(
                     "train_test_total_match": train_test_total_match,
                     "effective_n_folds": effective_n_folds,
                     "merged_tail_fold": bool(merged_tail_fold),
+                    "rebalanced_two_fold_split": bool(rebalance_two_fold_applied),
+                    "split_strategy": split_strategy,
                     "test_z_min_mm": z_min,
                     "test_z_max_mm": z_max,
                     "test_span_mm": test_span_mm,
@@ -328,6 +402,8 @@ def build_blocked_cv_fold_map(
                         "train_test_total_match": train_test_total_match,
                         "effective_n_folds": effective_n_folds,
                         "merged_tail_fold": bool(merged_tail_fold),
+                        "rebalanced_two_fold_split": bool(rebalance_two_fold_applied),
+                        "split_strategy": split_strategy,
                         "test_z_min_mm": z_min,
                         "test_z_max_mm": z_max,
                         "test_span_mm": test_span_mm,
@@ -372,6 +448,14 @@ def run_blocked_cv_phase3b(
         )
     else:
         merged_bx_count = 0
+    if not fold_summary_df.empty and {"Patient ID", "Bx index", "rebalanced_two_fold_split"}.issubset(fold_summary_df.columns):
+        rebalanced_two_fold_bx_count = int(
+            fold_summary_df.loc[fold_summary_df["rebalanced_two_fold_split"], ["Patient ID", "Bx index"]]
+            .drop_duplicates()
+            .shape[0]
+        )
+    else:
+        rebalanced_two_fold_bx_count = 0
 
     status = {
         "phase": "3B_fold_map",
@@ -387,10 +471,12 @@ def run_blocked_cv_phase3b(
         "n_folds": int(config.n_folds),
         "min_derived_block_mm": float(config.min_derived_block_mm),
         "merge_tiny_tail_folds": bool(config.merge_tiny_tail_folds),
+        "rebalance_two_fold_splits": bool(config.rebalance_two_fold_splits),
         "min_test_voxels": int(config.min_test_voxels),
         "min_test_block_mm": float(config.min_test_block_mm),
         "min_effective_folds_after_merge": int(config.min_effective_folds_after_merge),
         "n_biopsies_with_merged_tail": merged_bx_count,
+        "n_biopsies_with_rebalanced_two_fold_split": rebalanced_two_fold_bx_count,
         "position_mode": config.position_mode,
         "target_stat": config.target_stat,
         "mean_mode": config.mean_mode,
@@ -543,6 +629,16 @@ def run_blocked_cv_phase3c_smoke(
                 (all_voxel_wise_dose_df["Patient ID"] == patient_id)
                 & (all_voxel_wise_dose_df["Bx index"] == bx_index)
             ].copy()
+            fold_split_strategy = (
+                str(fold_rows["split_strategy"].iloc[0])
+                if ("split_strategy" in fold_rows.columns and not fold_rows.empty)
+                else ""
+            )
+            fold_rebalanced_two_fold_split = (
+                bool(fold_rows["rebalanced_two_fold_split"].iloc[0])
+                if ("rebalanced_two_fold_split" in fold_rows.columns and not fold_rows.empty)
+                else False
+            )
             n_total_voxels_bx = int(g_bx["Voxel index"].nunique()) if "Voxel index" in g_bx.columns else None
             n_train_expected = int(fold_rows["n_train"].iloc[0]) if ("n_train" in fold_rows.columns and not fold_rows.empty) else None
             n_test_expected = int(fold_rows["n_test"].iloc[0]) if ("n_test" in fold_rows.columns and not fold_rows.empty) else None
@@ -570,6 +666,8 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": kernel_param,
                         "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
+                        "split_strategy": fold_split_strategy,
+                        "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                         "status": "skipped",
                         "message": "no test voxels",
                         "n_total_voxels_bx": n_total_voxels_bx,
@@ -633,6 +731,8 @@ def run_blocked_cv_phase3c_smoke(
                             "kernel_param": kernel_param,
                             "primary_predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
+                            "split_strategy": fold_split_strategy,
+                            "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                             "status": "skipped",
                             "message": f"insufficient voxels (train={n_train_actual}, test={n_test_actual})",
                             "n_total_voxels_bx": n_total_voxels_bx,
@@ -671,6 +771,8 @@ def run_blocked_cv_phase3c_smoke(
                             "kernel_param": kernel_param,
                             "primary_predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
+                            "split_strategy": fold_split_strategy,
+                            "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                             "status": "skipped",
                             "message": f"insufficient semivariogram bins (n={len(sv_train)})",
                             "n_total_voxels_bx": n_total_voxels_bx,
@@ -746,6 +848,8 @@ def run_blocked_cv_phase3c_smoke(
                             "target_stat": config.target_stat,
                             "predictive_variance_mode": primary_mode,
                             "variance_modes_scored": "|".join(scored_modes),
+                            "split_strategy": fold_split_strategy,
+                            "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                             "n_train_voxels": n_train_actual,
                             "n_test_voxels": n_test_actual,
                             "n_total_voxels_bx": n_total_voxels_bx,
@@ -789,6 +893,8 @@ def run_blocked_cv_phase3c_smoke(
                                     "abs_res_over_sd_used": abs_res / max(float(sd_m[i]), 1e-12),
                                     "gp_mean_mode": config.mean_mode,
                                     "target_stat": config.target_stat,
+                                    "split_strategy": fold_split_strategy,
+                                    "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                                     "n_train_voxels": n_train_actual,
                                     "n_test_voxels": n_test_actual,
                                     "n_total_voxels_bx": n_total_voxels_bx,
@@ -817,6 +923,8 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": kernel_param,
                         "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
+                        "split_strategy": fold_split_strategy,
+                        "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                         "status": "ok",
                         "message": "",
                         "n_total_voxels_bx": n_total_voxels_bx,
@@ -844,6 +952,8 @@ def run_blocked_cv_phase3c_smoke(
                         "kernel_param": kernel_param,
                         "primary_predictive_variance_mode": primary_mode,
                         "variance_modes_scored": "|".join(scored_modes),
+                        "split_strategy": fold_split_strategy,
+                        "rebalanced_two_fold_split": fold_rebalanced_two_fold_split,
                         "status": "error",
                         "message": str(e),
                         "n_total_voxels_bx": n_total_voxels_bx,
@@ -872,6 +982,8 @@ def run_blocked_cv_phase3c_smoke(
             "kernel_param",
             "primary_predictive_variance_mode",
             "variance_modes_scored",
+            "split_strategy",
+            "rebalanced_two_fold_split",
             "status",
             "message",
             "n_train_voxels",
