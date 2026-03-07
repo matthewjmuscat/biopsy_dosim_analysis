@@ -757,7 +757,12 @@ def run_blocked_cv_phase3c_smoke(
         summary_rows = []
         if not compare_df.empty and "variance_mode" in compare_df.columns:
             grp_cols = ["kernel_label", "kernel_name", "kernel_param", "variance_mode"]
-            for (k_label, k_name, k_param, mode), g_mode in compare_df.groupby(grp_cols, sort=True):
+            # Keep NaN kernel_param groups (rbf/exp have kernel_param=None).
+            for (k_label, k_name, k_param, mode), g_mode in compare_df.groupby(
+                grp_cols,
+                sort=True,
+                dropna=False,
+            ):
                 rstd = pd.to_numeric(g_mode["rstd"], errors="coerce").to_numpy(float)
                 valid = np.isfinite(rstd)
                 rstd_v = rstd[valid]
