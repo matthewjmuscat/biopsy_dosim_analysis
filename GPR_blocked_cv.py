@@ -43,6 +43,21 @@ class BlockedCVConfig:
     write_per_kernel_fit_status_csvs: bool = False
     write_per_kernel_variance_compare_csvs: bool = False
     write_per_kernel_variance_summary_csvs: bool = False
+    plot_patient_bx_list: Iterable[Tuple[str, int]] | None = None
+    plot_grid_ncols: int = 2
+    plot_grid_label_map: dict[Tuple[str, int], str] | None = None
+    plot_fold_ids: Iterable[int] | None = None
+    plot_max_folds_per_biopsy: int | None = None
+    plot_fold_sort_mode: str = "fold_id"
+    plot_include_merged_tail_folds: bool = True
+    plot_include_rebalanced_two_fold_splits: bool = True
+    plot_kernel_labels: Iterable[str] | None = None
+    plot_variance_mode: str = "primary"
+    plot_make_paired_semivariogram_profile: bool = True
+    plot_make_semivariogram_grids: bool = True
+    plot_make_profile_grids: bool = True
+    plot_write_report_figures: bool = True
+    plot_write_diagnostic_figures: bool = False
 
 
 def init_blocked_cv_dirs(output_dir: Path, subdir_name: str = "blocked_CV") -> tuple[Path, Path, Path]:
@@ -1989,4 +2004,19 @@ def run_blocked_cv_plots(
         "status": "not_implemented",
         "figs_dir": str(figs_dir),
         "n_point_prediction_rows_available": n_pred,
+        "plot_patient_bx_list": (list(config.plot_patient_bx_list) if config.plot_patient_bx_list is not None else None),
+        "plot_grid_ncols": int(config.plot_grid_ncols),
+        "plot_grid_label_map_size": (len(config.plot_grid_label_map) if config.plot_grid_label_map is not None else 0),
+        "plot_fold_ids": (list(config.plot_fold_ids) if config.plot_fold_ids is not None else None),
+        "plot_max_folds_per_biopsy": (int(config.plot_max_folds_per_biopsy) if config.plot_max_folds_per_biopsy is not None else None),
+        "plot_fold_sort_mode": config.plot_fold_sort_mode,
+        "plot_include_merged_tail_folds": bool(config.plot_include_merged_tail_folds),
+        "plot_include_rebalanced_two_fold_splits": bool(config.plot_include_rebalanced_two_fold_splits),
+        "plot_kernel_labels": (list(config.plot_kernel_labels) if config.plot_kernel_labels is not None else None),
+        "plot_variance_mode": config.plot_variance_mode,
+        "plot_make_paired_semivariogram_profile": bool(config.plot_make_paired_semivariogram_profile),
+        "plot_make_semivariogram_grids": bool(config.plot_make_semivariogram_grids),
+        "plot_make_profile_grids": bool(config.plot_make_profile_grids),
+        "plot_write_report_figures": bool(config.plot_write_report_figures),
+        "plot_write_diagnostic_figures": bool(config.plot_write_diagnostic_figures),
     }

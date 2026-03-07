@@ -149,6 +149,33 @@ def main():
     write_blocked_cv_per_kernel_variance_compare_csvs = False
     write_blocked_cv_per_kernel_variance_summary_csvs = False
 
+    # blocked_CV plotting controls (independent from baseline plotting knobs)
+    blocked_cv_plot_patient_bx_list = [
+        ("189 (F2)", 0),
+        ("200 (F2)", 0),
+        ("201 (F2)", 1),
+        ("198 (F2)", 0),
+    ]  # grid subset for blocked_CV figures; set None to skip grid subset restriction
+    blocked_cv_plot_grid_ncols = 2  # number of columns for blocked_CV grid layouts
+    blocked_cv_plot_grid_label_map = {
+        ("189 (F2)", 0): "Biopsy 3",
+        ("200 (F2)", 0): "Biopsy 4",
+        ("201 (F2)", 1): "Biopsy 5",
+        ("198 (F2)", 0): "Biopsy 6",
+    }  # optional blocked_CV label overrides for grid figures
+    blocked_cv_plot_fold_ids = None  # None -> all folds; or explicit list (e.g., [0, 1])
+    blocked_cv_plot_max_folds_per_biopsy = None  # None -> no cap; otherwise limit folds shown per biopsy
+    blocked_cv_plot_fold_sort_mode = "fold_id"  # options: "fold_id", "z_start_mm"; deterministic fold display order
+    blocked_cv_plot_include_merged_tail_folds = True  # if False, exclude merged-tail folds from blocked_CV figure generation
+    blocked_cv_plot_include_rebalanced_two_fold_splits = True  # if False, exclude rebalanced-two-fold cases from blocked_CV figure generation
+    blocked_cv_plot_kernel_labels = None  # None -> all kernels from blocked_CV run; or explicit subset list
+    blocked_cv_plot_variance_mode = "primary"  # options: "primary", "latent", "observed_mc", "observed_mc_plus_nugget"
+    blocked_cv_plot_make_paired_semivariogram_profile = True  # if True, produce blocked_CV paired semivariogram/profile figures
+    blocked_cv_plot_make_semivariogram_grids = True  # if True, produce blocked_CV semivariogram-only grids
+    blocked_cv_plot_make_profile_grids = True  # if True, produce blocked_CV profile-only grids
+    blocked_cv_plot_write_report_figures = True  # if True, write blocked_CV report-facing figures
+    blocked_cv_plot_write_diagnostic_figures = False  # if True, write blocked_CV diagnostic-only figures
+
     # --- Plot presentation toggles ---
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
 
@@ -663,6 +690,21 @@ def main():
             write_per_kernel_fit_status_csvs=write_blocked_cv_per_kernel_fit_status_csvs,
             write_per_kernel_variance_compare_csvs=write_blocked_cv_per_kernel_variance_compare_csvs,
             write_per_kernel_variance_summary_csvs=write_blocked_cv_per_kernel_variance_summary_csvs,
+            plot_patient_bx_list=blocked_cv_plot_patient_bx_list,
+            plot_grid_ncols=blocked_cv_plot_grid_ncols,
+            plot_grid_label_map=blocked_cv_plot_grid_label_map,
+            plot_fold_ids=blocked_cv_plot_fold_ids,
+            plot_max_folds_per_biopsy=blocked_cv_plot_max_folds_per_biopsy,
+            plot_fold_sort_mode=blocked_cv_plot_fold_sort_mode,
+            plot_include_merged_tail_folds=blocked_cv_plot_include_merged_tail_folds,
+            plot_include_rebalanced_two_fold_splits=blocked_cv_plot_include_rebalanced_two_fold_splits,
+            plot_kernel_labels=blocked_cv_plot_kernel_labels,
+            plot_variance_mode=blocked_cv_plot_variance_mode,
+            plot_make_paired_semivariogram_profile=blocked_cv_plot_make_paired_semivariogram_profile,
+            plot_make_semivariogram_grids=blocked_cv_plot_make_semivariogram_grids,
+            plot_make_profile_grids=blocked_cv_plot_make_profile_grids,
+            plot_write_report_figures=blocked_cv_plot_write_report_figures,
+            plot_write_diagnostic_figures=blocked_cv_plot_write_diagnostic_figures,
         )
         blocked_cv_status = GPR_blocked_cv.run_blocked_cv_phase3b(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
