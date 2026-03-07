@@ -732,6 +732,7 @@ def main():
                 _print_section("BLOCKED_CV: Plots")
                 blocked_cv_plot_status = GPR_blocked_cv.run_blocked_cv_plots(
                     fit_predict_artifacts=blocked_cv_fit_predict_artifacts,
+                    all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                     output_dir=blocked_cv_root,
                     figs_dir=blocked_cv_figs_dir,
                     csv_dir=blocked_cv_csv_dir,
