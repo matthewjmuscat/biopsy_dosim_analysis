@@ -185,7 +185,7 @@ def main():
         "profile_grids": True,
         "semivariogram_grids": True,
         "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
-        "semivariogram_n_pairs_fontsize": 5.0,  # fontsize for semivariogram n-pairs annotations
+        "semivariogram_n_pairs_fontsize": 7.0,  # fontsize for semivariogram n-pairs annotations
         "residuals": False,
         "calibration": False,
         "kernel_comparison": False,

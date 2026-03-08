@@ -2388,6 +2388,9 @@ def run_blocked_cv_plots(
     First implemented figure family:
     - paired semivariogram/profile figures per (patient, biopsy, fold, kernel)
     """
+    def _plot_progress(msg: str) -> None:
+        print(f"[blocked_CV][plots] {msg}")
+
     del output_dir, csv_dir
     pred_df = fit_predict_artifacts.get("pred_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     fold_map_df = fit_predict_artifacts.get("fold_map_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
@@ -2411,6 +2414,7 @@ def run_blocked_cv_plots(
             or config.plot_make_semivariogram_grids
         )
     )
+    _plot_progress("building plot key selection table")
 
     if (
         isinstance(pred_df, pd.DataFrame)
@@ -2458,8 +2462,19 @@ def run_blocked_cv_plots(
                 .copy()
             )
         n_selected = int(len(plot_keys_df))
+        _plot_progress(f"plot keys selected: {n_selected}/{n_candidates}")
+    else:
+        if not need_plot_keys:
+            _plot_progress("plot key selection skipped (all report plot families disabled)")
+        elif not isinstance(pred_df, pd.DataFrame) or pred_df.empty:
+            _plot_progress("plot key selection skipped (prediction table empty)")
+        elif not isinstance(fold_map_df, pd.DataFrame) or fold_map_df.empty:
+            _plot_progress("plot key selection skipped (fold map table empty)")
+        else:
+            _plot_progress("plot key selection skipped")
 
     if config.plot_make_paired_semivariogram_profile and config.plot_write_report_figures and not plot_keys_df.empty:
+        _plot_progress("paired semivariogram+profile: starting")
         for _, row in plot_keys_df.iterrows():
             patient_id = row["Patient ID"]
             bx_index = int(row["Bx index"])
@@ -2521,8 +2536,15 @@ def run_blocked_cv_plots(
                 paired_errors.append(
                     f"patient={patient_id}, bx={bx_index}, fold={fold_id}, kernel={kernel_label}: {e}"
                 )
+        _plot_progress(
+            f"paired semivariogram+profile: complete "
+            f"(saved={len(paired_saved)}, errors={len(paired_errors)})"
+        )
+    else:
+        _plot_progress("paired semivariogram+profile: skipped")
 
     if config.plot_make_profile_grids and config.plot_write_report_figures and not plot_keys_df.empty:
+        _plot_progress("profile grids: starting")
         gpr_pp._setup_matplotlib_defaults()
         kernels = sorted(pd.unique(plot_keys_df["kernel_label"]))
         if config.plot_patient_bx_list is None:
@@ -2753,8 +2775,15 @@ def run_blocked_cv_plots(
                     profile_grid_errors.append(
                         f"grid_by_fold fold={fold_id}, kernel={kernel_label}: {e}"
                     )
+        _plot_progress(
+            f"profile grids: complete "
+            f"(saved={len(profile_grid_saved)}, errors={len(profile_grid_errors)})"
+        )
+    else:
+        _plot_progress("profile grids: skipped")
 
     if config.plot_make_semivariogram_grids and config.plot_write_report_figures and not plot_keys_df.empty:
+        _plot_progress("semivariogram grids: starting")
         gpr_pp._setup_matplotlib_defaults()
         kernels = sorted(pd.unique(plot_keys_df["kernel_label"]))
         if config.plot_patient_bx_list is None:
@@ -2987,6 +3016,12 @@ def run_blocked_cv_plots(
                     semivariogram_grid_errors.append(
                         f"semivar_grid_by_fold fold={fold_id}, kernel={kernel_label}: {e}"
                     )
+        _plot_progress(
+            f"semivariogram grids: complete "
+            f"(saved={len(semivariogram_grid_saved)}, errors={len(semivariogram_grid_errors)})"
+        )
+    else:
+        _plot_progress("semivariogram grids: skipped")
 
     unimplemented = []
     if config.plot_write_diagnostic_figures:
