@@ -191,6 +191,7 @@ def main():
         "report_performance_distributions": True,  # Phase 5D: held-out RMSE/MAE/NLPD histogram/KDE figure family
         "report_variance_mode_comparison": True,  # Phase 5D: latent vs observed_mc comparison figure family
         "report_distribution_modes": ("histogram", "kde"),  # Phase 5D: options per distribution family: ("histogram",), ("kde",), or ("histogram", "kde")
+        "report_distribution_modes_list": [("histogram",), ("histogram", "kde"), ("kde",)],  # optional Phase 5D multi-output modes; None -> only report_distribution_modes
         "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
         "write_report_figures": True,
         "write_diagnostic_figures": False,
@@ -704,6 +705,22 @@ def main():
         else:
             blocked_cv_plot_report_distribution_modes = tuple(blocked_cv_plot_report_distribution_modes)
 
+        blocked_cv_plot_report_distribution_modes_list = blocked_cv_plot_options.get(
+            "report_distribution_modes_list", None
+        )
+        if blocked_cv_plot_report_distribution_modes_list is None:
+            blocked_cv_plot_report_distribution_modes_list_use = None
+        else:
+            blocked_cv_plot_report_distribution_modes_list_use = []
+            for mode_item in blocked_cv_plot_report_distribution_modes_list:
+                if isinstance(mode_item, str):
+                    blocked_cv_plot_report_distribution_modes_list_use.append((mode_item,))
+                else:
+                    blocked_cv_plot_report_distribution_modes_list_use.append(tuple(mode_item))
+            blocked_cv_plot_report_distribution_modes_list_use = tuple(
+                blocked_cv_plot_report_distribution_modes_list_use
+            )
+
         blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
             block_mode=blocked_cv_block_mode,
             n_folds=blocked_cv_n_folds,
@@ -749,6 +766,7 @@ def main():
             plot_make_report_performance_distributions=bool(blocked_cv_plot_options.get("report_performance_distributions", False)),
             plot_make_report_variance_mode_comparison=bool(blocked_cv_plot_options.get("report_variance_mode_comparison", False)),
             plot_report_distribution_modes=blocked_cv_plot_report_distribution_modes,
+            plot_report_distribution_modes_list=blocked_cv_plot_report_distribution_modes_list_use,
             plot_report_distribution_kde_bw_scale=blocked_cv_plot_options.get("report_distribution_kde_bw_scale", None),
             plot_write_report_figures=bool(blocked_cv_plot_options.get("write_report_figures", True)),
             plot_write_diagnostic_figures=bool(blocked_cv_plot_options.get("write_diagnostic_figures", False)),

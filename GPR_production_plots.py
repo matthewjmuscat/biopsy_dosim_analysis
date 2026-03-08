@@ -3031,7 +3031,9 @@ def calibration_plots_production(
                 if not x.size:
                     continue
                 n_total += x.size
-                color = label_to_color.get(lab, next(fallback_colors))
+                color = label_to_color.get(lab)
+                if color is None:
+                    color = next(fallback_colors)
                 pretty = KERNEL_LABEL_MAP.get(lab, lab)
                 ax.scatter(x, y, s=22, alpha=0.85, color=color, edgecolors="white", linewidths=0.4, label=pretty, zorder=3)
                 if "acceptable" in sub.columns:
@@ -3049,7 +3051,7 @@ def calibration_plots_production(
                     "exp": "Exp",
                 }
                 per_kernel_text = ", ".join(
-                    f"{pct:.1f}\%\ ({short_names.get(lab, lab)})"
+                    f"{pct:.1f}\\%\\ ({short_names.get(lab, lab)})"
                     for lab, pct in acceptable_by_kernel
                 )
                 header_parts.append(rf"$\mathrm{{Near\ ideal}}:\ {per_kernel_text}$")
@@ -3243,6 +3245,7 @@ def plot_blocked_cv_variance_mode_comparison(
     latent_mode: str = "latent",
     observed_mode: str = "observed_mc",
     save_formats=("pdf", "svg"),
+    make_scatter: bool = True,
     make_delta_distributions: bool = True,
     delta_modes: Sequence[str] = ("histogram",),
     delta_kde_bw_scale: float | None = None,
@@ -3276,7 +3279,6 @@ def plot_blocked_cv_variance_mode_comparison(
         "Bx index",
         "kernel_label",
         "kernel_name",
-        "kernel_param",
     ]
     key_cols = [c for c in key_cols if c in df.columns]
 
@@ -3307,84 +3309,85 @@ def plot_blocked_cv_variance_mode_comparison(
         x = x[msk]
         y = y[msk]
 
-        fig, ax = plt.subplots(figsize=COHORT_SQUARE_FIGSIZE)
-        has_kernel = "kernel_label" in piv.columns and piv["kernel_label"].notna().any()
-        if has_kernel:
-            kernel_labels = list(pd.unique(piv["kernel_label"].dropna()))
-            fallback_colors = iter(KERNEL_PALETTE * ((len(kernel_labels) // len(KERNEL_PALETTE)) + 1))
-            for lab in kernel_labels:
-                sub = piv.loc[piv["kernel_label"] == lab]
-                if sub.empty:
-                    continue
-                sx = pd.to_numeric(sub[latent_mode], errors="coerce").to_numpy(float)
-                sy = pd.to_numeric(sub[observed_mode], errors="coerce").to_numpy(float)
-                color = kernel_color_map.get(lab) if kernel_color_map else None
-                if color is None:
-                    color = next(fallback_colors)
+        if make_scatter:
+            fig, ax = plt.subplots(figsize=COHORT_SQUARE_FIGSIZE)
+            has_kernel = "kernel_label" in piv.columns and piv["kernel_label"].notna().any()
+            if has_kernel:
+                kernel_labels = list(pd.unique(piv["kernel_label"].dropna()))
+                fallback_colors = iter(KERNEL_PALETTE * ((len(kernel_labels) // len(KERNEL_PALETTE)) + 1))
+                for lab in kernel_labels:
+                    sub = piv.loc[piv["kernel_label"] == lab]
+                    if sub.empty:
+                        continue
+                    sx = pd.to_numeric(sub[latent_mode], errors="coerce").to_numpy(float)
+                    sy = pd.to_numeric(sub[observed_mode], errors="coerce").to_numpy(float)
+                    color = kernel_color_map.get(lab) if kernel_color_map else None
+                    if color is None:
+                        color = next(fallback_colors)
+                    ax.scatter(
+                        sx,
+                        sy,
+                        s=24,
+                        alpha=0.85,
+                        color=color,
+                        edgecolors="white",
+                        linewidths=0.4,
+                        label=KERNEL_LABEL_MAP.get(lab, lab),
+                        zorder=3,
+                    )
+            else:
                 ax.scatter(
-                    sx,
-                    sy,
+                    x,
+                    y,
                     s=24,
                     alpha=0.85,
-                    color=color,
+                    color=PRIMARY_LINE_COLOR,
                     edgecolors="white",
                     linewidths=0.4,
-                    label=KERNEL_LABEL_MAP.get(lab, lab),
+                    label="Biopsies",
                     zorder=3,
                 )
-        else:
-            ax.scatter(
-                x,
-                y,
-                s=24,
-                alpha=0.85,
-                color=PRIMARY_LINE_COLOR,
-                edgecolors="white",
-                linewidths=0.4,
-                label="Biopsies",
-                zorder=3,
-            )
 
-        lim_lo = float(np.nanmin(np.concatenate([x, y])))
-        lim_hi = float(np.nanmax(np.concatenate([x, y])))
-        if not np.isfinite(lim_lo) or not np.isfinite(lim_hi):
-            lim_lo, lim_hi = 0.0, 1.0
-        if lim_hi <= lim_lo:
-            lim_hi = lim_lo + 1.0
-        pad = 0.05 * (lim_hi - lim_lo)
-        lims = [lim_lo - pad, lim_hi + pad]
-        ax.plot(lims, lims, "k--", lw=1.0, alpha=0.8, label="Identity", zorder=1)
-        ax.set_xlim(lims)
-        ax.set_ylim(lims)
-        ax.set_xlabel(rf"{metric_label} ({latent_mode})", fontsize=_fs_label())
-        ax.set_ylabel(rf"{metric_label} ({observed_mode})", fontsize=_fs_label())
-        _apply_axis_style(ax)
-        _apply_per_biopsy_ticks(ax)
-        handles, labels = ax.get_legend_handles_labels()
-        header_text = rf"$n={int(len(x))}$"
-        _finalize_legend_and_header(
-            ax,
-            header=header_text,
-            ncol=len(handles) if handles else 1,
-            header_loc="center",
-            header_fontsize=_fs_legend(),
-            handles=handles if handles else None,
-            labels=labels if labels else None,
-            legend_width_mode="axes",
-            expand_figure=False,
-        )
-        fig.tight_layout()
-        out_paths = _save_figure(
-            fig,
-            save_dir / _with_kernel_suffix(
-                f"blocked_cv_variance_compare_scatter_{metric_col}_{latent_mode}_vs_{observed_mode}",
-                kernel_suffix,
-            ),
-            formats=save_formats,
-            dpi=400,
-            create_subdir_for_stem=False,
-        )
-        saved_paths_all.extend([str(p) for p in out_paths])
+            lim_lo = float(np.nanmin(np.concatenate([x, y])))
+            lim_hi = float(np.nanmax(np.concatenate([x, y])))
+            if not np.isfinite(lim_lo) or not np.isfinite(lim_hi):
+                lim_lo, lim_hi = 0.0, 1.0
+            if lim_hi <= lim_lo:
+                lim_hi = lim_lo + 1.0
+            pad = 0.05 * (lim_hi - lim_lo)
+            lims = [lim_lo - pad, lim_hi + pad]
+            ax.plot(lims, lims, "k--", lw=1.0, alpha=0.8, label="Identity", zorder=1)
+            ax.set_xlim(lims)
+            ax.set_ylim(lims)
+            ax.set_xlabel(rf"{metric_label} ({latent_mode})", fontsize=_fs_label())
+            ax.set_ylabel(rf"{metric_label} ({observed_mode})", fontsize=_fs_label())
+            _apply_axis_style(ax)
+            _apply_per_biopsy_ticks(ax)
+            handles, labels = ax.get_legend_handles_labels()
+            header_text = rf"$n={int(len(x))}$"
+            _finalize_legend_and_header(
+                ax,
+                header=header_text,
+                ncol=len(handles) if handles else 1,
+                header_loc="center",
+                header_fontsize=_fs_legend(),
+                handles=handles if handles else None,
+                labels=labels if labels else None,
+                legend_width_mode="axes",
+                expand_figure=False,
+            )
+            fig.tight_layout()
+            out_paths = _save_figure(
+                fig,
+                save_dir / _with_kernel_suffix(
+                    f"blocked_cv_variance_compare_scatter_{metric_col}_{latent_mode}_vs_{observed_mode}",
+                    kernel_suffix,
+                ),
+                formats=save_formats,
+                dpi=400,
+                create_subdir_for_stem=False,
+            )
+            saved_paths_all.extend([str(p) for p in out_paths])
 
         if make_delta_distributions:
             delta_df = piv.copy()
