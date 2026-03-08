@@ -2401,6 +2401,8 @@ def run_blocked_cv_plots(
     pred_df = fit_predict_artifacts.get("pred_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     fold_map_df = fit_predict_artifacts.get("fold_map_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     fold_summary_df = fit_predict_artifacts.get("fold_summary_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
+    biopsy_metrics_df = fit_predict_artifacts.get("biopsy_metrics_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
+    compare_biopsy_metrics_df = fit_predict_artifacts.get("compare_biopsy_metrics_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     n_pred = int(len(pred_df)) if isinstance(pred_df, pd.DataFrame) else 0
 
     paired_saved = []
@@ -2409,6 +2411,12 @@ def run_blocked_cv_plots(
     profile_grid_errors = []
     semivariogram_grid_saved = []
     semivariogram_grid_errors = []
+    report_calibration_saved = []
+    report_calibration_errors = []
+    report_performance_saved = []
+    report_performance_errors = []
+    report_variance_compare_saved = []
+    report_variance_compare_errors = []
     n_candidates = 0
     n_selected = 0
     plot_keys_df = pd.DataFrame()
@@ -2421,6 +2429,20 @@ def run_blocked_cv_plots(
         )
     )
     _plot_progress("building plot key selection table")
+
+    def _filter_report_biopsy_df(df: pd.DataFrame, *, use_variance_mode: bool) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        out = df.copy()
+        if config.plot_kernel_labels is not None and "kernel_label" in out.columns:
+            allowed = {str(k) for k in config.plot_kernel_labels}
+            out = out[out["kernel_label"].astype(str).isin(allowed)].copy()
+        if use_variance_mode and "variance_mode" in out.columns:
+            mode_sel = str(config.plot_variance_mode)
+            if mode_sel == "primary":
+                mode_sel = str(config.primary_predictive_variance_mode)
+            out = out[out["variance_mode"].astype(str) == mode_sel].copy()
+        return out
 
     if (
         isinstance(pred_df, pd.DataFrame)
@@ -3029,39 +3051,155 @@ def run_blocked_cv_plots(
     else:
         _plot_progress("semivariogram grids: skipped")
 
-    if config.plot_make_report_calibration_scatter:
-        _plot_progress("report calibration scatter: enabled (pending implementation)")
-    else:
-        _plot_progress("report calibration scatter: skipped")
+    report_dist_modes = tuple(config.plot_report_distribution_modes) if config.plot_report_distribution_modes is not None else ("histogram", "kde")
+    if not report_dist_modes:
+        report_dist_modes = ("histogram", "kde")
 
-    if config.plot_make_report_calibration_distributions:
-        _plot_progress("report calibration distributions: enabled (pending implementation)")
+    do_report_calib = (
+        config.plot_write_report_figures
+        and (config.plot_make_report_calibration_scatter or config.plot_make_report_calibration_distributions)
+    )
+    if do_report_calib:
+        _plot_progress("report calibration: starting")
+        try:
+            calib_df = _filter_report_biopsy_df(biopsy_metrics_df, use_variance_mode=True)
+            if not calib_df.empty:
+                calib_save_dir = (
+                    figs_dir
+                    .joinpath("report")
+                    .joinpath("cohort")
+                    .joinpath("metrics")
+                    .joinpath("calibration")
+                )
+                kernel_suffix = None
+                if "kernel_label" in calib_df.columns:
+                    kernel_vals = pd.unique(calib_df["kernel_label"].dropna())
+                    if len(kernel_vals) == 1:
+                        kernel_suffix = str(kernel_vals[0])
+                report_calibration_saved.extend(
+                    gpr_pp.plot_blocked_cv_calibration_report(
+                        biopsy_metrics_df=calib_df,
+                        save_dir=calib_save_dir,
+                        save_formats=("pdf", "svg"),
+                        modes=report_dist_modes,
+                        kde_bw_scale=config.plot_report_distribution_kde_bw_scale,
+                        kernel_suffix=kernel_suffix,
+                        make_histograms=bool(config.plot_make_report_calibration_distributions),
+                        make_scatter=bool(config.plot_make_report_calibration_scatter),
+                    )
+                )
+            else:
+                _plot_progress("report calibration: no rows after kernel/variance filtering")
+        except Exception as e:
+            report_calibration_errors.append(str(e))
+        _plot_progress(
+            f"report calibration: complete "
+            f"(saved={len(report_calibration_saved)}, errors={len(report_calibration_errors)})"
+        )
     else:
-        _plot_progress("report calibration distributions: skipped")
+        _plot_progress("report calibration: skipped")
 
-    if config.plot_make_report_performance_distributions:
-        _plot_progress("report performance distributions: enabled (pending implementation)")
+    do_report_perf = config.plot_write_report_figures and config.plot_make_report_performance_distributions
+    if do_report_perf:
+        _plot_progress("report performance distributions: starting")
+        try:
+            perf_df = _filter_report_biopsy_df(biopsy_metrics_df, use_variance_mode=True)
+            if not perf_df.empty:
+                perf_save_dir = (
+                    figs_dir
+                    .joinpath("report")
+                    .joinpath("cohort")
+                    .joinpath("metrics")
+                    .joinpath("performance")
+                )
+                kernel_suffix = None
+                if "kernel_label" in perf_df.columns:
+                    kernel_vals = pd.unique(perf_df["kernel_label"].dropna())
+                    if len(kernel_vals) == 1:
+                        kernel_suffix = str(kernel_vals[0])
+                report_performance_saved.extend(
+                    gpr_pp.plot_blocked_cv_performance_distributions(
+                        biopsy_metrics_df=perf_df,
+                        save_dir=perf_save_dir,
+                        save_formats=("pdf", "svg"),
+                        modes=report_dist_modes,
+                        kde_bw_scale=config.plot_report_distribution_kde_bw_scale,
+                        kernel_suffix=kernel_suffix,
+                    )
+                )
+            else:
+                _plot_progress("report performance distributions: no rows after kernel/variance filtering")
+        except Exception as e:
+            report_performance_errors.append(str(e))
+        _plot_progress(
+            f"report performance distributions: complete "
+            f"(saved={len(report_performance_saved)}, errors={len(report_performance_errors)})"
+        )
     else:
         _plot_progress("report performance distributions: skipped")
 
-    if config.plot_make_report_variance_mode_comparison:
-        _plot_progress("report variance-mode comparison: enabled (pending implementation)")
+    do_report_varcmp = config.plot_write_report_figures and config.plot_make_report_variance_mode_comparison
+    if do_report_varcmp:
+        _plot_progress("report variance-mode comparison: starting")
+        try:
+            cmp_df = _filter_report_biopsy_df(compare_biopsy_metrics_df, use_variance_mode=False)
+            if not cmp_df.empty:
+                varcmp_save_dir = (
+                    figs_dir
+                    .joinpath("report")
+                    .joinpath("cohort")
+                    .joinpath("metrics")
+                    .joinpath("variance_compare")
+                )
+                primary_mode = str(config.primary_predictive_variance_mode)
+                if primary_mode != "latent":
+                    latent_mode = "latent"
+                    observed_mode = primary_mode
+                else:
+                    compare_modes = [str(m) for m in (config.variance_modes_to_compare or [])]
+                    observed_mode = next((m for m in compare_modes if m != "latent"), "observed_mc")
+                    latent_mode = "latent"
+                kernel_suffix = None
+                if "kernel_label" in cmp_df.columns:
+                    kernel_vals = pd.unique(cmp_df["kernel_label"].dropna())
+                    if len(kernel_vals) == 1:
+                        kernel_suffix = str(kernel_vals[0])
+                report_variance_compare_saved.extend(
+                    gpr_pp.plot_blocked_cv_variance_mode_comparison(
+                        compare_biopsy_metrics_df=cmp_df,
+                        save_dir=varcmp_save_dir,
+                        latent_mode=latent_mode,
+                        observed_mode=observed_mode,
+                        save_formats=("pdf", "svg"),
+                        make_delta_distributions=True,
+                        delta_modes=report_dist_modes,
+                        delta_kde_bw_scale=config.plot_report_distribution_kde_bw_scale,
+                        kernel_suffix=kernel_suffix,
+                    )
+                )
+            else:
+                _plot_progress("report variance-mode comparison: compare table empty after kernel filtering")
+        except Exception as e:
+            report_variance_compare_errors.append(str(e))
+        _plot_progress(
+            f"report variance-mode comparison: complete "
+            f"(saved={len(report_variance_compare_saved)}, errors={len(report_variance_compare_errors)})"
+        )
     else:
         _plot_progress("report variance-mode comparison: skipped")
 
     unimplemented = []
-    if config.plot_make_report_calibration_scatter:
-        unimplemented.append("report_calibration_scatter")
-    if config.plot_make_report_calibration_distributions:
-        unimplemented.append("report_calibration_distributions")
-    if config.plot_make_report_performance_distributions:
-        unimplemented.append("report_performance_distributions")
-    if config.plot_make_report_variance_mode_comparison:
-        unimplemented.append("report_variance_mode_comparison")
     if config.plot_write_diagnostic_figures:
         unimplemented.append("diagnostic_figure_lane")
 
-    any_errors = bool(paired_errors or profile_grid_errors)
+    any_errors = bool(
+        paired_errors
+        or profile_grid_errors
+        or semivariogram_grid_errors
+        or report_calibration_errors
+        or report_performance_errors
+        or report_variance_compare_errors
+    )
     return {
         "phase": "blocked_cv_plots",
         "status": "ready" if not any_errors else "partial",
@@ -3081,6 +3219,18 @@ def run_blocked_cv_plots(
         "n_semivariogram_grid_errors": int(len(semivariogram_grid_errors)),
         "semivariogram_grid_example_paths": semivariogram_grid_saved[:4],
         "semivariogram_grid_error_examples": semivariogram_grid_errors[:4],
+        "n_report_calibration_saved_files": int(len(report_calibration_saved)),
+        "n_report_calibration_errors": int(len(report_calibration_errors)),
+        "report_calibration_example_paths": report_calibration_saved[:4],
+        "report_calibration_error_examples": report_calibration_errors[:4],
+        "n_report_performance_saved_files": int(len(report_performance_saved)),
+        "n_report_performance_errors": int(len(report_performance_errors)),
+        "report_performance_example_paths": report_performance_saved[:4],
+        "report_performance_error_examples": report_performance_errors[:4],
+        "n_report_variance_compare_saved_files": int(len(report_variance_compare_saved)),
+        "n_report_variance_compare_errors": int(len(report_variance_compare_errors)),
+        "report_variance_compare_example_paths": report_variance_compare_saved[:4],
+        "report_variance_compare_error_examples": report_variance_compare_errors[:4],
         "unimplemented_plot_families": unimplemented,
         "plot_patient_bx_list": (list(config.plot_patient_bx_list) if config.plot_patient_bx_list is not None else None),
         "plot_grid_ncols": int(config.plot_grid_ncols),
@@ -3101,10 +3251,16 @@ def run_blocked_cv_plots(
         "plot_make_report_calibration_distributions": bool(config.plot_make_report_calibration_distributions),
         "plot_make_report_performance_distributions": bool(config.plot_make_report_performance_distributions),
         "plot_make_report_variance_mode_comparison": bool(config.plot_make_report_variance_mode_comparison),
-        "plot_report_distribution_modes": list(config.plot_report_distribution_modes),
+        "plot_report_distribution_modes": (
+            list(config.plot_report_distribution_modes)
+            if config.plot_report_distribution_modes is not None
+            else None
+        ),
         "plot_report_distribution_kde_bw_scale": (
             None if config.plot_report_distribution_kde_bw_scale is None else float(config.plot_report_distribution_kde_bw_scale)
         ),
+        "n_biopsy_metrics_rows_available": int(len(biopsy_metrics_df)) if isinstance(biopsy_metrics_df, pd.DataFrame) else 0,
+        "n_compare_biopsy_metrics_rows_available": int(len(compare_biopsy_metrics_df)) if isinstance(compare_biopsy_metrics_df, pd.DataFrame) else 0,
         "plot_write_report_figures": bool(config.plot_write_report_figures),
         "plot_write_diagnostic_figures": bool(config.plot_write_diagnostic_figures),
     }

@@ -186,10 +186,10 @@ def main():
         "semivariogram_grids": True,
         "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
         "semivariogram_n_pairs_fontsize": 7.0,  # fontsize for semivariogram n-pairs annotations
-        "report_calibration_scatter": False,  # Phase 5D: held-out mean(rstd) vs sd(rstd) figure family
-        "report_calibration_distributions": False,  # Phase 5D: held-out calibration histogram/KDE figure family
-        "report_performance_distributions": False,  # Phase 5D: held-out RMSE/MAE/NLPD histogram/KDE figure family
-        "report_variance_mode_comparison": False,  # Phase 5D: latent vs observed_mc comparison figure family
+        "report_calibration_scatter": True,  # Phase 5D: held-out mean(rstd) vs sd(rstd) figure family
+        "report_calibration_distributions": True,  # Phase 5D: held-out calibration histogram/KDE figure family
+        "report_performance_distributions": True,  # Phase 5D: held-out RMSE/MAE/NLPD histogram/KDE figure family
+        "report_variance_mode_comparison": True,  # Phase 5D: latent vs observed_mc comparison figure family
         "report_distribution_modes": ("histogram", "kde"),  # Phase 5D: options per distribution family: ("histogram",), ("kde",), or ("histogram", "kde")
         "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
         "write_report_figures": True,

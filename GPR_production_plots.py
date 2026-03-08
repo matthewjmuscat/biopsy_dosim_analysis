@@ -1132,6 +1132,7 @@ def plot_kernel_sensitivity_histogram(
     saved_paths = _save_figure(fig, Path(save_dir) / file_name_base, formats=file_types, dpi=400, create_subdir_for_stem=False)
     print(f"[kernel_sensitivity_histogram] saved {file_name_base} -> {', '.join(map(str, saved_paths))}")
     plt.close(fig)
+    return [str(p) for p in saved_paths]
 
 
 
@@ -2776,6 +2777,8 @@ def calibration_plots_production(
     hue_col: str | None = None,
     kernel_color_map: dict[str, str] | None = None,
     kernel_suffix: str | None = None,
+    make_histograms: bool = True,
+    make_scatter: bool = True,
 ):
     """
     Produce publication-ready calibration diagnostics from per-biopsy calibration metrics.
@@ -2785,6 +2788,8 @@ def calibration_plots_production(
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths_all: list[str] = []
 
     def _calib_hist(series, xlabel, fname, target_line, target_label, caption, modes_use, as_percent: bool = False):
         # Optional grouping (e.g., overlay kernels)
@@ -2947,59 +2952,61 @@ def calibration_plots_production(
             expand_figure=False,
         )
         fig.tight_layout()
-        _save_figure(
+        out_paths = _save_figure(
             fig,
             save_dir / _with_kernel_suffix(fname, kernel_suffix),
             formats=save_formats,
             dpi=dpi,
             create_subdir_for_stem=False,
         )
+        saved_paths_all.extend([str(p) for p in out_paths])
 
-    modes_iter = modes_list if modes_list is not None else [modes]
+    if make_histograms:
+        modes_iter = modes_list if modes_list is not None else [modes]
 
-    for modes_use in modes_iter:
-        mode_suffix = "_".join(modes_use) if isinstance(modes_use, (list, tuple)) else str(modes_use)
-        _calib_hist(
-            calib_df["mean_resstd"],
-            r"$\mathrm{Mean}\ r^{\mathrm{std}}_{b,v}$",
-            f"calib_hist_mean_resstd_{mode_suffix}",
-            target_line=0.0,
-            target_label=r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v} = 0\ \mathrm{(ideal)}$",
-            caption="Means cluster near 0 → little systematic bias.",
-            modes_use=modes_use,
-        )
-        _calib_hist(
-            calib_df["std_resstd"],
-            r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v}$",
-            f"calib_hist_sd_resstd_{mode_suffix}",
-            target_line=1.0,
-            target_label=r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v} = 1\ \mathrm{(ideal)}$",
-            caption="SD near 1 → predictive variances on the right scale.",
-            modes_use=modes_use,
-        )
-        _calib_hist(
-            calib_df["pct_abs_le1"],
-            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 1$",
-            f"calib_hist_cov_le1_{mode_suffix}",
-            target_line=68.0,
-            target_label=r"$1\,\sigma\ \mathrm{(68\%, ideal)}$",
-            caption="",
-            modes_use=modes_use,
-            as_percent=True,
-        )
-        _calib_hist(
-            calib_df["pct_abs_le2"],
-            r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 2$",
-            f"calib_hist_cov_le2_{mode_suffix}",
-            target_line=95.0,
-            target_label=r"$2\,\sigma\ \mathrm{(95\%, ideal)}$",
-            caption="",
-            modes_use=modes_use,
-            as_percent=True,
-        )
+        for modes_use in modes_iter:
+            mode_suffix = "_".join(modes_use) if isinstance(modes_use, (list, tuple)) else str(modes_use)
+            _calib_hist(
+                calib_df["mean_resstd"],
+                r"$\mathrm{Mean}\ r^{\mathrm{std}}_{b,v}$",
+                f"calib_hist_mean_resstd_{mode_suffix}",
+                target_line=0.0,
+                target_label=r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v} = 0\ \mathrm{(ideal)}$",
+                caption="Means cluster near 0 → little systematic bias.",
+                modes_use=modes_use,
+            )
+            _calib_hist(
+                calib_df["std_resstd"],
+                r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v}$",
+                f"calib_hist_sd_resstd_{mode_suffix}",
+                target_line=1.0,
+                target_label=r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v} = 1\ \mathrm{(ideal)}$",
+                caption="SD near 1 → predictive variances on the right scale.",
+                modes_use=modes_use,
+            )
+            _calib_hist(
+                calib_df["pct_abs_le1"],
+                r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 1$",
+                f"calib_hist_cov_le1_{mode_suffix}",
+                target_line=68.0,
+                target_label=r"$1\,\sigma\ \mathrm{(68\%, ideal)}$",
+                caption="",
+                modes_use=modes_use,
+                as_percent=True,
+            )
+            _calib_hist(
+                calib_df["pct_abs_le2"],
+                r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 2$",
+                f"calib_hist_cov_le2_{mode_suffix}",
+                target_line=95.0,
+                target_label=r"$2\,\sigma\ \mathrm{(95\%, ideal)}$",
+                caption="",
+                modes_use=modes_use,
+                as_percent=True,
+            )
 
     # Optional compact scatter: mean vs SD with ideal point
-    if {"mean_resstd", "std_resstd"}.issubset(calib_df.columns) and not calib_df.empty:
+    if make_scatter and {"mean_resstd", "std_resstd"}.issubset(calib_df.columns) and not calib_df.empty:
         has_kernel = "kernel_label" in calib_df.columns and calib_df["kernel_label"].notna().any()
         fig, ax = plt.subplots(figsize=COHORT_SQUARE_FIGSIZE)
 
@@ -3091,13 +3098,16 @@ def calibration_plots_production(
             expand_figure=False,
         )
         fig.tight_layout()
-        _save_figure(
+        out_paths = _save_figure(
             fig,
             save_dir / _with_kernel_suffix("calib_scatter_mean_vs_sd", kernel_suffix),
             formats=save_formats,
             dpi=dpi,
             create_subdir_for_stem=False,
         )
+        saved_paths_all.extend([str(p) for p in out_paths])
+
+    return saved_paths_all
 
 
 def plot_blocked_cv_calibration_report(
@@ -3112,7 +3122,9 @@ def plot_blocked_cv_calibration_report(
     kde_bw_scale: float | None = None,
     kernel_color_map: dict[str, str] | None = None,
     kernel_suffix: str | None = None,
-) -> None:
+    make_histograms: bool = True,
+    make_scatter: bool = True,
+) -> list[str]:
     """
     Blocked-CV report wrapper for calibration-style cohort figures.
 
@@ -3122,7 +3134,7 @@ def plot_blocked_cv_calibration_report(
       sd_rstd   -> std_resstd
     """
     if biopsy_metrics_df is None or biopsy_metrics_df.empty:
-        return
+        return []
 
     required = {"mean_rstd", "sd_rstd", "pct_abs_le1", "pct_abs_le2"}
     missing = required - set(biopsy_metrics_df.columns)
@@ -3142,7 +3154,7 @@ def plot_blocked_cv_calibration_report(
     if "kernel_label" in calib_df.columns and calib_df["kernel_label"].notna().any():
         hue_col = "kernel_label"
 
-    calibration_plots_production(
+    return calibration_plots_production(
         calib_df=calib_df,
         save_dir=save_dir,
         save_formats=save_formats,
@@ -3154,6 +3166,8 @@ def plot_blocked_cv_calibration_report(
         hue_col=hue_col,
         kernel_color_map=kernel_color_map,
         kernel_suffix=kernel_suffix,
+        make_histograms=make_histograms,
+        make_scatter=make_scatter,
     )
 
 
@@ -3167,7 +3181,7 @@ def plot_blocked_cv_performance_distributions(
     kde_bw_scale: float | None = None,
     kernel_color_map: dict[str, str] | None = None,
     kernel_suffix: str | None = None,
-) -> None:
+) -> list[str]:
     """
     Blocked-CV report distributions for held-out performance metrics.
 
@@ -3177,7 +3191,7 @@ def plot_blocked_cv_performance_distributions(
       - nlpd_mean
     """
     if biopsy_metrics_df is None or biopsy_metrics_df.empty:
-        return
+        return []
 
     required = {"rmse", "mae", "nlpd_mean"}
     missing = required - set(biopsy_metrics_df.columns)
@@ -3199,12 +3213,13 @@ def plot_blocked_cv_performance_distributions(
         ("nlpd_mean", r"Held-out NLPD", "blocked_cv_perf_hist_nlpd_mean"),
     ]
 
+    saved_paths_all: list[str] = []
     for modes_use in modes_iter:
         modes_use = (modes_use,) if isinstance(modes_use, str) else tuple(modes_use)
         mode_suffix = "_".join(modes_use)
         for value_col, x_label, base_stem in metric_specs:
             file_name = _with_kernel_suffix(f"{base_stem}_{mode_suffix}", kernel_suffix)
-            plot_kernel_sensitivity_histogram(
+            out_paths = plot_kernel_sensitivity_histogram(
                 metrics_df=plot_df,
                 value_col=value_col,
                 x_label=x_label,
@@ -3216,6 +3231,9 @@ def plot_blocked_cv_performance_distributions(
                 kde_bw_scale=kde_bw_scale,
                 kernel_color_map=kernel_color_map,
             )
+            saved_paths_all.extend(out_paths)
+
+    return saved_paths_all
 
 
 def plot_blocked_cv_variance_mode_comparison(
@@ -3230,7 +3248,7 @@ def plot_blocked_cv_variance_mode_comparison(
     delta_kde_bw_scale: float | None = None,
     kernel_color_map: dict[str, str] | None = None,
     kernel_suffix: str | None = None,
-) -> None:
+) -> list[str]:
     """
     Blocked-CV report figures comparing variance-mode choices at biopsy level.
 
@@ -3238,7 +3256,7 @@ def plot_blocked_cv_variance_mode_comparison(
     of delta = observed_mc - latent for key calibration metrics.
     """
     if compare_biopsy_metrics_df is None or compare_biopsy_metrics_df.empty:
-        return
+        return []
     if "variance_mode" not in compare_biopsy_metrics_df.columns:
         raise ValueError("compare_biopsy_metrics_df must contain 'variance_mode'.")
 
@@ -3248,7 +3266,9 @@ def plot_blocked_cv_variance_mode_comparison(
     df = compare_biopsy_metrics_df.copy()
     df = df[df["variance_mode"].isin([latent_mode, observed_mode])].copy()
     if df.empty:
-        return
+        return []
+
+    saved_paths_all: list[str] = []
 
     key_cols = [
         "Patient ID",
@@ -3354,7 +3374,7 @@ def plot_blocked_cv_variance_mode_comparison(
             expand_figure=False,
         )
         fig.tight_layout()
-        _save_figure(
+        out_paths = _save_figure(
             fig,
             save_dir / _with_kernel_suffix(
                 f"blocked_cv_variance_compare_scatter_{metric_col}_{latent_mode}_vs_{observed_mode}",
@@ -3364,6 +3384,7 @@ def plot_blocked_cv_variance_mode_comparison(
             dpi=400,
             create_subdir_for_stem=False,
         )
+        saved_paths_all.extend([str(p) for p in out_paths])
 
         if make_delta_distributions:
             delta_df = piv.copy()
@@ -3380,7 +3401,7 @@ def plot_blocked_cv_variance_mode_comparison(
                 if isinstance(delta_modes, (list, tuple))
                 else str(delta_modes)
             )
-            plot_kernel_sensitivity_histogram(
+            out_paths = plot_kernel_sensitivity_histogram(
                 metrics_df=delta_df,
                 value_col=delta_col,
                 x_label=rf"$\Delta$ {metric_label} ({observed_mode} - {latent_mode})",
@@ -3395,6 +3416,9 @@ def plot_blocked_cv_variance_mode_comparison(
                 kde_bw_scale=delta_kde_bw_scale,
                 kernel_color_map=kernel_color_map,
             )
+            saved_paths_all.extend(out_paths)
+
+    return saved_paths_all
 
 
 def plot_mean_sd_scatter_with_fits_production(
