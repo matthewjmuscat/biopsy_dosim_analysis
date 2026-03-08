@@ -60,6 +60,12 @@ class BlockedCVConfig:
     plot_make_profile_grids: bool = True
     plot_semivariogram_show_n_pairs: bool = False
     plot_semivariogram_n_pairs_fontsize: float = 5.0
+    plot_make_report_calibration_scatter: bool = False
+    plot_make_report_calibration_distributions: bool = False
+    plot_make_report_performance_distributions: bool = False
+    plot_make_report_variance_mode_comparison: bool = False
+    plot_report_distribution_modes: Iterable[str] = ("histogram", "kde")
+    plot_report_distribution_kde_bw_scale: float | None = None
     plot_write_report_figures: bool = True
     plot_write_diagnostic_figures: bool = False
 
@@ -3023,7 +3029,35 @@ def run_blocked_cv_plots(
     else:
         _plot_progress("semivariogram grids: skipped")
 
+    if config.plot_make_report_calibration_scatter:
+        _plot_progress("report calibration scatter: enabled (pending implementation)")
+    else:
+        _plot_progress("report calibration scatter: skipped")
+
+    if config.plot_make_report_calibration_distributions:
+        _plot_progress("report calibration distributions: enabled (pending implementation)")
+    else:
+        _plot_progress("report calibration distributions: skipped")
+
+    if config.plot_make_report_performance_distributions:
+        _plot_progress("report performance distributions: enabled (pending implementation)")
+    else:
+        _plot_progress("report performance distributions: skipped")
+
+    if config.plot_make_report_variance_mode_comparison:
+        _plot_progress("report variance-mode comparison: enabled (pending implementation)")
+    else:
+        _plot_progress("report variance-mode comparison: skipped")
+
     unimplemented = []
+    if config.plot_make_report_calibration_scatter:
+        unimplemented.append("report_calibration_scatter")
+    if config.plot_make_report_calibration_distributions:
+        unimplemented.append("report_calibration_distributions")
+    if config.plot_make_report_performance_distributions:
+        unimplemented.append("report_performance_distributions")
+    if config.plot_make_report_variance_mode_comparison:
+        unimplemented.append("report_variance_mode_comparison")
     if config.plot_write_diagnostic_figures:
         unimplemented.append("diagnostic_figure_lane")
 
@@ -3063,6 +3097,14 @@ def run_blocked_cv_plots(
         "plot_make_profile_grids": bool(config.plot_make_profile_grids),
         "plot_semivariogram_show_n_pairs": bool(config.plot_semivariogram_show_n_pairs),
         "plot_semivariogram_n_pairs_fontsize": float(config.plot_semivariogram_n_pairs_fontsize),
+        "plot_make_report_calibration_scatter": bool(config.plot_make_report_calibration_scatter),
+        "plot_make_report_calibration_distributions": bool(config.plot_make_report_calibration_distributions),
+        "plot_make_report_performance_distributions": bool(config.plot_make_report_performance_distributions),
+        "plot_make_report_variance_mode_comparison": bool(config.plot_make_report_variance_mode_comparison),
+        "plot_report_distribution_modes": list(config.plot_report_distribution_modes),
+        "plot_report_distribution_kde_bw_scale": (
+            None if config.plot_report_distribution_kde_bw_scale is None else float(config.plot_report_distribution_kde_bw_scale)
+        ),
         "plot_write_report_figures": bool(config.plot_write_report_figures),
         "plot_write_diagnostic_figures": bool(config.plot_write_diagnostic_figures),
     }

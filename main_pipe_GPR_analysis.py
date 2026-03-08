@@ -179,16 +179,19 @@ def main():
     # Centralized blocked_CV plot gating to avoid one variable per figure type.
     # Implemented keys currently used: paired_semivariogram_profile, profile_grids, semivariogram_grids,
     # write_report_figures, write_diagnostic_figures.
-    # Placeholder keys (for upcoming figure families): residuals, calibration, kernel_comparison.
+    # Phase 5D report keys are now wired for gating/config plumbing.
     blocked_cv_plot_options = {
         "paired_semivariogram_profile": False,
         "profile_grids": True,
         "semivariogram_grids": True,
         "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
         "semivariogram_n_pairs_fontsize": 7.0,  # fontsize for semivariogram n-pairs annotations
-        "residuals": False,
-        "calibration": False,
-        "kernel_comparison": False,
+        "report_calibration_scatter": False,  # Phase 5D: held-out mean(rstd) vs sd(rstd) figure family
+        "report_calibration_distributions": False,  # Phase 5D: held-out calibration histogram/KDE figure family
+        "report_performance_distributions": False,  # Phase 5D: held-out RMSE/MAE/NLPD histogram/KDE figure family
+        "report_variance_mode_comparison": False,  # Phase 5D: latent vs observed_mc comparison figure family
+        "report_distribution_modes": ("histogram", "kde"),  # Phase 5D: options per distribution family: ("histogram",), ("kde",), or ("histogram", "kde")
+        "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
         "write_report_figures": True,
         "write_diagnostic_figures": False,
     }
@@ -691,6 +694,16 @@ def main():
                     "blocked_cv_kernel_labels_to_run filtered out all kernel specs. "
                     "Provide labels that exist in blocked_cv_kernel_specs."
                 )
+        blocked_cv_plot_report_distribution_modes = blocked_cv_plot_options.get(
+            "report_distribution_modes", ("histogram", "kde")
+        )
+        if blocked_cv_plot_report_distribution_modes is None:
+            blocked_cv_plot_report_distribution_modes = ("histogram", "kde")
+        elif isinstance(blocked_cv_plot_report_distribution_modes, str):
+            blocked_cv_plot_report_distribution_modes = (blocked_cv_plot_report_distribution_modes,)
+        else:
+            blocked_cv_plot_report_distribution_modes = tuple(blocked_cv_plot_report_distribution_modes)
+
         blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
             block_mode=blocked_cv_block_mode,
             n_folds=blocked_cv_n_folds,
@@ -731,6 +744,12 @@ def main():
             plot_make_profile_grids=bool(blocked_cv_plot_options.get("profile_grids", False)),
             plot_semivariogram_show_n_pairs=bool(blocked_cv_plot_options.get("semivariogram_show_n_pairs", False)),
             plot_semivariogram_n_pairs_fontsize=float(blocked_cv_plot_options.get("semivariogram_n_pairs_fontsize", 5.0)),
+            plot_make_report_calibration_scatter=bool(blocked_cv_plot_options.get("report_calibration_scatter", False)),
+            plot_make_report_calibration_distributions=bool(blocked_cv_plot_options.get("report_calibration_distributions", False)),
+            plot_make_report_performance_distributions=bool(blocked_cv_plot_options.get("report_performance_distributions", False)),
+            plot_make_report_variance_mode_comparison=bool(blocked_cv_plot_options.get("report_variance_mode_comparison", False)),
+            plot_report_distribution_modes=blocked_cv_plot_report_distribution_modes,
+            plot_report_distribution_kde_bw_scale=blocked_cv_plot_options.get("report_distribution_kde_bw_scale", None),
             plot_write_report_figures=bool(blocked_cv_plot_options.get("write_report_figures", True)),
             plot_write_diagnostic_figures=bool(blocked_cv_plot_options.get("write_diagnostic_figures", False)),
         )
