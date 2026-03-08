@@ -3099,6 +3099,304 @@ def calibration_plots_production(
             create_subdir_for_stem=False,
         )
 
+
+def plot_blocked_cv_calibration_report(
+    biopsy_metrics_df: pd.DataFrame,
+    save_dir: Path,
+    *,
+    save_formats=("pdf", "svg"),
+    mean_bounds: tuple[float, float] = (-1.0, 1.0),
+    sd_bounds: tuple[float, float] = (0.5, 1.5),
+    modes: Sequence[str] = ("histogram", "kde"),
+    modes_list: Sequence[Sequence[str] | str] | None = None,
+    kde_bw_scale: float | None = None,
+    kernel_color_map: dict[str, str] | None = None,
+    kernel_suffix: str | None = None,
+) -> None:
+    """
+    Blocked-CV report wrapper for calibration-style cohort figures.
+
+    Uses held-out biopsy-level metrics and reuses the main calibration plotting
+    style/function with column mapping:
+      mean_rstd -> mean_resstd
+      sd_rstd   -> std_resstd
+    """
+    if biopsy_metrics_df is None or biopsy_metrics_df.empty:
+        return
+
+    required = {"mean_rstd", "sd_rstd", "pct_abs_le1", "pct_abs_le2"}
+    missing = required - set(biopsy_metrics_df.columns)
+    if missing:
+        raise ValueError(
+            f"biopsy_metrics_df missing required blocked_CV calibration columns: {sorted(missing)}"
+        )
+
+    calib_df = biopsy_metrics_df.copy().rename(
+        columns={
+            "mean_rstd": "mean_resstd",
+            "sd_rstd": "std_resstd",
+        }
+    )
+
+    hue_col = None
+    if "kernel_label" in calib_df.columns and calib_df["kernel_label"].notna().any():
+        hue_col = "kernel_label"
+
+    calibration_plots_production(
+        calib_df=calib_df,
+        save_dir=save_dir,
+        save_formats=save_formats,
+        mean_bounds=mean_bounds,
+        sd_bounds=sd_bounds,
+        modes=modes,
+        modes_list=modes_list,
+        kde_bw_scale=kde_bw_scale,
+        hue_col=hue_col,
+        kernel_color_map=kernel_color_map,
+        kernel_suffix=kernel_suffix,
+    )
+
+
+def plot_blocked_cv_performance_distributions(
+    biopsy_metrics_df: pd.DataFrame,
+    save_dir: Path,
+    *,
+    save_formats=("pdf", "svg"),
+    modes: Sequence[str] = ("histogram", "kde"),
+    modes_list: Sequence[Sequence[str] | str] | None = None,
+    kde_bw_scale: float | None = None,
+    kernel_color_map: dict[str, str] | None = None,
+    kernel_suffix: str | None = None,
+) -> None:
+    """
+    Blocked-CV report distributions for held-out performance metrics.
+
+    Metrics:
+      - rmse
+      - mae
+      - nlpd_mean
+    """
+    if biopsy_metrics_df is None or biopsy_metrics_df.empty:
+        return
+
+    required = {"rmse", "mae", "nlpd_mean"}
+    missing = required - set(biopsy_metrics_df.columns)
+    if missing:
+        raise ValueError(
+            f"biopsy_metrics_df missing required blocked_CV performance columns: {sorted(missing)}"
+        )
+
+    plot_df = biopsy_metrics_df.copy()
+    if "kernel_label" not in plot_df.columns:
+        plot_df["kernel_label"] = "all"
+    plot_df["kernel_label"] = plot_df["kernel_label"].fillna("all")
+
+    modes_iter = modes_list if modes_list is not None else [modes]
+
+    metric_specs = [
+        ("rmse", r"Held-out RMSE (Gy)", "blocked_cv_perf_hist_rmse"),
+        ("mae", r"Held-out MAE (Gy)", "blocked_cv_perf_hist_mae"),
+        ("nlpd_mean", r"Held-out NLPD", "blocked_cv_perf_hist_nlpd_mean"),
+    ]
+
+    for modes_use in modes_iter:
+        modes_use = (modes_use,) if isinstance(modes_use, str) else tuple(modes_use)
+        mode_suffix = "_".join(modes_use)
+        for value_col, x_label, base_stem in metric_specs:
+            file_name = _with_kernel_suffix(f"{base_stem}_{mode_suffix}", kernel_suffix)
+            plot_kernel_sensitivity_histogram(
+                metrics_df=plot_df,
+                value_col=value_col,
+                x_label=x_label,
+                save_dir=save_dir,
+                file_name_base=file_name,
+                file_types=save_formats,
+                show_title=False,
+                modes=modes_use,
+                kde_bw_scale=kde_bw_scale,
+                kernel_color_map=kernel_color_map,
+            )
+
+
+def plot_blocked_cv_variance_mode_comparison(
+    compare_biopsy_metrics_df: pd.DataFrame,
+    save_dir: Path,
+    *,
+    latent_mode: str = "latent",
+    observed_mode: str = "observed_mc",
+    save_formats=("pdf", "svg"),
+    make_delta_distributions: bool = True,
+    delta_modes: Sequence[str] = ("histogram",),
+    delta_kde_bw_scale: float | None = None,
+    kernel_color_map: dict[str, str] | None = None,
+    kernel_suffix: str | None = None,
+) -> None:
+    """
+    Blocked-CV report figures comparing variance-mode choices at biopsy level.
+
+    Creates paired scatter(s) for latent vs observed_mc and optional distribution
+    of delta = observed_mc - latent for key calibration metrics.
+    """
+    if compare_biopsy_metrics_df is None or compare_biopsy_metrics_df.empty:
+        return
+    if "variance_mode" not in compare_biopsy_metrics_df.columns:
+        raise ValueError("compare_biopsy_metrics_df must contain 'variance_mode'.")
+
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    df = compare_biopsy_metrics_df.copy()
+    df = df[df["variance_mode"].isin([latent_mode, observed_mode])].copy()
+    if df.empty:
+        return
+
+    key_cols = [
+        "Patient ID",
+        "Bx ID",
+        "Bx index",
+        "kernel_label",
+        "kernel_name",
+        "kernel_param",
+    ]
+    key_cols = [c for c in key_cols if c in df.columns]
+
+    metric_specs = [
+        ("sd_rstd", r"Held-out SD $r^{\mathrm{std}}$"),
+        ("mean_rstd", r"Held-out mean $r^{\mathrm{std}}$"),
+    ]
+
+    for metric_col, metric_label in metric_specs:
+        if metric_col not in df.columns:
+            continue
+        use_cols = key_cols + ["variance_mode", metric_col]
+        piv = (
+            df[use_cols]
+            .dropna(subset=[metric_col])
+            .pivot_table(index=key_cols, columns="variance_mode", values=metric_col, aggfunc="first")
+            .reset_index()
+        )
+        if latent_mode not in piv.columns or observed_mode not in piv.columns:
+            continue
+
+        x = pd.to_numeric(piv[latent_mode], errors="coerce").to_numpy(float)
+        y = pd.to_numeric(piv[observed_mode], errors="coerce").to_numpy(float)
+        msk = np.isfinite(x) & np.isfinite(y)
+        if not np.any(msk):
+            continue
+        piv = piv.loc[msk].copy()
+        x = x[msk]
+        y = y[msk]
+
+        fig, ax = plt.subplots(figsize=COHORT_SQUARE_FIGSIZE)
+        has_kernel = "kernel_label" in piv.columns and piv["kernel_label"].notna().any()
+        if has_kernel:
+            kernel_labels = list(pd.unique(piv["kernel_label"].dropna()))
+            fallback_colors = iter(KERNEL_PALETTE * ((len(kernel_labels) // len(KERNEL_PALETTE)) + 1))
+            for lab in kernel_labels:
+                sub = piv.loc[piv["kernel_label"] == lab]
+                if sub.empty:
+                    continue
+                sx = pd.to_numeric(sub[latent_mode], errors="coerce").to_numpy(float)
+                sy = pd.to_numeric(sub[observed_mode], errors="coerce").to_numpy(float)
+                color = kernel_color_map.get(lab) if kernel_color_map else None
+                if color is None:
+                    color = next(fallback_colors)
+                ax.scatter(
+                    sx,
+                    sy,
+                    s=24,
+                    alpha=0.85,
+                    color=color,
+                    edgecolors="white",
+                    linewidths=0.4,
+                    label=KERNEL_LABEL_MAP.get(lab, lab),
+                    zorder=3,
+                )
+        else:
+            ax.scatter(
+                x,
+                y,
+                s=24,
+                alpha=0.85,
+                color=PRIMARY_LINE_COLOR,
+                edgecolors="white",
+                linewidths=0.4,
+                label="Biopsies",
+                zorder=3,
+            )
+
+        lim_lo = float(np.nanmin(np.concatenate([x, y])))
+        lim_hi = float(np.nanmax(np.concatenate([x, y])))
+        if not np.isfinite(lim_lo) or not np.isfinite(lim_hi):
+            lim_lo, lim_hi = 0.0, 1.0
+        if lim_hi <= lim_lo:
+            lim_hi = lim_lo + 1.0
+        pad = 0.05 * (lim_hi - lim_lo)
+        lims = [lim_lo - pad, lim_hi + pad]
+        ax.plot(lims, lims, "k--", lw=1.0, alpha=0.8, label="Identity", zorder=1)
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+        ax.set_xlabel(rf"{metric_label} ({latent_mode})", fontsize=_fs_label())
+        ax.set_ylabel(rf"{metric_label} ({observed_mode})", fontsize=_fs_label())
+        _apply_axis_style(ax)
+        _apply_per_biopsy_ticks(ax)
+        handles, labels = ax.get_legend_handles_labels()
+        header_text = rf"$n={int(len(x))}$"
+        _finalize_legend_and_header(
+            ax,
+            header=header_text,
+            ncol=len(handles) if handles else 1,
+            header_loc="center",
+            header_fontsize=_fs_legend(),
+            handles=handles if handles else None,
+            labels=labels if labels else None,
+            legend_width_mode="axes",
+            expand_figure=False,
+        )
+        fig.tight_layout()
+        _save_figure(
+            fig,
+            save_dir / _with_kernel_suffix(
+                f"blocked_cv_variance_compare_scatter_{metric_col}_{latent_mode}_vs_{observed_mode}",
+                kernel_suffix,
+            ),
+            formats=save_formats,
+            dpi=400,
+            create_subdir_for_stem=False,
+        )
+
+        if make_delta_distributions:
+            delta_df = piv.copy()
+            delta_col = f"delta_{metric_col}_{observed_mode}_minus_{latent_mode}"
+            delta_df[delta_col] = (
+                pd.to_numeric(delta_df[observed_mode], errors="coerce")
+                - pd.to_numeric(delta_df[latent_mode], errors="coerce")
+            )
+            if "kernel_label" not in delta_df.columns:
+                delta_df["kernel_label"] = "all"
+            delta_df["kernel_label"] = delta_df["kernel_label"].fillna("all")
+            mode_suffix = (
+                "_".join(delta_modes)
+                if isinstance(delta_modes, (list, tuple))
+                else str(delta_modes)
+            )
+            plot_kernel_sensitivity_histogram(
+                metrics_df=delta_df,
+                value_col=delta_col,
+                x_label=rf"$\Delta$ {metric_label} ({observed_mode} - {latent_mode})",
+                save_dir=save_dir,
+                file_name_base=_with_kernel_suffix(
+                    f"blocked_cv_variance_compare_hist_{delta_col}_{mode_suffix}",
+                    kernel_suffix,
+                ),
+                file_types=save_formats,
+                show_title=False,
+                modes=delta_modes,
+                kde_bw_scale=delta_kde_bw_scale,
+                kernel_color_map=kernel_color_map,
+            )
+
+
 def plot_mean_sd_scatter_with_fits_production(
     metrics_df: pd.DataFrame,
     reg_stats: pd.DataFrame,
