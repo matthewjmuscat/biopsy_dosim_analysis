@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import GPR_analysis_pipeline_functions
 from scipy.stats import gaussian_kde
@@ -373,6 +374,7 @@ def plot_variogram_overlay(semivariogram_df, patient_id, bx_index, hyperparams,
         title_size=title_size, label_size=label_size, tick_size=tick_size,
         legend_size=legend_size, grid=grid
     )
+    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
     ax.legend(fontsize=legend_size)
 
     resolved = _resolve_save_path(save_path, file_name,

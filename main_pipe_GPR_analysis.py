@@ -41,7 +41,8 @@ def main():
     run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
     run_cohort_plots = False  # if True, write cohort-level production figures
     run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
-    run_blocked_cv_phase3c_smoke = True  # if True, run blocked_CV all-kernel train/test fit+predict outputs after fold map stage
+    run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
+    run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
 
     # --- Cohort filtering / plot cohort selection ---
     simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets
@@ -136,6 +137,10 @@ def main():
         ("rbf", None, "rbf"),
         ("exp", None, "exp"),
     ]  # kernel list for blocked_CV run loop
+    # None -> run all blocked_cv_kernel_specs; or explicit subset list of labels (3rd tuple entry in blocked_cv_kernel_specs).
+    # Valid labels with current defaults: ["matern_nu_1_5", "matern_nu_2_5", "rbf", "exp"].
+    # Example: blocked_cv_kernel_labels_to_run = ["rbf"] or ["matern_nu_1_5", "rbf"].
+    blocked_cv_kernel_labels_to_run = None
 
     # blocked_CV output toggles
     write_blocked_cv_eligible_views = True  # if True, also write *_eligible CSV views and eligibility exclusions table
@@ -147,6 +152,53 @@ def main():
     write_blocked_cv_per_kernel_fit_status_csvs = False
     write_blocked_cv_per_kernel_variance_compare_csvs = False
     write_blocked_cv_per_kernel_variance_summary_csvs = False
+
+    # blocked_CV plotting controls (independent from baseline plotting knobs)
+    blocked_cv_plot_patient_bx_list = [
+        ("189 (F2)", 0),
+        ("200 (F2)", 0),
+        ("201 (F2)", 1),
+        ("198 (F2)", 0),
+    ]  # grid subset for blocked_CV figures; set None to skip grid subset restriction
+    blocked_cv_plot_grid_ncols = 2  # number of columns for blocked_CV grid layouts
+    blocked_cv_plot_grid_label_map = {
+        ("189 (F2)", 0): "Biopsy 3",
+        ("200 (F2)", 0): "Biopsy 4",
+        ("201 (F2)", 1): "Biopsy 5",
+        ("198 (F2)", 0): "Biopsy 6",
+    }  # optional blocked_CV label overrides for grid figures
+    blocked_cv_plot_fold_ids = None  # None -> all folds; or explicit list (e.g., [0, 1])
+    blocked_cv_plot_max_folds_per_biopsy = None  # None -> no cap; otherwise limit folds shown per biopsy
+    blocked_cv_plot_fold_sort_mode = "fold_id"  # options: "fold_id", "z_start_mm"; deterministic fold display order
+    blocked_cv_plot_include_merged_tail_folds = True  # if False, exclude merged-tail folds from blocked_CV figure generation
+    blocked_cv_plot_include_rebalanced_two_fold_splits = True  # if False, exclude rebalanced-two-fold cases from blocked_CV figure generation
+    # None -> all kernels included in this blocked_CV run; or explicit label subset.
+    # Labels must match kernel labels used by blocked_cv_kernel_specs (e.g., "matern_nu_1_5", "matern_nu_2_5", "rbf", "exp").
+    blocked_cv_plot_kernel_labels = None
+    blocked_cv_plot_variance_mode = "primary"  # options: "primary", "latent", "observed_mc", "observed_mc_plus_nugget"
+    # Centralized blocked_CV plot gating to avoid one variable per figure type.
+    # Implemented keys currently used: paired_semivariogram_profile, profile_grids, semivariogram_grids,
+    # write_report_figures, write_diagnostic_figures.
+    # Phase 5D report keys are now wired for gating/config plumbing.
+    blocked_cv_plot_options = {
+        "paired_semivariogram_profile": False,
+        "profile_grids": True,
+        "semivariogram_grids": True,
+        "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
+        "semivariogram_n_pairs_fontsize": 7.0,  # fontsize for semivariogram n-pairs annotations
+        "report_calibration_scatter": True,  # Phase 5D: held-out mean(rstd) vs sd(rstd) figure family
+        "report_calibration_distributions": True,  # Phase 5D: held-out calibration histogram/KDE figure family
+        "report_performance_distributions": True,  # Phase 5D: held-out RMSE/MAE/NLPD histogram/KDE figure family
+        "report_variance_mode_comparison": True,  # Phase 5D: latent vs observed_mc comparison figure family
+        # Phase 5D distribution mode families.
+        # Examples:
+        #   ("histogram", "kde") -> one output family (combined histogram+KDE only)
+        #   [("histogram",), ("histogram", "kde"), ("kde",)] -> write histogram-only, combined, and KDE-only variants
+        "report_distribution_modes_list": [("histogram",), ("histogram", "kde"), ("kde",)],
+        "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
+        "write_report_figures": True,
+        "write_diagnostic_figures": False,
+    }
 
     # --- Plot presentation toggles ---
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
@@ -637,6 +689,41 @@ def main():
         blocked_cv_root, blocked_cv_figs_dir, blocked_cv_csv_dir = GPR_blocked_cv.init_blocked_cv_dirs(
             output_dir, subdir_name=blocked_cv_output_subdir
         )
+        blocked_cv_kernel_specs_use = list(blocked_cv_kernel_specs)
+        if blocked_cv_kernel_labels_to_run is not None:
+            allowed_kernel_labels = {str(k) for k in blocked_cv_kernel_labels_to_run}
+            blocked_cv_kernel_specs_use = [spec for spec in blocked_cv_kernel_specs_use if str(spec[2]) in allowed_kernel_labels]
+            if not blocked_cv_kernel_specs_use:
+                raise ValueError(
+                    "blocked_cv_kernel_labels_to_run filtered out all kernel specs. "
+                    "Provide labels that exist in blocked_cv_kernel_specs."
+                )
+        blocked_cv_plot_report_distribution_modes_list = blocked_cv_plot_options.get(
+            "report_distribution_modes_list", None
+        )
+        if blocked_cv_plot_report_distribution_modes_list is None:
+            blocked_cv_plot_report_distribution_modes_list_use = (("histogram", "kde"),)
+        elif isinstance(blocked_cv_plot_report_distribution_modes_list, str):
+            blocked_cv_plot_report_distribution_modes_list_use = (
+                (blocked_cv_plot_report_distribution_modes_list,),
+            )
+        else:
+            mode_items = list(blocked_cv_plot_report_distribution_modes_list)
+            if mode_items and all(isinstance(item, str) for item in mode_items):
+                blocked_cv_plot_report_distribution_modes_list_use = (tuple(mode_items),)
+            else:
+                normalized_modes = []
+                for mode_item in mode_items:
+                    if isinstance(mode_item, str):
+                        normalized_modes.append((mode_item,))
+                    else:
+                        mode_tuple = tuple(mode_item)
+                        if mode_tuple:
+                            normalized_modes.append(mode_tuple)
+                blocked_cv_plot_report_distribution_modes_list_use = (
+                    tuple(normalized_modes) if normalized_modes else (("histogram", "kde"),)
+                )
+
         blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
             block_mode=blocked_cv_block_mode,
             n_folds=blocked_cv_n_folds,
@@ -653,7 +740,7 @@ def main():
             primary_predictive_variance_mode=blocked_cv_primary_predictive_variance_mode,
             compare_variance_modes=blocked_cv_compare_variance_modes,
             variance_modes_to_compare=blocked_cv_variance_modes_to_compare,
-            kernel_specs=blocked_cv_kernel_specs,
+            kernel_specs=blocked_cv_kernel_specs_use,
             semivariogram_voxel_size_mm=semivariogram_voxel_size_mm,
             semivariogram_lag_bin_width_mm=semivariogram_pairwise_lag_bin_width_mm,
             write_debug_csvs=write_blocked_cv_debug_csvs,
@@ -662,6 +749,29 @@ def main():
             write_per_kernel_fit_status_csvs=write_blocked_cv_per_kernel_fit_status_csvs,
             write_per_kernel_variance_compare_csvs=write_blocked_cv_per_kernel_variance_compare_csvs,
             write_per_kernel_variance_summary_csvs=write_blocked_cv_per_kernel_variance_summary_csvs,
+            plot_patient_bx_list=blocked_cv_plot_patient_bx_list,
+            plot_grid_ncols=blocked_cv_plot_grid_ncols,
+            plot_grid_label_map=blocked_cv_plot_grid_label_map,
+            plot_fold_ids=blocked_cv_plot_fold_ids,
+            plot_max_folds_per_biopsy=blocked_cv_plot_max_folds_per_biopsy,
+            plot_fold_sort_mode=blocked_cv_plot_fold_sort_mode,
+            plot_include_merged_tail_folds=blocked_cv_plot_include_merged_tail_folds,
+            plot_include_rebalanced_two_fold_splits=blocked_cv_plot_include_rebalanced_two_fold_splits,
+            plot_kernel_labels=blocked_cv_plot_kernel_labels,
+            plot_variance_mode=blocked_cv_plot_variance_mode,
+            plot_make_paired_semivariogram_profile=bool(blocked_cv_plot_options.get("paired_semivariogram_profile", False)),
+            plot_make_semivariogram_grids=bool(blocked_cv_plot_options.get("semivariogram_grids", False)),
+            plot_make_profile_grids=bool(blocked_cv_plot_options.get("profile_grids", False)),
+            plot_semivariogram_show_n_pairs=bool(blocked_cv_plot_options.get("semivariogram_show_n_pairs", False)),
+            plot_semivariogram_n_pairs_fontsize=float(blocked_cv_plot_options.get("semivariogram_n_pairs_fontsize", 5.0)),
+            plot_make_report_calibration_scatter=bool(blocked_cv_plot_options.get("report_calibration_scatter", False)),
+            plot_make_report_calibration_distributions=bool(blocked_cv_plot_options.get("report_calibration_distributions", False)),
+            plot_make_report_performance_distributions=bool(blocked_cv_plot_options.get("report_performance_distributions", False)),
+            plot_make_report_variance_mode_comparison=bool(blocked_cv_plot_options.get("report_variance_mode_comparison", False)),
+            plot_report_distribution_modes_list=blocked_cv_plot_report_distribution_modes_list_use,
+            plot_report_distribution_kde_bw_scale=blocked_cv_plot_options.get("report_distribution_kde_bw_scale", None),
+            plot_write_report_figures=bool(blocked_cv_plot_options.get("write_report_figures", True)),
+            plot_write_diagnostic_figures=bool(blocked_cv_plot_options.get("write_diagnostic_figures", False)),
         )
         blocked_cv_status = GPR_blocked_cv.run_blocked_cv_phase3b(
             all_voxel_wise_dose_df=all_voxel_wise_dose_df,
@@ -672,9 +782,9 @@ def main():
             config=blocked_cv_cfg,
         )
         print(f"[blocked_CV] fold-mapping status: {blocked_cv_status}")
-        if run_blocked_cv_phase3c_smoke:
+        if run_blocked_cv_fit_predict:
             _print_section("BLOCKED_CV: All-kernel Train-only Fit + Held-out Predict")
-            blocked_cv_phase3c_status = GPR_blocked_cv.run_blocked_cv_phase3c_smoke(
+            blocked_cv_fit_predict_result = GPR_blocked_cv.run_blocked_cv_fit_predict(
                 all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                 semivariogram_df=semivariogram_df,
                 output_dir=blocked_cv_root,
@@ -682,7 +792,20 @@ def main():
                 csv_dir=blocked_cv_csv_dir,
                 config=blocked_cv_cfg,
             )
-            print(f"[blocked_CV] fit/predict status: {blocked_cv_phase3c_status}")
+            blocked_cv_fit_predict_status = blocked_cv_fit_predict_result["status"]
+            blocked_cv_fit_predict_artifacts = blocked_cv_fit_predict_result["artifacts"]
+            print(f"[blocked_CV] fit/predict status: {blocked_cv_fit_predict_status}")
+            if run_blocked_cv_plots:
+                _print_section("BLOCKED_CV: Plots")
+                blocked_cv_plot_status = GPR_blocked_cv.run_blocked_cv_plots(
+                    fit_predict_artifacts=blocked_cv_fit_predict_artifacts,
+                    all_voxel_wise_dose_df=all_voxel_wise_dose_df,
+                    output_dir=blocked_cv_root,
+                    figs_dir=blocked_cv_figs_dir,
+                    csv_dir=blocked_cv_csv_dir,
+                    config=blocked_cv_cfg,
+                )
+                print(f"[blocked_CV] plot status: {blocked_cv_plot_status}")
     else:
         _print_section("BLOCKED_CV: Skipped")
 

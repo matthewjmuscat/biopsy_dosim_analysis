@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Literal
@@ -493,6 +494,7 @@ def plot_variogram_for_biopsy(
 
     ax.set_xlabel("Separation distance h (mm)")
     ax.set_ylabel("γ(h)  (semivariance)")
+    ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
     ax.grid(True, alpha=0.25)
     ax.legend(frameon=False)
     plt.tight_layout()
