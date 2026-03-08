@@ -190,8 +190,11 @@ def main():
         "report_calibration_distributions": True,  # Phase 5D: held-out calibration histogram/KDE figure family
         "report_performance_distributions": True,  # Phase 5D: held-out RMSE/MAE/NLPD histogram/KDE figure family
         "report_variance_mode_comparison": True,  # Phase 5D: latent vs observed_mc comparison figure family
-        "report_distribution_modes": ("histogram", "kde"),  # Phase 5D: options per distribution family: ("histogram",), ("kde",), or ("histogram", "kde")
-        "report_distribution_modes_list": [("histogram",), ("histogram", "kde"), ("kde",)],  # optional Phase 5D multi-output modes; None -> only report_distribution_modes
+        # Phase 5D distribution mode families.
+        # Examples:
+        #   ("histogram", "kde") -> one output family (combined histogram+KDE only)
+        #   [("histogram",), ("histogram", "kde"), ("kde",)] -> write histogram-only, combined, and KDE-only variants
+        "report_distribution_modes_list": [("histogram",), ("histogram", "kde"), ("kde",)],
         "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
         "write_report_figures": True,
         "write_diagnostic_figures": False,
@@ -695,31 +698,31 @@ def main():
                     "blocked_cv_kernel_labels_to_run filtered out all kernel specs. "
                     "Provide labels that exist in blocked_cv_kernel_specs."
                 )
-        blocked_cv_plot_report_distribution_modes = blocked_cv_plot_options.get(
-            "report_distribution_modes", ("histogram", "kde")
-        )
-        if blocked_cv_plot_report_distribution_modes is None:
-            blocked_cv_plot_report_distribution_modes = ("histogram", "kde")
-        elif isinstance(blocked_cv_plot_report_distribution_modes, str):
-            blocked_cv_plot_report_distribution_modes = (blocked_cv_plot_report_distribution_modes,)
-        else:
-            blocked_cv_plot_report_distribution_modes = tuple(blocked_cv_plot_report_distribution_modes)
-
         blocked_cv_plot_report_distribution_modes_list = blocked_cv_plot_options.get(
             "report_distribution_modes_list", None
         )
         if blocked_cv_plot_report_distribution_modes_list is None:
-            blocked_cv_plot_report_distribution_modes_list_use = None
-        else:
-            blocked_cv_plot_report_distribution_modes_list_use = []
-            for mode_item in blocked_cv_plot_report_distribution_modes_list:
-                if isinstance(mode_item, str):
-                    blocked_cv_plot_report_distribution_modes_list_use.append((mode_item,))
-                else:
-                    blocked_cv_plot_report_distribution_modes_list_use.append(tuple(mode_item))
-            blocked_cv_plot_report_distribution_modes_list_use = tuple(
-                blocked_cv_plot_report_distribution_modes_list_use
+            blocked_cv_plot_report_distribution_modes_list_use = (("histogram", "kde"),)
+        elif isinstance(blocked_cv_plot_report_distribution_modes_list, str):
+            blocked_cv_plot_report_distribution_modes_list_use = (
+                (blocked_cv_plot_report_distribution_modes_list,),
             )
+        else:
+            mode_items = list(blocked_cv_plot_report_distribution_modes_list)
+            if mode_items and all(isinstance(item, str) for item in mode_items):
+                blocked_cv_plot_report_distribution_modes_list_use = (tuple(mode_items),)
+            else:
+                normalized_modes = []
+                for mode_item in mode_items:
+                    if isinstance(mode_item, str):
+                        normalized_modes.append((mode_item,))
+                    else:
+                        mode_tuple = tuple(mode_item)
+                        if mode_tuple:
+                            normalized_modes.append(mode_tuple)
+                blocked_cv_plot_report_distribution_modes_list_use = (
+                    tuple(normalized_modes) if normalized_modes else (("histogram", "kde"),)
+                )
 
         blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
             block_mode=blocked_cv_block_mode,
@@ -765,7 +768,6 @@ def main():
             plot_make_report_calibration_distributions=bool(blocked_cv_plot_options.get("report_calibration_distributions", False)),
             plot_make_report_performance_distributions=bool(blocked_cv_plot_options.get("report_performance_distributions", False)),
             plot_make_report_variance_mode_comparison=bool(blocked_cv_plot_options.get("report_variance_mode_comparison", False)),
-            plot_report_distribution_modes=blocked_cv_plot_report_distribution_modes,
             plot_report_distribution_modes_list=blocked_cv_plot_report_distribution_modes_list_use,
             plot_report_distribution_kde_bw_scale=blocked_cv_plot_options.get("report_distribution_kde_bw_scale", None),
             plot_write_report_figures=bool(blocked_cv_plot_options.get("write_report_figures", True)),

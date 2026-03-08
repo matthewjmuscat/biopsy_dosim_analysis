@@ -64,8 +64,7 @@ class BlockedCVConfig:
     plot_make_report_calibration_distributions: bool = False
     plot_make_report_performance_distributions: bool = False
     plot_make_report_variance_mode_comparison: bool = False
-    plot_report_distribution_modes: Iterable[str] = ("histogram", "kde")
-    plot_report_distribution_modes_list: Iterable[Iterable[str]] | None = None
+    plot_report_distribution_modes_list: Iterable[Iterable[str]] | Iterable[str] | str | None = None
     plot_report_distribution_kde_bw_scale: float | None = None
     plot_write_report_figures: bool = True
     plot_write_diagnostic_figures: bool = False
@@ -3052,19 +3051,35 @@ def run_blocked_cv_plots(
     else:
         _plot_progress("semivariogram grids: skipped")
 
-    report_dist_modes = tuple(config.plot_report_distribution_modes) if config.plot_report_distribution_modes is not None else ("histogram", "kde")
-    if not report_dist_modes:
-        report_dist_modes = ("histogram", "kde")
-    if config.plot_report_distribution_modes_list is not None:
-        report_dist_modes_list = []
-        for mode_item in config.plot_report_distribution_modes_list:
-            if isinstance(mode_item, str):
-                report_dist_modes_list.append((mode_item,))
-            else:
-                report_dist_modes_list.append(tuple(mode_item))
-        report_dist_modes_list = tuple(report_dist_modes_list) if report_dist_modes_list else None
+    # Normalize distribution mode families for report hist/KDE figures.
+    # Accepted forms:
+    # - None -> default (("histogram", "kde"),)
+    # - ("histogram", "kde") -> one combined family
+    # - [("histogram",), ("histogram", "kde"), ("kde",)] -> multiple families
+    # - "kde" -> one KDE-only family
+    raw_mode_families = config.plot_report_distribution_modes_list
+    if raw_mode_families is None:
+        report_dist_modes_list = (("histogram", "kde"),)
+    elif isinstance(raw_mode_families, str):
+        report_dist_modes_list = ((raw_mode_families,),)
     else:
-        report_dist_modes_list = None
+        mode_items = list(raw_mode_families)
+        if mode_items and all(isinstance(item, str) for item in mode_items):
+            report_dist_modes_list = (tuple(mode_items),)
+        else:
+            normalized_families = []
+            for mode_item in mode_items:
+                if isinstance(mode_item, str):
+                    normalized_families.append((mode_item,))
+                else:
+                    mode_tuple = tuple(mode_item)
+                    if mode_tuple:
+                        normalized_families.append(mode_tuple)
+            report_dist_modes_list = (
+                tuple(normalized_families)
+                if normalized_families
+                else (("histogram", "kde"),)
+            )
 
     do_report_calib = (
         config.plot_write_report_figures
@@ -3092,7 +3107,7 @@ def run_blocked_cv_plots(
                         biopsy_metrics_df=calib_df,
                         save_dir=calib_save_dir,
                         save_formats=("pdf", "svg"),
-                        modes=report_dist_modes,
+                        modes=report_dist_modes_list[0],
                         modes_list=report_dist_modes_list,
                         kde_bw_scale=config.plot_report_distribution_kde_bw_scale,
                         kernel_suffix=kernel_suffix,
@@ -3134,7 +3149,7 @@ def run_blocked_cv_plots(
                         biopsy_metrics_df=perf_df,
                         save_dir=perf_save_dir,
                         save_formats=("pdf", "svg"),
-                        modes=report_dist_modes,
+                        modes=report_dist_modes_list[0],
                         modes_list=report_dist_modes_list,
                         kde_bw_scale=config.plot_report_distribution_kde_bw_scale,
                         kernel_suffix=kernel_suffix,
@@ -3177,10 +3192,7 @@ def run_blocked_cv_plots(
                     kernel_vals = pd.unique(cmp_df["kernel_label"].dropna())
                     if len(kernel_vals) == 1:
                         kernel_suffix = str(kernel_vals[0])
-                if report_dist_modes_list is None:
-                    variance_mode_families = [report_dist_modes]
-                else:
-                    variance_mode_families = list(report_dist_modes_list)
+                variance_mode_families = list(report_dist_modes_list)
                 for family_idx, dist_mode_family in enumerate(variance_mode_families):
                     report_variance_compare_saved.extend(
                         gpr_pp.plot_blocked_cv_variance_mode_comparison(
@@ -3270,16 +3282,7 @@ def run_blocked_cv_plots(
         "plot_make_report_calibration_distributions": bool(config.plot_make_report_calibration_distributions),
         "plot_make_report_performance_distributions": bool(config.plot_make_report_performance_distributions),
         "plot_make_report_variance_mode_comparison": bool(config.plot_make_report_variance_mode_comparison),
-        "plot_report_distribution_modes": (
-            list(config.plot_report_distribution_modes)
-            if config.plot_report_distribution_modes is not None
-            else None
-        ),
-        "plot_report_distribution_modes_list": (
-            [list(m) if not isinstance(m, str) else [m] for m in config.plot_report_distribution_modes_list]
-            if config.plot_report_distribution_modes_list is not None
-            else None
-        ),
+        "plot_report_distribution_modes_list": [list(m) for m in report_dist_modes_list],
         "plot_report_distribution_kde_bw_scale": (
             None if config.plot_report_distribution_kde_bw_scale is None else float(config.plot_report_distribution_kde_bw_scale)
         ),
