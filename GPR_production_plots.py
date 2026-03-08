@@ -3037,11 +3037,14 @@ def calibration_plots_production(
                 pretty = KERNEL_LABEL_MAP.get(lab, lab)
                 ax.scatter(x, y, s=22, alpha=0.85, color=color, edgecolors="white", linewidths=0.4, label=pretty, zorder=3)
                 if "acceptable" in sub.columns:
-                    acc = sub.loc[msk, "acceptable"].to_numpy(dtype=float)
-                    if acc.size:
-                        pct = float(np.nanmean(acc) * 100.0)
+                    acc = pd.to_numeric(sub.loc[msk, "acceptable"], errors="coerce").to_numpy(dtype=float)
+                    valid = np.isfinite(acc)
+                    n_eval = int(np.sum(valid))
+                    if n_eval > 0:
+                        n_in = int(np.sum(acc[valid] >= 0.5))
+                        pct = float(100.0 * n_in / n_eval)
                         if np.isfinite(pct):
-                            acceptable_by_kernel.append((lab, pct))
+                            acceptable_by_kernel.append((lab, n_in, n_eval, pct))
             header_parts = []
             if acceptable_by_kernel:
                 short_names = {
@@ -3051,8 +3054,8 @@ def calibration_plots_production(
                     "exp": "Exp",
                 }
                 per_kernel_text = ", ".join(
-                    f"{pct:.1f}\\%\\ ({short_names.get(lab, lab)})"
-                    for lab, pct in acceptable_by_kernel
+                    f"{n_in}/{n_eval}\\ ({pct:.1f}\\%)\\ ({short_names.get(lab, lab)})"
+                    for lab, n_in, n_eval, pct in acceptable_by_kernel
                 )
                 header_parts.append(rf"$\mathrm{{Near\ ideal}}:\ {per_kernel_text}$")
             header_text = ", ".join(header_parts) if header_parts else None
@@ -3156,7 +3159,7 @@ def plot_blocked_cv_calibration_report(
     if "kernel_label" in calib_df.columns and calib_df["kernel_label"].notna().any():
         hue_col = "kernel_label"
 
-    return calibration_plots_production(
+    saved_paths = calibration_plots_production(
         calib_df=calib_df,
         save_dir=save_dir,
         save_formats=save_formats,
@@ -3171,6 +3174,33 @@ def plot_blocked_cv_calibration_report(
         make_histograms=make_histograms,
         make_scatter=make_scatter,
     )
+    # Keep each calibration figure family in its own folder so histogram/KDE variants
+    # for the same metric stay grouped together.
+    grouped_paths: list[str] = []
+    for pstr in saved_paths:
+        p = Path(pstr)
+        stem = p.stem
+        if stem.startswith("calib_hist_mean_resstd_"):
+            subdir = "mean_resstd"
+        elif stem.startswith("calib_hist_sd_resstd_"):
+            subdir = "sd_resstd"
+        elif stem.startswith("calib_hist_cov_le1_"):
+            subdir = "pct_abs_le1"
+        elif stem.startswith("calib_hist_cov_le2_"):
+            subdir = "pct_abs_le2"
+        elif stem.startswith("calib_scatter_mean_vs_sd"):
+            subdir = "mean_vs_sd_scatter"
+        else:
+            grouped_paths.append(str(p))
+            continue
+        target_dir = Path(save_dir).joinpath(subdir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir.joinpath(p.name)
+        if target_path.exists():
+            target_path.unlink()
+        p.replace(target_path)
+        grouped_paths.append(str(target_path))
+    return grouped_paths
 
 
 def plot_blocked_cv_performance_distributions(
@@ -3235,7 +3265,28 @@ def plot_blocked_cv_performance_distributions(
             )
             saved_paths_all.extend(out_paths)
 
-    return saved_paths_all
+    grouped_paths: list[str] = []
+    for pstr in saved_paths_all:
+        p = Path(pstr)
+        stem = p.stem
+        if stem.startswith("blocked_cv_perf_hist_rmse_"):
+            subdir = "rmse"
+        elif stem.startswith("blocked_cv_perf_hist_mae_"):
+            subdir = "mae"
+        elif stem.startswith("blocked_cv_perf_hist_nlpd_mean_"):
+            subdir = "nlpd_mean"
+        else:
+            grouped_paths.append(str(p))
+            continue
+        target_dir = Path(save_dir).joinpath(subdir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir.joinpath(p.name)
+        if target_path.exists():
+            target_path.unlink()
+        p.replace(target_path)
+        grouped_paths.append(str(target_path))
+
+    return grouped_paths
 
 
 def plot_blocked_cv_variance_mode_comparison(
@@ -3421,7 +3472,30 @@ def plot_blocked_cv_variance_mode_comparison(
             )
             saved_paths_all.extend(out_paths)
 
-    return saved_paths_all
+    grouped_paths: list[str] = []
+    for pstr in saved_paths_all:
+        p = Path(pstr)
+        stem = p.stem
+        if stem.startswith("blocked_cv_variance_compare_scatter_sd_rstd_"):
+            subdir = "scatter_sd_rstd"
+        elif stem.startswith("blocked_cv_variance_compare_scatter_mean_rstd_"):
+            subdir = "scatter_mean_rstd"
+        elif stem.startswith("blocked_cv_variance_compare_hist_delta_sd_rstd_"):
+            subdir = "delta_sd_rstd"
+        elif stem.startswith("blocked_cv_variance_compare_hist_delta_mean_rstd_"):
+            subdir = "delta_mean_rstd"
+        else:
+            grouped_paths.append(str(p))
+            continue
+        target_dir = Path(save_dir).joinpath(subdir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir.joinpath(p.name)
+        if target_path.exists():
+            target_path.unlink()
+        p.replace(target_path)
+        grouped_paths.append(str(target_path))
+
+    return grouped_paths
 
 
 def plot_mean_sd_scatter_with_fits_production(
