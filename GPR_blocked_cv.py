@@ -775,10 +775,26 @@ def _compute_fold_metrics_from_predictions(
         residual = pd.to_numeric(g.get("residual", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
         rstd = pd.to_numeric(g.get("rstd", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
         var_pred_used = pd.to_numeric(g.get("var_pred_used", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        var_obs_test = pd.to_numeric(g.get("var_obs_test", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        sd_test_latent = pd.to_numeric(g.get("sd_test_latent", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
 
         resid_v = residual[np.isfinite(residual)]
         rstd_v = rstd[np.isfinite(rstd)]
         valid_nlpd = np.isfinite(residual) & np.isfinite(var_pred_used)
+        indep_sd_test = np.sqrt(np.maximum(var_obs_test, 0.0))
+        valid_delta_sd = np.isfinite(indep_sd_test) & np.isfinite(sd_test_latent)
+        if np.any(valid_delta_sd):
+            mean_mc_sd_test = float(np.mean(indep_sd_test[valid_delta_sd]))
+            mean_gp_sd_test_latent = float(np.mean(sd_test_latent[valid_delta_sd]))
+            pct_reduction_mean_sd_test_latent = (
+                float(100.0 * (1.0 - mean_gp_sd_test_latent / mean_mc_sd_test))
+                if mean_mc_sd_test > 0
+                else np.nan
+            )
+        else:
+            mean_mc_sd_test = np.nan
+            mean_gp_sd_test_latent = np.nan
+            pct_reduction_mean_sd_test_latent = np.nan
         eps = 1e-12
         if np.any(valid_nlpd):
             resid_nlpd = residual[valid_nlpd]
@@ -814,6 +830,9 @@ def _compute_fold_metrics_from_predictions(
                 "pct_abs_le2": float(100.0 * n_abs_le2 / n_rstd_valid) if n_rstd_valid else np.nan,
                 "pct_abs_ge3": float(100.0 * n_abs_ge3 / n_rstd_valid) if n_rstd_valid else np.nan,
                 "nlpd_mean": nlpd_mean,
+                "mean_mc_sd_test": mean_mc_sd_test,
+                "mean_gp_sd_test_latent": mean_gp_sd_test_latent,
+                "pct_reduction_mean_sd_test_latent": pct_reduction_mean_sd_test_latent,
             }
         )
         rows.append(row)
@@ -878,8 +897,24 @@ def _compute_biopsy_metrics_from_predictions(
         residual = pd.to_numeric(g.get("residual", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
         rstd = pd.to_numeric(g.get("rstd", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
         var_pred_used = pd.to_numeric(g.get("var_pred_used", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        var_obs_test = pd.to_numeric(g.get("var_obs_test", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
+        sd_test_latent = pd.to_numeric(g.get("sd_test_latent", pd.Series(dtype=float)), errors="coerce").to_numpy(float)
         resid_v = residual[np.isfinite(residual)]
         rstd_v = rstd[np.isfinite(rstd)]
+        indep_sd_test = np.sqrt(np.maximum(var_obs_test, 0.0))
+        valid_delta_sd = np.isfinite(indep_sd_test) & np.isfinite(sd_test_latent)
+        if np.any(valid_delta_sd):
+            mean_mc_sd_test = float(np.mean(indep_sd_test[valid_delta_sd]))
+            mean_gp_sd_test_latent = float(np.mean(sd_test_latent[valid_delta_sd]))
+            pct_reduction_mean_sd_test_latent = (
+                float(100.0 * (1.0 - mean_gp_sd_test_latent / mean_mc_sd_test))
+                if mean_mc_sd_test > 0
+                else np.nan
+            )
+        else:
+            mean_mc_sd_test = np.nan
+            mean_gp_sd_test_latent = np.nan
+            pct_reduction_mean_sd_test_latent = np.nan
 
         valid_nlpd = np.isfinite(residual) & np.isfinite(var_pred_used)
         eps = 1e-12
@@ -921,6 +956,9 @@ def _compute_biopsy_metrics_from_predictions(
                 "pct_abs_le2": float(100.0 * n_abs_le2 / n_rstd_valid) if n_rstd_valid else np.nan,
                 "pct_abs_ge3": float(100.0 * n_abs_ge3 / n_rstd_valid) if n_rstd_valid else np.nan,
                 "nlpd_mean": nlpd_mean,
+                "mean_mc_sd_test": mean_mc_sd_test,
+                "mean_gp_sd_test_latent": mean_gp_sd_test_latent,
+                "pct_reduction_mean_sd_test_latent": pct_reduction_mean_sd_test_latent,
             }
         )
         rows.append(row)
@@ -974,6 +1012,9 @@ def _compute_cohort_summary_from_biopsy_metrics(biopsy_df: pd.DataFrame) -> pd.D
         "pct_abs_le2",
         "pct_abs_ge3",
         "nlpd_mean",
+        "mean_mc_sd_test",
+        "mean_gp_sd_test_latent",
+        "pct_reduction_mean_sd_test_latent",
     ]
     metric_cols = [c for c in metric_cols if c in biopsy_df.columns]
 
@@ -2019,6 +2060,7 @@ def _build_blocked_cv_fold_plot_payload(
     *,
     all_voxel_wise_dose_df: pd.DataFrame,
     fold_map_df: pd.DataFrame,
+    fold_metrics_df: pd.DataFrame | None,
     pred_group_df: pd.DataFrame,
     patient_id,
     bx_index: int,
@@ -2044,6 +2086,19 @@ def _build_blocked_cv_fold_plot_payload(
     ].copy()
     if fold_rows.empty or "is_test" not in fold_rows.columns:
         return None
+
+    fold_metrics_row = None
+    if isinstance(fold_metrics_df, pd.DataFrame) and not fold_metrics_df.empty:
+        fm = fold_metrics_df[
+            (fold_metrics_df["Patient ID"] == patient_id)
+            & (fold_metrics_df["Bx index"] == bx_index)
+            & (fold_metrics_df["fold_id"].astype(int) == int(fold_id))
+            & (fold_metrics_df["kernel_label"].astype(str) == str(pred_group_df["kernel_label"].iloc[0]))
+        ].copy()
+        if "predictive_variance_mode" in fm.columns:
+            fm = fm[fm["predictive_variance_mode"].astype(str) == str(config.primary_predictive_variance_mode)]
+        if not fm.empty:
+            fold_metrics_row = fm.iloc[0]
 
     is_test = _normalize_bool_series(fold_rows["is_test"], default=False)
     test_voxels = set(fold_rows.loc[is_test, "Voxel index"].astype(int).tolist())
@@ -2157,6 +2212,7 @@ def _build_blocked_cv_fold_plot_payload(
         "var_n_test": var_n_test,
         "x_test_min": x_test_min,
         "x_test_max": x_test_max,
+        "fold_metrics_row": fold_metrics_row,
     }
 
 
@@ -2164,6 +2220,7 @@ def _plot_blocked_cv_variogram_profile_pair(
     *,
     all_voxel_wise_dose_df: pd.DataFrame,
     fold_map_df: pd.DataFrame,
+    fold_metrics_df: pd.DataFrame | None,
     pred_group_df: pd.DataFrame,
     patient_id,
     bx_index: int,
@@ -2182,6 +2239,7 @@ def _plot_blocked_cv_variogram_profile_pair(
     payload = _build_blocked_cv_fold_plot_payload(
         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
         fold_map_df=fold_map_df,
+        fold_metrics_df=fold_metrics_df,
         pred_group_df=pred_group_df,
         patient_id=patient_id,
         bx_index=bx_index,
@@ -2299,12 +2357,29 @@ def _draw_blocked_cv_profile_axis(
     gpr_pp._apply_axis_style(ax)
     gpr_pp._apply_per_biopsy_ticks(ax)
 
-    mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
-    shrink = 100.0 * (1 - np.nanmean(gp_res["sd_X"]) / np.nanmean(indep_sd)) if np.nanmean(indep_sd) > 0 else np.nan
-    metrics_str = (
-        rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
-        rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
-    )
+    fold_metrics_row = payload.get("fold_metrics_row", None)
+    delta_test = np.nan
+    n_test_pts = np.nan
+    if isinstance(fold_metrics_row, pd.Series):
+        delta_test = float(pd.to_numeric(fold_metrics_row.get("pct_reduction_mean_sd_test_latent", np.nan), errors="coerce"))
+        n_test_pts = float(pd.to_numeric(fold_metrics_row.get("n_test_points", np.nan), errors="coerce"))
+
+    if np.isfinite(delta_test):
+        if np.isfinite(n_test_pts):
+            metrics_str = (
+                rf"$n_{{\mathrm{{test}}}} = {int(n_test_pts)},\ "
+                rf"\Delta_b^{{(\mathrm{{SD}},\ \mathrm{{test}})}} = {delta_test:.1f}\%$"
+            )
+        else:
+            metrics_str = rf"$\Delta_b^{{(\mathrm{{SD}},\ \mathrm{{test}})}} = {delta_test:.1f}\%$"
+    else:
+        # Fallback if fold-level held-out summary is unavailable.
+        mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
+        shrink = 100.0 * (1 - np.nanmean(gp_res["sd_X"]) / np.nanmean(indep_sd)) if np.nanmean(indep_sd) > 0 else np.nan
+        metrics_str = (
+            rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+            rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+        )
     ax.text(
         0.98,
         1.04,
@@ -2401,6 +2476,7 @@ def run_blocked_cv_plots(
     pred_df = fit_predict_artifacts.get("pred_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     fold_map_df = fit_predict_artifacts.get("fold_map_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     fold_summary_df = fit_predict_artifacts.get("fold_summary_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
+    fold_metrics_df = fit_predict_artifacts.get("fold_metrics_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     biopsy_metrics_df = fit_predict_artifacts.get("biopsy_metrics_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     compare_biopsy_metrics_df = fit_predict_artifacts.get("compare_biopsy_metrics_df", pd.DataFrame()) if isinstance(fit_predict_artifacts, dict) else pd.DataFrame()
     n_pred = int(len(pred_df)) if isinstance(pred_df, pd.DataFrame) else 0
@@ -2547,6 +2623,7 @@ def run_blocked_cv_plots(
                 out_paths = _plot_blocked_cv_variogram_profile_pair(
                     all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                     fold_map_df=fold_map_df,
+                    fold_metrics_df=fold_metrics_df,
                     pred_group_df=pred_group_df,
                     patient_id=patient_id,
                     bx_index=bx_index,
@@ -2629,6 +2706,7 @@ def run_blocked_cv_plots(
                     payload = _build_blocked_cv_fold_plot_payload(
                         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                         fold_map_df=fold_map_df,
+                        fold_metrics_df=fold_metrics_df,
                         pred_group_df=pred_group_df,
                         patient_id=patient_id,
                         bx_index=bx_index,
@@ -2736,6 +2814,7 @@ def run_blocked_cv_plots(
                     payload = _build_blocked_cv_fold_plot_payload(
                         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                         fold_map_df=fold_map_df,
+                        fold_metrics_df=fold_metrics_df,
                         pred_group_df=pred_group_df,
                         patient_id=patient_id,
                         bx_index=bx_index,
@@ -2868,6 +2947,7 @@ def run_blocked_cv_plots(
                     payload = _build_blocked_cv_fold_plot_payload(
                         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                         fold_map_df=fold_map_df,
+                        fold_metrics_df=fold_metrics_df,
                         pred_group_df=pred_group_df,
                         patient_id=patient_id,
                         bx_index=bx_index,
@@ -2976,6 +3056,7 @@ def run_blocked_cv_plots(
                     payload = _build_blocked_cv_fold_plot_payload(
                         all_voxel_wise_dose_df=all_voxel_wise_dose_df,
                         fold_map_df=fold_map_df,
+                        fold_metrics_df=fold_metrics_df,
                         pred_group_df=pred_group_df,
                         patient_id=patient_id,
                         bx_index=bx_index,
