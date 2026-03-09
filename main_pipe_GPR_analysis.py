@@ -30,16 +30,74 @@ def main():
         line = "=" * 80
         print(f"\n{line}\n{title}\n{line}")
 
+    def _biopsy_alpha_code(index: int) -> str:
+        """0 -> A, 25 -> Z, 26 -> AA, ... (Excel-style base-26 letters)."""
+        n = int(index)
+        if n < 0:
+            raise ValueError(f"index must be >= 0, got {index}")
+        chars = []
+        while True:
+            n, rem = divmod(n, 26)
+            chars.append(chr(ord("A") + rem))
+            if n == 0:
+                break
+            n -= 1
+        return "".join(reversed(chars))
+
+    def _build_plot_biopsy_label_map(
+        semivariogram_df: pd.DataFrame,
+        explicit_label_map: dict[tuple[str, int], str],
+        *,
+        anonymize_unmapped: bool,
+        anonymized_prefix: str = "Biopsy",
+    ) -> dict[tuple[str, int], str]:
+        """
+        Build a display label map keyed by (Patient ID, Bx index).
+
+        Explicit labels are always preserved. If anonymize_unmapped is True,
+        remaining biopsies are labeled sequentially (e.g., "Biopsy A", "Biopsy B", ...).
+        """
+        out = {k: str(v) for k, v in dict(explicit_label_map).items()}
+        if not anonymize_unmapped:
+            return out
+        if semivariogram_df is None or semivariogram_df.empty:
+            return out
+        if not {"Patient ID", "Bx index"}.issubset(semivariogram_df.columns):
+            return out
+
+        key_df = semivariogram_df[["Patient ID", "Bx index"]].drop_duplicates().copy()
+        key_df["Bx index"] = pd.to_numeric(key_df["Bx index"], errors="coerce")
+        key_df = key_df.dropna(subset=["Bx index"])
+        key_df["Bx index"] = key_df["Bx index"].astype(int)
+        key_df = key_df.sort_values(["Patient ID", "Bx index"], kind="mergesort")
+
+        prefix = str(anonymized_prefix).strip() or "Biopsy"
+        used_labels = {str(v) for v in out.values()}
+        next_idx = 0
+
+        for _, r in key_df.iterrows():
+            key = (r["Patient ID"], int(r["Bx index"]))
+            if key in out:
+                continue
+            while True:
+                candidate = f"{prefix} {_biopsy_alpha_code(next_idx)}"
+                next_idx += 1
+                if candidate not in used_labels:
+                    break
+            out[key] = candidate
+            used_labels.add(candidate)
+        return out
+
 
     # =========================================================================
     # Runtime configuration (single-source knobs; keep synchronized with docs)
     # =========================================================================
 
     # --- Pipeline lane switches ---
-    run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
-    run_patient_plots = False  # if True, write per-biopsy and paired patient figures
-    run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
-    run_cohort_plots = False  # if True, write cohort-level production figures
+    run_semivariogram_plots = True  # if True, write per-biopsy semivariogram figures
+    run_patient_plots = True  # if True, write per-biopsy and paired patient figures
+    run_kernel_sensitivity_and_calibtration_flag = True  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
+    run_cohort_plots = True  # if True, write cohort-level production figures
     run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
     run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
     run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
@@ -83,7 +141,7 @@ def main():
 
     # --- Baseline kernel identity + kernel metadata ---
     # Recommended default from sensitivity runs on this cohort.
-    BASE_KERNEL_SPEC = ("rbf", None)  # options: ("matern", 1.5), ("matern", 2.5), ("rbf", None), ("exp", None)
+    BASE_KERNEL_SPEC = ("matern", 1.5)  # options: ("matern", 1.5), ("matern", 2.5), ("rbf", None), ("exp", None)
     _KERNEL_LABEL_MAP = {
         ("matern", 1.5): "matern_nu_1_5",
         ("matern", 2.5): "matern_nu_2_5",
@@ -181,7 +239,7 @@ def main():
     # write_report_figures, write_diagnostic_figures.
     # Phase 5D report keys are now wired for gating/config plumbing.
     blocked_cv_plot_options = {
-        "paired_semivariogram_profile": False,
+        "paired_semivariogram_profile": True,
         "profile_grids": True,
         "semivariogram_grids": True,
         "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
@@ -197,11 +255,15 @@ def main():
         "report_distribution_modes_list": [("histogram",), ("histogram", "kde"), ("kde",)],
         "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
         "write_report_figures": True,
-        "write_diagnostic_figures": False,
+        "write_diagnostic_figures": False, # note yet implemented 
     }
 
     # --- Plot presentation toggles ---
+    anonymize_unmapped_biopsy_plot_labels = True  # if True, auto-label every unmapped biopsy on plots as "Biopsy A", "Biopsy B", ... while preserving explicit label_map entries
+    anonymized_biopsy_label_prefix = "Biopsy"  # prefix used for auto-generated anonymized labels when anonymize_unmapped_biopsy_plot_labels=True
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
+    baseline_plot_semivariogram_show_n_pairs = False  # if True, annotate semivariogram points with n-pair labels on baseline paired semivariogram/profile plots
+    baseline_plot_semivariogram_n_pairs_fontsize = 7.0  # fontsize for baseline semivariogram n-pair annotations in paired plots
 
     # --- CSV output toggles ---
     # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
@@ -507,6 +569,30 @@ def main():
       dtype='object')"""
     print(semivariogram_df)
 
+    if anonymize_unmapped_biopsy_plot_labels:
+        explicit_plot_label_map = {}
+        explicit_plot_label_map.update({k: str(v) for k, v in per_biopsy_label_map.items()})
+        explicit_plot_label_map.update({k: str(v) for k, v in grid_label_map.items()})
+        explicit_plot_label_map.update({k: str(v) for k, v in blocked_cv_plot_grid_label_map.items()})
+        _shared_plot_biopsy_label_map = _build_plot_biopsy_label_map(
+            semivariogram_df=semivariogram_df,
+            explicit_label_map=explicit_plot_label_map,
+            anonymize_unmapped=True,
+            anonymized_prefix=anonymized_biopsy_label_prefix,
+        )
+        per_biopsy_label_map_use = _shared_plot_biopsy_label_map
+        grid_label_map_use = _shared_plot_biopsy_label_map
+        blocked_cv_plot_grid_label_map_use = _shared_plot_biopsy_label_map
+        print(
+            "[plot labels] anonymization enabled: "
+            f"{len(_shared_plot_biopsy_label_map)} biopsy labels mapped "
+            f"(prefix='{anonymized_biopsy_label_prefix}')."
+        )
+    else:
+        per_biopsy_label_map_use = dict(per_biopsy_label_map)
+        grid_label_map_use = dict(grid_label_map)
+        blocked_cv_plot_grid_label_map_use = dict(blocked_cv_plot_grid_label_map)
+
     if run_semivariogram_method_parity_check:
         parity_dir = output_dir.joinpath("semivariogram_method_parity")
         parity_dir.mkdir(parents=True, exist_ok=True)
@@ -751,7 +837,7 @@ def main():
             write_per_kernel_variance_summary_csvs=write_blocked_cv_per_kernel_variance_summary_csvs,
             plot_patient_bx_list=blocked_cv_plot_patient_bx_list,
             plot_grid_ncols=blocked_cv_plot_grid_ncols,
-            plot_grid_label_map=blocked_cv_plot_grid_label_map,
+            plot_grid_label_map=blocked_cv_plot_grid_label_map_use,
             plot_fold_ids=blocked_cv_plot_fold_ids,
             plot_max_folds_per_biopsy=blocked_cv_plot_max_folds_per_biopsy,
             plot_fold_sort_mode=blocked_cv_plot_fold_sort_mode,
@@ -842,7 +928,7 @@ def main():
             patient_bx_list=patient_bx_list,
             save_path=grid_dir / f"gp_profiles_grid_kernel_{BASE_KERNEL_LABEL}",
             ncols=grid_ncols,
-            label_map=grid_label_map,
+            label_map=grid_label_map_use,
             metrics_df=metrics_df,
             save_formats=("pdf", "svg"),
             dpi=400,
@@ -859,7 +945,7 @@ def main():
             patient_bx_list=patient_bx_list,
             save_path=grid_dir / f"variogram_overlays_grid_kernel_{BASE_KERNEL_LABEL}",
             ncols=grid_ncols,
-            label_map=grid_label_map,
+            label_map=grid_label_map_use,
             metrics_df=metrics_df,
             save_formats=("pdf", "svg"),
             dpi=400,
@@ -893,7 +979,7 @@ def main():
                save_formats=("pdf", "svg"),
                show_titles=False,
                font_scale=1.0,
-               title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+               title_label=per_biopsy_label_map_use.get((patient_id, bx_index)),
                kernel_suffix=BASE_KERNEL_LABEL,
                include_kernel_legend=include_kernel_legend_in_primary_histograms,
                kernel_legend_label=BASE_KERNEL_LABEL,
@@ -911,10 +997,12 @@ def main():
                 save_dir=pair_dir,
                 file_name_base=f"variogram_profile_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
-                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                title_label=per_biopsy_label_map_use.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
                 include_kernel_legend=include_kernel_legend_in_primary_histograms,
                 kernel_legend_label=BASE_KERNEL_LABEL,
+                annotate_semivariogram_n_pairs=bool(baseline_plot_semivariogram_show_n_pairs),
+                semivariogram_n_pairs_fontsize=float(baseline_plot_semivariogram_n_pairs_fontsize),
             )
             print(f"    [plots] Paired uncertainty reduction/ratio for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_uncertainty_pair(
@@ -924,7 +1012,7 @@ def main():
                 save_dir=pair_dir,
                 file_name_base=f"uncertainty_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
-                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                title_label=per_biopsy_label_map_use.get((patient_id, bx_index)),
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
                 include_kernel_legend=include_kernel_legend_in_primary_histograms,
                 kernel_legend_label=BASE_KERNEL_LABEL,
@@ -937,7 +1025,7 @@ def main():
                 save_dir=pair_dir,
                 file_name_base=f"residuals_pair_patient_{patient_id}_bx_{bx_index}_kernel_{BASE_KERNEL_LABEL}",
                 save_formats=("pdf", "svg"),
-                title_label=per_biopsy_label_map.get((patient_id, bx_index)),
+                title_label=per_biopsy_label_map_use.get((patient_id, bx_index)),
                 include_kernel_legend=include_kernel_legend_in_primary_histograms,
                 kernel_legend_label=BASE_KERNEL_LABEL,
             )
