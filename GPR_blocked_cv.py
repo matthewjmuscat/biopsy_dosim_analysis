@@ -2254,6 +2254,28 @@ def _plot_blocked_cv_variogram_profile_pair(
     sv_train = payload["sv_train"]
     ell = payload["ell"]
     nugget = payload["nugget"]
+    fold_metrics_row = payload.get("fold_metrics_row", None)
+    X_test = np.asarray(payload.get("X_test", np.array([])), dtype=float)
+    y_test = np.asarray(payload.get("y_test", np.array([])), dtype=float)
+    x_test_min = payload.get("x_test_min", np.nan)
+    x_test_max = payload.get("x_test_max", np.nan)
+
+    metrics_left = (
+        rf"$\hat{{\ell}}_{{b,-f}} = {ell:.1f}~\mathrm{{mm}},\ "
+        rf"\hat{{\tau}}_{{b,-f}}^2 = {gpr_pp._format_nugget(nugget)}\ \mathrm{{Gy}}^2$"
+    )
+    metrics_right = None
+    if isinstance(fold_metrics_row, pd.Series):
+        delta_test = float(pd.to_numeric(fold_metrics_row.get("pct_reduction_mean_sd_test_latent", np.nan), errors="coerce"))
+        n_test_pts = float(pd.to_numeric(fold_metrics_row.get("n_test_points", np.nan), errors="coerce"))
+        if np.isfinite(delta_test):
+            if np.isfinite(n_test_pts):
+                metrics_right = (
+                    rf"$n_{{b,f}}^{{\mathrm{{test}}}} = {int(n_test_pts)},\ "
+                    rf"\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
+                )
+            else:
+                metrics_right = rf"$\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
 
     out_paths = gpr_pp.plot_variogram_and_profile_pair(
         sv_train,
@@ -2271,6 +2293,12 @@ def _plot_blocked_cv_variogram_profile_pair(
         semivariogram_n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
         title_fontsize=max(float(getattr(gpr_pp, "TITLE_FONTSIZE", 14)) - 2.0, 1.0),
         create_subdir_for_stem=False,
+        X_test=X_test,
+        y_test=y_test,
+        x_test_min=None if not np.isfinite(x_test_min) else float(x_test_min),
+        x_test_max=None if not np.isfinite(x_test_max) else float(x_test_max),
+        metrics_left_override=metrics_left,
+        metrics_right_override=metrics_right,
     )
     return [Path(p) for p in out_paths]
 
@@ -2364,11 +2392,11 @@ def _draw_blocked_cv_profile_axis(
     if np.isfinite(delta_test):
         if np.isfinite(n_test_pts):
             metrics_str = (
-                rf"$n_{{\mathrm{{test}}}} = {int(n_test_pts)},\ "
-                rf"\Delta_b^{{(\mathrm{{SD}},\ \mathrm{{test}})}} = {delta_test:.1f}\%$"
+                rf"$n_{{b,f}}^{{\mathrm{{test}}}} = {int(n_test_pts)},\ "
+                rf"\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
             )
         else:
-            metrics_str = rf"$\Delta_b^{{(\mathrm{{SD}},\ \mathrm{{test}})}} = {delta_test:.1f}\%$"
+            metrics_str = rf"$\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
     else:
         # Fallback if fold-level held-out summary is unavailable.
         mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
@@ -2435,8 +2463,8 @@ def _draw_blocked_cv_semivariogram_axis(
     gpr_pp._apply_per_biopsy_ticks(ax)
     gpr_pp._enforce_integer_major_xticks(ax)
     metrics_str = (
-        rf"$\hat{{\ell}}_b = {payload['ell']:.1f}~\mathrm{{mm}},\ "
-        rf"\hat{{\tau}}_b^2 = {gpr_pp._format_nugget(payload['nugget'])}\ \mathrm{{Gy}}^2$"
+        rf"$\hat{{\ell}}_{{b,-f}} = {payload['ell']:.1f}~\mathrm{{mm}},\ "
+        rf"\hat{{\tau}}_{{b,-f}}^2 = {gpr_pp._format_nugget(payload['nugget'])}\ \mathrm{{Gy}}^2$"
     )
     ax.text(
         0.98,

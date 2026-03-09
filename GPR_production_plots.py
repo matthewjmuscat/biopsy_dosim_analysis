@@ -2085,6 +2085,13 @@ def plot_variogram_and_profile_pair(
     semivariogram_n_pairs_fontsize: float | None = None,
     title_fontsize: float | None = None,
     create_subdir_for_stem: bool = True,
+    X_test: np.ndarray | None = None,
+    y_test: np.ndarray | None = None,
+    x_test_min: float | None = None,
+    x_test_max: float | None = None,
+    metrics_left_override: str | None = None,
+    metrics_right_override: str | None = None,
+    heldout_legend_label: str = r"Held-out $\widetilde{D}_{b,v}$",
 ):
     """
     Two-panel figure: semivariogram overlay (left) + GP profile (right),
@@ -2147,6 +2154,8 @@ def plot_variogram_and_profile_pair(
         if pd.notna(nug_tmp):
             nug_val = float(nug_tmp)
     metrics_left = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+    if metrics_left_override is not None:
+        metrics_left = str(metrics_left_override)
     top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
 
     # Right: GP profile
@@ -2168,6 +2177,17 @@ def plot_variogram_and_profile_pair(
     ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band")
     ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
     ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$")
+    X_test_arr = np.asarray([] if X_test is None else X_test, dtype=float).ravel()
+    y_test_arr = np.asarray([] if y_test is None else y_test, dtype=float).ravel()
+    if X_test_arr.size and y_test_arr.size:
+        n_use = min(X_test_arr.size, y_test_arr.size)
+        X_test_arr = X_test_arr[:n_use]
+        y_test_arr = y_test_arr[:n_use]
+        ax.plot(X_test_arr, y_test_arr, "x", ms=4.2, mew=1.1, color="black", label=heldout_legend_label, zorder=7)
+        xx_min = float(np.nanmin(X_test_arr)) if x_test_min is None else float(x_test_min)
+        xx_max = float(np.nanmax(X_test_arr)) if x_test_max is None else float(x_test_max)
+        if np.isfinite(xx_min) and np.isfinite(xx_max):
+            ax.axvspan(xx_min, xx_max, color="#d0d0d0", alpha=0.08, zorder=0)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=_fs_label())
     ymin, ymax = ax.get_ylim()
@@ -2185,6 +2205,7 @@ def plot_variogram_and_profile_pair(
         "95% band",
         r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
         r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$",
+        heldout_legend_label,
     ]
     order_map = {lab: i for i, lab in enumerate(order_keys)}
     ordered = sorted(zip(handles, labels), key=lambda hl: order_map.get(hl[1], 99))
@@ -2198,6 +2219,8 @@ def plot_variogram_and_profile_pair(
         if pd.notna(shrink_tmp):
             shrink_pct = float(shrink_tmp)
     metrics_right = rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink_pct:.1f}\%$"
+    if metrics_right_override is not None:
+        metrics_right = str(metrics_right_override)
     top_right = _finalize_legend_and_header(
         ax,
         header=metrics_right,
