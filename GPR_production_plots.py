@@ -3154,6 +3154,24 @@ def plot_blocked_cv_calibration_report(
             "sd_rstd": "std_resstd",
         }
     )
+    # blocked_CV biopsy metrics do not carry an "acceptable" flag yet; rebuild it
+    # from the same mean/SD bounds used by the calibration lane.
+    if (
+        mean_bounds is not None
+        and sd_bounds is not None
+        and {"mean_resstd", "std_resstd"}.issubset(calib_df.columns)
+    ):
+        mean_vals = pd.to_numeric(calib_df["mean_resstd"], errors="coerce")
+        sd_vals = pd.to_numeric(calib_df["std_resstd"], errors="coerce")
+        valid = mean_vals.notna() & sd_vals.notna()
+        acceptable = pd.Series(np.nan, index=calib_df.index, dtype=float)
+        acceptable.loc[valid] = (
+            (mean_vals.loc[valid] >= float(mean_bounds[0]))
+            & (mean_vals.loc[valid] <= float(mean_bounds[1]))
+            & (sd_vals.loc[valid] >= float(sd_bounds[0]))
+            & (sd_vals.loc[valid] <= float(sd_bounds[1]))
+        ).astype(float)
+        calib_df["acceptable"] = acceptable
 
     hue_col = None
     if "kernel_label" in calib_df.columns and calib_df["kernel_label"].notna().any():
