@@ -83,7 +83,7 @@ def main():
 
     # --- Baseline kernel identity + kernel metadata ---
     # Recommended default from sensitivity runs on this cohort.
-    BASE_KERNEL_SPEC = ("rbf", None)  # options: ("matern", 1.5), ("matern", 2.5), ("rbf", None), ("exp", None)
+    BASE_KERNEL_SPEC = ("matern", 1.5)  # options: ("matern", 1.5), ("matern", 2.5), ("rbf", None), ("exp", None)
     _KERNEL_LABEL_MAP = {
         ("matern", 1.5): "matern_nu_1_5",
         ("matern", 2.5): "matern_nu_2_5",

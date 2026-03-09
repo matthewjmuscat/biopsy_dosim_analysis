@@ -664,6 +664,7 @@ def _finalize_legend_and_header(
     *,
     ncol: int = 2,
     header_fontsize: int | None = None,
+    header_fontstyle: str = "italic",
     header_loc: str = "center",
     handles: list | None = None,
     labels: list | None = None,
@@ -698,7 +699,7 @@ def _finalize_legend_and_header(
     def _measure_text_width(text: str) -> float:
         if renderer is None:
             return 0.0
-        tmp = ax.text(0, 0, text, fontsize=header_fontsize, fontstyle="italic", transform=ax.transAxes)
+        tmp = ax.text(0, 0, text, fontsize=header_fontsize, fontstyle=header_fontstyle, transform=ax.transAxes)
         bb = tmp.get_window_extent(renderer=renderer)
         tmp.remove()
         return bb.width
@@ -748,7 +749,7 @@ def _finalize_legend_and_header(
             ha=ha,
             va="bottom",
             fontsize=header_fontsize,
-            fontstyle="italic",
+            fontstyle=header_fontstyle,
             bbox=ANNOT_BBOX,
         )
         if renderer is not None:
@@ -3274,6 +3275,7 @@ def calibration_plots_production(
             ncol=len(handles) if handles else 1,
             header_loc="center",
             header_fontsize=_fs_legend(),
+            header_fontstyle="normal",
             handles=handles if handles else None,
             labels=labels if labels else None,
             legend_width_mode="figure",
