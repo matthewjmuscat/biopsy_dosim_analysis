@@ -220,6 +220,151 @@ def _gp_mean_legend_label(
     return f"{base} ({short})"
 
 
+def _annotate_semivariogram_n_pairs_dynamic(
+    ax,
+    *,
+    h: np.ndarray,
+    gamma_hat: np.ndarray,
+    n_pairs: np.ndarray,
+    fontsize: float,
+    model_h: np.ndarray | None = None,
+    model_gamma: np.ndarray | None = None,
+) -> None:
+    """Place semivariogram n-pair labels using 8-way candidate offsets with robust scoring."""
+
+    def _point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+        vx = x2 - x1
+        vy = y2 - y1
+        if (vx == 0.0) and (vy == 0.0):
+            return float(np.hypot(px - x1, py - y1))
+        tt = ((px - x1) * vx + (py - y1) * vy) / (vx * vx + vy * vy)
+        tt = float(np.clip(tt, 0.0, 1.0))
+        qx = x1 + tt * vx
+        qy = y1 + tt * vy
+        return float(np.hypot(px - qx, py - qy))
+
+    def _polyline_distance(px: float, py: float, xy: np.ndarray | None) -> float:
+        if xy is None or len(xy) < 2:
+            return np.inf
+        d_min = np.inf
+        for jj in range(len(xy) - 1):
+            x1, y1 = xy[jj]
+            x2, y2 = xy[jj + 1]
+            if not (np.isfinite(x1) and np.isfinite(y1) and np.isfinite(x2) and np.isfinite(y2)):
+                continue
+            d_min = min(d_min, _point_to_segment_distance(px, py, float(x1), float(y1), float(x2), float(y2)))
+        return float(d_min)
+
+    h = np.asarray(h, dtype=float)
+    gamma_hat = np.asarray(gamma_hat, dtype=float)
+    n_pairs = np.asarray(n_pairs, dtype=float)
+
+    valid = np.isfinite(h) & np.isfinite(gamma_hat) & np.isfinite(n_pairs) & (n_pairs > 0)
+    if not np.any(valid):
+        return
+
+    base = 14.0
+    diag = 11.0
+    candidate_offsets_pts = [
+        (0.0, base),
+        (0.0, -base),
+        (-base, 0.0),
+        (base, 0.0),
+        (-diag, diag),
+        (diag, diag),
+        (-diag, -diag),
+        (diag, -diag),
+    ]
+
+    fig = ax.figure
+    px_per_pt = float(fig.dpi) / 72.0
+    trans = ax.transData
+    mask_points = np.isfinite(h) & np.isfinite(gamma_hat)
+    points_xy = np.column_stack([h[mask_points], gamma_hat[mask_points]])
+    points_disp = trans.transform(points_xy) if len(points_xy) else np.empty((0, 2), dtype=float)
+    axes_box = ax.get_window_extent()
+
+    if (model_h is not None) and (model_gamma is not None):
+        model_h = np.asarray(model_h, dtype=float)
+        model_gamma = np.asarray(model_gamma, dtype=float)
+        mask_model = np.isfinite(model_h) & np.isfinite(model_gamma)
+        model_xy = np.column_stack([model_h[mask_model], model_gamma[mask_model]])
+        model_disp = trans.transform(model_xy) if len(model_xy) >= 2 else None
+    else:
+        model_disp = points_disp if len(points_disp) >= 2 else None
+
+    placed_disp: list[np.ndarray] = []
+    for hh, gg, nn in zip(h, gamma_hat, n_pairs):
+        if not (np.isfinite(hh) and np.isfinite(gg) and np.isfinite(nn) and nn > 0):
+            continue
+
+        label_txt = f"n={int(nn)}"
+        # Approximate text half-size in display pixels to keep bbox inside axes.
+        half_w_px = max((0.32 * float(fontsize) * len(label_txt) * px_per_pt) + 4.0, 8.0)
+        half_h_px = max((0.60 * float(fontsize) * px_per_pt) + 4.0, 6.0)
+        min_anchor_px = 8.0
+
+        anchor_disp = trans.transform((float(hh), float(gg)))
+        best_offset = None
+        best_score = -np.inf
+
+        for dx_pt, dy_pt in candidate_offsets_pts:
+            cand_disp = anchor_disp + np.array([dx_pt * px_per_pt, dy_pt * px_per_pt], dtype=float)
+            cx, cy = float(cand_disp[0]), float(cand_disp[1])
+
+            left_margin = cx - axes_box.x0 - half_w_px
+            right_margin = axes_box.x1 - cx - half_w_px
+            bottom_margin = cy - axes_box.y0 - half_h_px
+            top_margin = axes_box.y1 - cy - half_h_px
+            edge_margin = min(left_margin, right_margin, bottom_margin, top_margin)
+            edge_overflow = (
+                max(0.0, -left_margin)
+                + max(0.0, -right_margin)
+                + max(0.0, -bottom_margin)
+                + max(0.0, -top_margin)
+            )
+            d_anchor = float(np.hypot(cx - anchor_disp[0], cy - anchor_disp[1]))
+            d_points = float(np.min(np.hypot(points_disp[:, 0] - cx, points_disp[:, 1] - cy))) if len(points_disp) else np.inf
+            d_curve = _polyline_distance(cx, cy, model_disp)
+            d_prev = np.inf
+            if placed_disp:
+                d_prev = min(float(np.hypot(cx - pp[0], cy - pp[1])) for pp in placed_disp)
+
+            # Penalize overlap/out-of-bounds, but never hard-reject so one candidate is always chosen.
+            anchor_penalty = max(0.0, min_anchor_px - d_anchor)
+            score = (
+                (2.20 * edge_margin)
+                + (0.28 * d_curve)
+                + (0.24 * d_points)
+                + (0.18 * d_prev)
+                - (45.0 * edge_overflow)
+                - (35.0 * anchor_penalty)
+            )
+            if score > best_score:
+                best_score = score
+                best_offset = (dx_pt, dy_pt)
+
+        if best_offset is None:
+            best_offset = (0.0, -base)
+
+        dx_pt, dy_pt = best_offset
+        placed_disp.append(anchor_disp + np.array([dx_pt * px_per_pt, dy_pt * px_per_pt], dtype=float))
+        ax.annotate(
+            label_txt,
+            xy=(float(hh), float(gg)),
+            xytext=(float(dx_pt), float(dy_pt)),
+            textcoords="offset points",
+            ha="center",
+            va="center",
+            fontsize=float(fontsize),
+            color="#4f4f4f",
+            alpha=0.95,
+            bbox=dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.88),
+            zorder=12,
+            clip_on=True,
+        )
+
+
 def _kernel_short_label(kernel_legend_label: str | None = None) -> str | None:
     if kernel_legend_label is None:
         return None
@@ -1976,20 +2121,15 @@ def plot_variogram_and_profile_pair(
     if annotate_semivariogram_n_pairs and ("n_pairs" in sv.columns):
         n_pairs = pd.to_numeric(sv["n_pairs"], errors="coerce").to_numpy(float)
         fs_np = max((_fs_tick() - 2.0), 1.0) if semivariogram_n_pairs_fontsize is None else float(semivariogram_n_pairs_fontsize)
-        for hh, gg, nn in zip(h, gamma_hat, n_pairs):
-            if np.isfinite(hh) and np.isfinite(gg) and np.isfinite(nn) and nn > 0:
-                ax.annotate(
-                    f"n={int(nn)}",
-                    xy=(hh, gg),
-                    xytext=(0, -7),
-                    textcoords="offset points",
-                    ha="center",
-                    va="top",
-                    fontsize=fs_np,
-                    color="#6f6f6f",
-                    alpha=0.55,
-                    clip_on=True,
-                )
+        _annotate_semivariogram_n_pairs_dynamic(
+            ax,
+            h=h,
+            gamma_hat=gamma_hat,
+            n_pairs=n_pairs,
+            fontsize=fs_np,
+            model_h=h,
+            model_gamma=gamma_model,
+        )
     if add_sill:
         ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
     if add_nugget:
@@ -2231,6 +2371,8 @@ def plot_variogram_overlays_grid(
     add_nugget: bool = False,
     label_map: dict | None = None,
     metrics_df: pd.DataFrame | None = None,
+    annotate_semivariogram_n_pairs: bool = False,
+    semivariogram_n_pairs_fontsize: float | None = None,
 ):
     """
     Assemble multiple semivariogram overlays with fitted model into a grid figure.
@@ -2265,6 +2407,18 @@ def plot_variogram_overlays_grid(
 
         ax.plot(h, gamma_hat, "o", ms=4, color=PRIMARY_LINE_COLOR, label=r"Empirical $\widehat{\gamma}_b(h)$")
         ax.plot(h, gamma_model, "-", lw=2.0, color=OVERLAY_LINE_COLOR, label=label_model)
+        if annotate_semivariogram_n_pairs and ("n_pairs" in sv.columns):
+            n_pairs = pd.to_numeric(sv["n_pairs"], errors="coerce").to_numpy(float)
+            fs_np = max((_fs_tick() - 2.0), 1.0) if semivariogram_n_pairs_fontsize is None else float(semivariogram_n_pairs_fontsize)
+            _annotate_semivariogram_n_pairs_dynamic(
+                ax,
+                h=h,
+                gamma_hat=gamma_hat,
+                n_pairs=n_pairs,
+                fontsize=fs_np,
+                model_h=h,
+                model_gamma=gamma_model,
+            )
         if add_sill:
             ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
         if add_nugget:
@@ -3054,10 +3208,10 @@ def calibration_plots_production(
                     "exp": "Exp",
                 }
                 per_kernel_text = ", ".join(
-                    f"{n_in}/{n_eval}\\ ({pct:.1f}\\%)\\ ({short_names.get(lab, lab)})"
+                    f"{n_in}/{n_eval} ({pct:.1f}%) ({short_names.get(lab, lab)})"
                     for lab, n_in, n_eval, pct in acceptable_by_kernel
                 )
-                header_parts.append(rf"$\mathrm{{Near\ ideal}}:\ {per_kernel_text}$")
+                header_parts.append(f"Near ideal: {per_kernel_text}")
             header_text = ", ".join(header_parts) if header_parts else None
         else:
             x = calib_df["mean_resstd"].to_numpy(float)
@@ -3066,9 +3220,9 @@ def calibration_plots_production(
             x, y = x[msk], y[msk]
             ax.scatter(x, y, s=22, alpha=0.85, color=PRIMARY_LINE_COLOR, edgecolors="white", linewidths=0.4, label="Biopsies", zorder=3)
             acceptable_pct = float(np.nanmean(calib_df.get("acceptable", np.nan)) * 100.0) if "acceptable" in calib_df.columns else float("nan")
-            header_parts = [rf"$n={x.size}$"]
+            header_parts = [f"n={x.size}"]
             if np.isfinite(acceptable_pct):
-                header_parts.append(rf"$\mathrm{{Near\ ideal}} = {acceptable_pct:.1f}\%$")
+                header_parts.append(f"Near ideal = {acceptable_pct:.1f}%")
             header_text = ", ".join(header_parts) if header_parts else None
 
         ax.axvline(0.0, color="black", lw=0.9, ls="--", alpha=0.7, label="Mean=0", zorder=1)
@@ -3099,8 +3253,8 @@ def calibration_plots_production(
             header_fontsize=_fs_legend(),
             handles=handles if handles else None,
             labels=labels if labels else None,
-            legend_width_mode="axes",
-            expand_figure=False,
+            legend_width_mode="figure",
+            expand_figure=True,
         )
         fig.tight_layout()
         out_paths = _save_figure(

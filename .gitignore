@@ -10,6 +10,7 @@ output_data/
 output_data_GPR_analysis/
 output_data_GPR_analysis_archive/
 chatgpt digests/
+paper_drafts/
 __pycache__/
 .vscode/
 .VSCodeCounter/

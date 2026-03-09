@@ -36,10 +36,10 @@ def main():
     # =========================================================================
 
     # --- Pipeline lane switches ---
-    run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
-    run_patient_plots = False  # if True, write per-biopsy and paired patient figures
-    run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
-    run_cohort_plots = False  # if True, write cohort-level production figures
+    run_semivariogram_plots = True  # if True, write per-biopsy semivariogram figures
+    run_patient_plots = True  # if True, write per-biopsy and paired patient figures
+    run_kernel_sensitivity_and_calibtration_flag = True  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
+    run_cohort_plots = True  # if True, write cohort-level production figures
     run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
     run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
     run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
@@ -181,7 +181,7 @@ def main():
     # write_report_figures, write_diagnostic_figures.
     # Phase 5D report keys are now wired for gating/config plumbing.
     blocked_cv_plot_options = {
-        "paired_semivariogram_profile": False,
+        "paired_semivariogram_profile": True,
         "profile_grids": True,
         "semivariogram_grids": True,
         "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
@@ -197,11 +197,13 @@ def main():
         "report_distribution_modes_list": [("histogram",), ("histogram", "kde"), ("kde",)],
         "report_distribution_kde_bw_scale": None,  # Phase 5D: optional shared KDE bandwidth scale (None -> Scott baseline)
         "write_report_figures": True,
-        "write_diagnostic_figures": False,
+        "write_diagnostic_figures": False, # note yet implemented 
     }
 
     # --- Plot presentation toggles ---
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
+    baseline_plot_semivariogram_show_n_pairs = False  # if True, annotate semivariogram points with n-pair labels on baseline paired semivariogram/profile plots
+    baseline_plot_semivariogram_n_pairs_fontsize = 7.0  # fontsize for baseline semivariogram n-pair annotations in paired plots
 
     # --- CSV output toggles ---
     # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
@@ -915,6 +917,8 @@ def main():
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
                 include_kernel_legend=include_kernel_legend_in_primary_histograms,
                 kernel_legend_label=BASE_KERNEL_LABEL,
+                annotate_semivariogram_n_pairs=bool(baseline_plot_semivariogram_show_n_pairs),
+                semivariogram_n_pairs_fontsize=float(baseline_plot_semivariogram_n_pairs_fontsize),
             )
             print(f"    [plots] Paired uncertainty reduction/ratio for Patient {patient_id}, Bx {bx_index}")
             GPR_production_plots.plot_uncertainty_pair(

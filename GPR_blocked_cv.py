@@ -2294,22 +2294,19 @@ def _annotate_semivariogram_n_pairs(
     gamma_hat: np.ndarray,
     n_pairs: np.ndarray,
     fontsize: float,
+    model_h: np.ndarray | None = None,
+    model_gamma: np.ndarray | None = None,
 ) -> None:
-    """Add faint per-lag pair-count labels under semivariogram points."""
-    for hh, gg, nn in zip(h, gamma_hat, n_pairs):
-        if np.isfinite(hh) and np.isfinite(gg) and np.isfinite(nn) and nn > 0:
-            ax.annotate(
-                f"n={int(nn)}",
-                xy=(hh, gg),
-                xytext=(0, -7),
-                textcoords="offset points",
-                ha="center",
-                va="top",
-                fontsize=float(fontsize),
-                color="#6f6f6f",
-                alpha=0.55,
-                clip_on=True,
-            )
+    """Delegate to shared robust dynamic placement used in production plots."""
+    gpr_pp._annotate_semivariogram_n_pairs_dynamic(
+        ax,
+        h=np.asarray(h, dtype=float),
+        gamma_hat=np.asarray(gamma_hat, dtype=float),
+        n_pairs=np.asarray(n_pairs, dtype=float),
+        fontsize=float(fontsize),
+        model_h=None if model_h is None else np.asarray(model_h, dtype=float),
+        model_gamma=None if model_gamma is None else np.asarray(model_gamma, dtype=float),
+    )
 
 
 def _draw_blocked_cv_profile_axis(
@@ -2429,6 +2426,8 @@ def _draw_blocked_cv_semivariogram_axis(
             gamma_hat=gamma_hat,
             n_pairs=n_pairs,
             fontsize=float(n_pairs_fontsize),
+            model_h=h,
+            model_gamma=gamma_model,
         )
     ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=gpr_pp._fs_label())
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=gpr_pp._fs_label())
