@@ -3351,12 +3351,46 @@ def plot_blocked_cv_variance_mode_comparison(
     ]
     key_cols = [c for c in key_cols if c in df.columns]
 
+    def _mode_tag(mode_name: str) -> str:
+        mode_map = {
+            "latent": r"\mathrm{lat}",
+            "observed_mc": r"\mathrm{obs}",
+            "observed_mc_plus_nugget": r"\mathrm{obs+nug}",
+        }
+        mode_str = str(mode_name)
+        return mode_map.get(mode_str, rf"\mathrm{{{mode_str.replace('_', r'\_')}}}")
+
+    def _metric_label_by_mode(metric_name: str, mode_name: str) -> str:
+        tag = _mode_tag(mode_name)
+        if metric_name == "sd_rstd":
+            return rf"$\mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{tag}}}\right)$"
+        if metric_name == "mean_rstd":
+            return rf"$\mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{tag}}}\right)$"
+        return metric_name
+
+    def _delta_metric_label(metric_name: str, obs_mode_name: str, lat_mode_name: str) -> str:
+        obs_tag = _mode_tag(obs_mode_name)
+        lat_tag = _mode_tag(lat_mode_name)
+        if metric_name == "sd_rstd":
+            return (
+                rf"$\Delta \mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v}}\right)"
+                rf"=\mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{obs_tag}}}\right)"
+                rf"-\mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{lat_tag}}}\right)$"
+            )
+        if metric_name == "mean_rstd":
+            return (
+                rf"$\Delta \mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v}}\right)"
+                rf"=\mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{obs_tag}}}\right)"
+                rf"-\mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{lat_tag}}}\right)$"
+            )
+        return rf"$\Delta {metric_name}$"
+
     metric_specs = [
-        ("sd_rstd", r"Held-out SD $r^{\mathrm{std}}$"),
-        ("mean_rstd", r"Held-out mean $r^{\mathrm{std}}$"),
+        "sd_rstd",
+        "mean_rstd",
     ]
 
-    for metric_col, metric_label in metric_specs:
+    for metric_col in metric_specs:
         if metric_col not in df.columns:
             continue
         use_cols = key_cols + ["variance_mode", metric_col]
@@ -3428,8 +3462,14 @@ def plot_blocked_cv_variance_mode_comparison(
             ax.plot(lims, lims, "k--", lw=1.0, alpha=0.8, label="Identity", zorder=1)
             ax.set_xlim(lims)
             ax.set_ylim(lims)
-            ax.set_xlabel(rf"{metric_label} ({latent_mode})", fontsize=_fs_label())
-            ax.set_ylabel(rf"{metric_label} ({observed_mode})", fontsize=_fs_label())
+            ax.set_xlabel(
+                _metric_label_by_mode(metric_col, latent_mode),
+                fontsize=_fs_label(),
+            )
+            ax.set_ylabel(
+                _metric_label_by_mode(metric_col, observed_mode),
+                fontsize=_fs_label(),
+            )
             _apply_axis_style(ax)
             _apply_per_biopsy_ticks(ax)
             handles, labels = ax.get_legend_handles_labels()
@@ -3476,7 +3516,7 @@ def plot_blocked_cv_variance_mode_comparison(
             out_paths = plot_kernel_sensitivity_histogram(
                 metrics_df=delta_df,
                 value_col=delta_col,
-                x_label=rf"$\Delta$ {metric_label} ({observed_mode} - {latent_mode})",
+                x_label=_delta_metric_label(metric_col, observed_mode, latent_mode),
                 save_dir=save_dir,
                 file_name_base=_with_kernel_suffix(
                     f"blocked_cv_variance_compare_hist_{delta_col}_{mode_suffix}",
