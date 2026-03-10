@@ -4003,7 +4003,7 @@ def plot_mean_sd_bland_altman_production(
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
 ):
-    """Production-quality Bland–Altman plot for mean MC vs GP SD."""
+    """Production-quality Bland-Altman plot for mean SD reduction (MC - GP)."""
     _setup_matplotlib_defaults(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
@@ -4022,7 +4022,8 @@ def plot_mean_sd_bland_altman_production(
         return []
 
     A = 0.5 * (x + y)
-    D = 100.0 * (y - x) / x
+    # Paper sign convention: positive values mean SD reduction (MC - GP) / MC.
+    D = 100.0 * (x - y) / x
 
     mean_diff = float(np.nanmean(D))
     sd_diff = float(np.nanstd(D, ddof=1))
@@ -4042,8 +4043,8 @@ def plot_mean_sd_bland_altman_production(
         kernel_legend_label=kernel_legend_label,
     )
     ax.set_ylabel(
-        "Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n"
-        + rf"${gp_mean_symbol}$ vs $\overline{{\widehat{{\sigma}}}}_b$ (%)",
+        "Percent reduction $\\Delta_b^{(\\mathrm{SD})}$\n"
+        + rf"$100\cdot(\overline{{\widehat{{\sigma}}}}_b - {gp_mean_symbol})/\overline{{\widehat{{\sigma}}}}_b$ (%)",
         fontsize=_fs_label(),
     )
     _apply_axis_style(ax)
