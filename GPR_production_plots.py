@@ -4003,7 +4003,7 @@ def plot_mean_sd_bland_altman_production(
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
 ):
-    """Production-quality Bland–Altman plot for mean MC vs GP SD."""
+    """Production-quality Bland-Altman plot for mean SD reduction (MC - GP)."""
     _setup_matplotlib_defaults(
         font_scale=font_scale,
         seaborn_style=seaborn_style,
@@ -4022,7 +4022,8 @@ def plot_mean_sd_bland_altman_production(
         return []
 
     A = 0.5 * (x + y)
-    D = 100.0 * (y - x) / x
+    # Paper sign convention: positive values mean SD reduction (MC - GP) / MC.
+    D = 100.0 * (x - y) / x
 
     mean_diff = float(np.nanmean(D))
     sd_diff = float(np.nanstd(D, ddof=1))
@@ -4035,6 +4036,14 @@ def plot_mean_sd_bland_altman_production(
     ax.axhline(mean_diff, color=PRIMARY_LINE_COLOR, lw=1.6, alpha=0.9)
     ax.axhline(loa_low, color=PRIMARY_LINE_COLOR, lw=1.0, ls="--", alpha=0.6)
     ax.axhline(loa_high, color=PRIMARY_LINE_COLOR, lw=1.0, ls="--", alpha=0.6)
+    # Keep LoA and near-line labels inside the plotting area with explicit headroom.
+    y_ref = np.asarray([*D.tolist(), 0.0, mean_diff, loa_low, loa_high], dtype=float)
+    y_ref = y_ref[np.isfinite(y_ref)]
+    if y_ref.size > 0:
+        y_min_raw = float(np.nanmin(y_ref))
+        y_max_raw = float(np.nanmax(y_ref))
+        y_span = max(y_max_raw - y_min_raw, 1.0)
+        ax.set_ylim(y_min_raw - 0.12 * y_span, y_max_raw + 0.30 * y_span)
 
     ax.set_xlabel(r"Mean SD, $(\overline{\widehat{\sigma}}_b + \overline{\sigma}^{\mathrm{GP}}_b)/2$ (Gy)", fontsize=_fs_label())
     gp_mean_symbol = _mean_gp_sd_symbol(
@@ -4042,8 +4051,8 @@ def plot_mean_sd_bland_altman_production(
         kernel_legend_label=kernel_legend_label,
     )
     ax.set_ylabel(
-        "Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n"
-        + rf"${gp_mean_symbol}$ vs $\overline{{\widehat{{\sigma}}}}_b$ (%)",
+        "Percent reduction $\\Delta_b^{(\\mathrm{SD})}$\n"
+        + rf"$100\cdot(\overline{{\widehat{{\sigma}}}}_b - {gp_mean_symbol})/\overline{{\widehat{{\sigma}}}}_b$ (%)",
         fontsize=_fs_label(),
     )
     _apply_axis_style(ax)
@@ -4051,7 +4060,8 @@ def plot_mean_sd_bland_altman_production(
 
     # Right-side line labels
     y_min, y_max = ax.get_ylim()
-    y_pad = 0.02 * (y_max - y_min)
+    y_span = max(y_max - y_min, 1e-9)
+    y_pad = 0.02 * y_span
     trans = mpl.transforms.blended_transform_factory(ax.transAxes, ax.transData)
     if show_annotation:
         mean_lbl = "mean"
@@ -4063,14 +4073,18 @@ def plot_mean_sd_bland_altman_production(
         hi_lbl = rf"$+1.96\,\mathrm{{SD}} = {loa_high:.1f}\%$"
         lo_lbl = rf"$-1.96\,\mathrm{{SD}} = {loa_low:.1f}\%$"
         sd_lbl = rf"$\mathrm{{SD}} = {sd_diff:.1f}\%$"
-    label_box = dict(facecolor="white", edgecolor="none", alpha=1.0, boxstyle="round,pad=0.25")
+    label_box = dict(facecolor="white", edgecolor="none", alpha=0.8, boxstyle="round,pad=0.25")
     fs_near = _fs_annot(nearline_fontsize)
     label_shift = 0.25 * y_pad
-    ax.text(0.98, mean_diff + 1.5 * y_pad + label_shift, mean_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
-    ax.text(0.98, loa_high + y_pad + label_shift, hi_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
-    ax.text(0.98, loa_low + y_pad + label_shift, lo_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
+
+    def _clamp_y(y_val: float) -> float:
+        return float(np.clip(y_val, y_min + 0.8 * y_pad, y_max - 0.8 * y_pad))
+
+    ax.text(0.98, _clamp_y(mean_diff + 1.5 * y_pad + label_shift), mean_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
+    ax.text(0.98, _clamp_y(loa_high + y_pad + label_shift), hi_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
+    ax.text(0.98, _clamp_y(loa_low - y_pad - label_shift), lo_lbl, ha="right", va="top", transform=trans, fontsize=fs_near, bbox=label_box)
     if sd_lbl is not None:
-        ax.text(0.98, loa_high + 5 * y_pad + label_shift, sd_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
+        ax.text(0.98, _clamp_y(loa_high + 5 * y_pad + label_shift), sd_lbl, ha="right", va="bottom", transform=trans, fontsize=fs_near, bbox=label_box)
 
     if show_annotation:
         ann = "\n".join([
@@ -4086,7 +4100,7 @@ def plot_mean_sd_bland_altman_production(
             va="top",
             transform=ax.transAxes,
             fontsize=_fs_legend(),
-            bbox=ANNOT_BBOX,
+            bbox={**ANNOT_BBOX, "alpha": 0.8},
         )
     fig.tight_layout()
     return _save_figure(fig, Path(save_dir) / file_name_base, formats=save_formats, dpi=dpi, create_subdir_for_stem=False)
