@@ -97,10 +97,10 @@ def main():
     run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
     run_patient_plots = False  # if True, write per-biopsy and paired patient figures
     run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
-    run_cohort_plots = True  # if True, write cohort-level production figures
-    run_blocked_cv = False  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
-    run_blocked_cv_fit_predict = False  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
-    run_blocked_cv_plots = False  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
+    run_cohort_plots = False  # if True, write cohort-level production figures
+    run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
+    run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
+    run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
 
     # --- Cohort filtering / plot cohort selection ---
     simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets
@@ -242,7 +242,10 @@ def main():
         "paired_semivariogram_profile": True,
         "profile_grids": True,
         "semivariogram_grids": True,
-        "semivariogram_show_n_pairs": True,  # if True, annotate semivariogram points with faint 'n=' pair-count labels
+        # Semivariogram n-pairs labels: independent toggles for blocked_CV paired and grid figures.
+        # Suggested staged rollout: enable one family first (e.g., grids) before enabling both.
+        "semivariogram_show_n_pairs_paired": True,
+        "semivariogram_show_n_pairs_grids": True,
         "semivariogram_n_pairs_fontsize": 7.0,  # fontsize for semivariogram n-pairs annotations
         "report_calibration_scatter": True,  # Phase 5D: held-out mean(rstd) vs sd(rstd) figure family
         "report_calibration_distributions": True,  # Phase 5D: held-out calibration histogram/KDE figure family
@@ -262,8 +265,10 @@ def main():
     anonymize_unmapped_biopsy_plot_labels = True  # if True, auto-label every unmapped biopsy on plots as "Biopsy A", "Biopsy B", ... while preserving explicit label_map entries
     anonymized_biopsy_label_prefix = "Biopsy"  # prefix used for auto-generated anonymized labels when anonymize_unmapped_biopsy_plot_labels=True
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
-    baseline_plot_semivariogram_show_n_pairs = False  # if True, annotate semivariogram points with n-pair labels on baseline paired semivariogram/profile plots
-    baseline_plot_semivariogram_n_pairs_fontsize = 7.0  # fontsize for baseline semivariogram n-pair annotations in paired plots
+    # Baseline semivariogram n-pairs labels: independent toggles for paired and grid figures.
+    baseline_plot_semivariogram_show_n_pairs_paired = False
+    baseline_plot_semivariogram_show_n_pairs_grids = False
+    baseline_plot_semivariogram_n_pairs_fontsize = 7.0
 
     # --- CSV output toggles ---
     # Full CSV column definitions are in `GPR_CSV_DATA_DICTIONARY.md`.
@@ -809,6 +814,12 @@ def main():
                 blocked_cv_plot_report_distribution_modes_list_use = (
                     tuple(normalized_modes) if normalized_modes else (("histogram", "kde"),)
                 )
+        blocked_cv_plot_show_n_pairs_paired = bool(
+            blocked_cv_plot_options.get("semivariogram_show_n_pairs_paired", False)
+        )
+        blocked_cv_plot_show_n_pairs_grids = bool(
+            blocked_cv_plot_options.get("semivariogram_show_n_pairs_grids", False)
+        )
 
         blocked_cv_cfg = GPR_blocked_cv.BlockedCVConfig(
             block_mode=blocked_cv_block_mode,
@@ -848,7 +859,8 @@ def main():
             plot_make_paired_semivariogram_profile=bool(blocked_cv_plot_options.get("paired_semivariogram_profile", False)),
             plot_make_semivariogram_grids=bool(blocked_cv_plot_options.get("semivariogram_grids", False)),
             plot_make_profile_grids=bool(blocked_cv_plot_options.get("profile_grids", False)),
-            plot_semivariogram_show_n_pairs=bool(blocked_cv_plot_options.get("semivariogram_show_n_pairs", False)),
+            plot_semivariogram_show_n_pairs_paired=blocked_cv_plot_show_n_pairs_paired,
+            plot_semivariogram_show_n_pairs_grids=blocked_cv_plot_show_n_pairs_grids,
             plot_semivariogram_n_pairs_fontsize=float(blocked_cv_plot_options.get("semivariogram_n_pairs_fontsize", 5.0)),
             plot_make_report_calibration_scatter=bool(blocked_cv_plot_options.get("report_calibration_scatter", False)),
             plot_make_report_calibration_distributions=bool(blocked_cv_plot_options.get("report_calibration_distributions", False)),
@@ -949,6 +961,8 @@ def main():
             metrics_df=metrics_df,
             save_formats=("pdf", "svg"),
             dpi=400,
+            annotate_semivariogram_n_pairs=bool(baseline_plot_semivariogram_show_n_pairs_grids),
+            semivariogram_n_pairs_fontsize=float(baseline_plot_semivariogram_n_pairs_fontsize),
         )
 
         # print a small banner
@@ -1001,7 +1015,7 @@ def main():
                 metrics_row=metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].iloc[0] if not metrics_df[(metrics_df["Patient ID"] == patient_id) & (metrics_df["Bx index"] == bx_index)].empty else None,
                 include_kernel_legend=include_kernel_legend_in_primary_histograms,
                 kernel_legend_label=BASE_KERNEL_LABEL,
-                annotate_semivariogram_n_pairs=bool(baseline_plot_semivariogram_show_n_pairs),
+                annotate_semivariogram_n_pairs=bool(baseline_plot_semivariogram_show_n_pairs_paired),
                 semivariogram_n_pairs_fontsize=float(baseline_plot_semivariogram_n_pairs_fontsize),
             )
             print(f"    [plots] Paired uncertainty reduction/ratio for Patient {patient_id}, Bx {bx_index}")

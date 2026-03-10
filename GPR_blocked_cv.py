@@ -58,7 +58,8 @@ class BlockedCVConfig:
     plot_make_paired_semivariogram_profile: bool = True
     plot_make_semivariogram_grids: bool = True
     plot_make_profile_grids: bool = True
-    plot_semivariogram_show_n_pairs: bool = False
+    plot_semivariogram_show_n_pairs_paired: bool | None = None
+    plot_semivariogram_show_n_pairs_grids: bool | None = None
     plot_semivariogram_n_pairs_fontsize: float = 5.0
     plot_make_report_calibration_scatter: bool = False
     plot_make_report_calibration_distributions: bool = False
@@ -2289,7 +2290,7 @@ def _plot_blocked_cv_variogram_profile_pair(
         metrics_row=pd.Series({"ell": ell, "nugget": nugget}),
         include_kernel_legend=True,
         kernel_legend_label=kernel_label,
-        annotate_semivariogram_n_pairs=bool(config.plot_semivariogram_show_n_pairs),
+        annotate_semivariogram_n_pairs=_show_semivariogram_n_pairs_paired(config),
         semivariogram_n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
         title_fontsize=max(float(getattr(gpr_pp, "TITLE_FONTSIZE", 14)) - 2.0, 1.0),
         create_subdir_for_stem=False,
@@ -2313,6 +2314,20 @@ def _selection_token(values, *, none_token: str = "all") -> str:
     if len(vals) <= 4:
         return _sanitize_token("-".join(vals))
     return _sanitize_token(f"n{len(vals)}")
+
+
+def _show_semivariogram_n_pairs_paired(config: BlockedCVConfig) -> bool:
+    """Resolve paired semivariogram n-pairs toggle."""
+    if config.plot_semivariogram_show_n_pairs_paired is None:
+        return False
+    return bool(config.plot_semivariogram_show_n_pairs_paired)
+
+
+def _show_semivariogram_n_pairs_grids(config: BlockedCVConfig) -> bool:
+    """Resolve semivariogram-grid n-pairs toggle."""
+    if config.plot_semivariogram_show_n_pairs_grids is None:
+        return False
+    return bool(config.plot_semivariogram_show_n_pairs_grids)
 
 
 def _annotate_semivariogram_n_pairs(
@@ -2993,7 +3008,7 @@ def run_blocked_cv_plots(
                         ax,
                         payload=payload,
                         title_label=title_label,
-                        show_n_pairs=bool(config.plot_semivariogram_show_n_pairs),
+                        show_n_pairs=_show_semivariogram_n_pairs_grids(config),
                         n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
                     )
                     if shared_handles is None and h:
@@ -3102,7 +3117,7 @@ def run_blocked_cv_plots(
                         ax,
                         payload=payload,
                         title_label=title_label,
-                        show_n_pairs=bool(config.plot_semivariogram_show_n_pairs),
+                        show_n_pairs=_show_semivariogram_n_pairs_grids(config),
                         n_pairs_fontsize=float(config.plot_semivariogram_n_pairs_fontsize),
                     )
                     if shared_handles is None and h:
@@ -3384,7 +3399,8 @@ def run_blocked_cv_plots(
         "plot_make_paired_semivariogram_profile": bool(config.plot_make_paired_semivariogram_profile),
         "plot_make_semivariogram_grids": bool(config.plot_make_semivariogram_grids),
         "plot_make_profile_grids": bool(config.plot_make_profile_grids),
-        "plot_semivariogram_show_n_pairs": bool(config.plot_semivariogram_show_n_pairs),
+        "plot_semivariogram_show_n_pairs_paired": _show_semivariogram_n_pairs_paired(config),
+        "plot_semivariogram_show_n_pairs_grids": _show_semivariogram_n_pairs_grids(config),
         "plot_semivariogram_n_pairs_fontsize": float(config.plot_semivariogram_n_pairs_fontsize),
         "plot_make_report_calibration_scatter": bool(config.plot_make_report_calibration_scatter),
         "plot_make_report_calibration_distributions": bool(config.plot_make_report_calibration_distributions),

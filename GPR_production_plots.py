@@ -6,6 +6,7 @@ with flexible typography, sizing, and export formats.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -230,7 +231,17 @@ def _annotate_semivariogram_n_pairs_dynamic(
     model_h: np.ndarray | None = None,
     model_gamma: np.ndarray | None = None,
 ) -> None:
-    """Place semivariogram n-pair labels using 8-way candidate offsets with robust scoring."""
+    """Place semivariogram n-pair labels with strict staged collision handling."""
+
+    def _rect_intersects(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+        ax0, ay0, ax1, ay1 = a
+        bx0, by0, bx1, by1 = b
+        return not ((ax1 <= bx0) or (bx1 <= ax0) or (ay1 <= by0) or (by1 <= ay0))
+
+    def _expand_rect(rect: tuple[float, float, float, float], pad: float) -> tuple[float, float, float, float]:
+        x0, y0, x1, y1 = rect
+        pp = float(max(pad, 0.0))
+        return (x0 - pp, y0 - pp, x1 + pp, y1 + pp)
 
     def _point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
         vx = x2 - x1
@@ -243,46 +254,184 @@ def _annotate_semivariogram_n_pairs_dynamic(
         qy = y1 + tt * vy
         return float(np.hypot(px - qx, py - qy))
 
-    def _polyline_distance(px: float, py: float, xy: np.ndarray | None) -> float:
-        if xy is None or len(xy) < 2:
+    def _point_to_rect_distance(px: float, py: float, rect: tuple[float, float, float, float]) -> float:
+        x0, y0, x1, y1 = rect
+        dx = max(x0 - px, 0.0, px - x1)
+        dy = max(y0 - py, 0.0, py - y1)
+        return float(np.hypot(dx, dy))
+
+    def _segments_intersect(
+        p1: tuple[float, float],
+        p2: tuple[float, float],
+        q1: tuple[float, float],
+        q2: tuple[float, float],
+        *,
+        eps: float = 1e-9,
+    ) -> bool:
+        def _orient(a, b, c) -> float:
+            return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+        def _on_segment(a, b, c) -> bool:
+            return (
+                min(a[0], b[0]) - eps <= c[0] <= max(a[0], b[0]) + eps
+                and min(a[1], b[1]) - eps <= c[1] <= max(a[1], b[1]) + eps
+            )
+
+        o1 = _orient(p1, p2, q1)
+        o2 = _orient(p1, p2, q2)
+        o3 = _orient(q1, q2, p1)
+        o4 = _orient(q1, q2, p2)
+
+        if (o1 * o2 < -eps) and (o3 * o4 < -eps):
+            return True
+        if abs(o1) <= eps and _on_segment(p1, p2, q1):
+            return True
+        if abs(o2) <= eps and _on_segment(p1, p2, q2):
+            return True
+        if abs(o3) <= eps and _on_segment(q1, q2, p1):
+            return True
+        if abs(o4) <= eps and _on_segment(q1, q2, p2):
+            return True
+        return False
+
+    def _segment_intersects_rect(
+        seg: tuple[tuple[float, float], tuple[float, float]],
+        rect: tuple[float, float, float, float],
+    ) -> bool:
+        (x1, y1), (x2, y2) = seg
+        rx0, ry0, rx1, ry1 = rect
+        if (rx0 <= x1 <= rx1 and ry0 <= y1 <= ry1) or (rx0 <= x2 <= rx1 and ry0 <= y2 <= ry1):
+            return True
+        edges = [
+            ((rx0, ry0), (rx1, ry0)),
+            ((rx1, ry0), (rx1, ry1)),
+            ((rx1, ry1), (rx0, ry1)),
+            ((rx0, ry1), (rx0, ry0)),
+        ]
+        for e in edges:
+            if _segments_intersect(seg[0], seg[1], e[0], e[1]):
+                return True
+        return False
+
+    def _polyline_min_distance_to_rect(
+        polyline: np.ndarray | None,
+        rect: tuple[float, float, float, float],
+    ) -> float:
+        if polyline is None or len(polyline) < 2:
+            return np.inf
+        rx0, ry0, rx1, ry1 = rect
+        corners = [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)]
+        d_min = np.inf
+        for jj in range(len(polyline) - 1):
+            x1, y1 = float(polyline[jj, 0]), float(polyline[jj, 1])
+            x2, y2 = float(polyline[jj + 1, 0]), float(polyline[jj + 1, 1])
+            seg = ((x1, y1), (x2, y2))
+            if _segment_intersects_rect(seg, rect):
+                return 0.0
+            d_min = min(d_min, _point_to_rect_distance(x1, y1, rect), _point_to_rect_distance(x2, y2, rect))
+            for cx, cy in corners:
+                d_min = min(d_min, _point_to_segment_distance(cx, cy, x1, y1, x2, y2))
+        return float(d_min)
+
+    def _polyline_to_segments(poly: np.ndarray) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        if poly is None or len(poly) < 2:
+            return []
+        return [
+            ((float(poly[ii, 0]), float(poly[ii, 1])), (float(poly[ii + 1, 0]), float(poly[ii + 1, 1])))
+            for ii in range(len(poly) - 1)
+        ]
+
+    def _segments_to_polyline(
+        segments: list[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> np.ndarray:
+        if not segments:
+            return np.empty((0, 2), dtype=float)
+        pts = [segments[0][0]]
+        pts.extend(seg[1] for seg in segments)
+        return np.asarray(pts, dtype=float)
+
+    def _point_to_polyline_distance(
+        px: float,
+        py: float,
+        segments: list[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> float:
+        if not segments:
             return np.inf
         d_min = np.inf
-        for jj in range(len(xy) - 1):
-            x1, y1 = xy[jj]
-            x2, y2 = xy[jj + 1]
-            if not (np.isfinite(x1) and np.isfinite(y1) and np.isfinite(x2) and np.isfinite(y2)):
-                continue
-            d_min = min(d_min, _point_to_segment_distance(px, py, float(x1), float(y1), float(x2), float(y2)))
+        for seg in segments:
+            (x1, y1), (x2, y2) = seg
+            d_min = min(d_min, _point_to_segment_distance(px, py, x1, y1, x2, y2))
         return float(d_min)
+
+    def _leader_curve_segment_options(
+        anchor_xy: np.ndarray,
+        label_xy: np.ndarray,
+        *,
+        curvature_px: float,
+    ) -> list[tuple[list[tuple[tuple[float, float], tuple[float, float]]], float]]:
+        ax0, ay0 = float(anchor_xy[0]), float(anchor_xy[1])
+        lx0, ly0 = float(label_xy[0]), float(label_xy[1])
+        vx = lx0 - ax0
+        vy = ly0 - ay0
+        vv = float(np.hypot(vx, vy))
+        if vv <= 1e-9:
+            return []
+        mid = np.array([0.5 * (ax0 + lx0), 0.5 * (ay0 + ly0)], dtype=float)
+        perp = np.array([-vy / vv, vx / vv], dtype=float)
+        curve = float(max(curvature_px, 0.0))
+
+        out: list[tuple[list[tuple[tuple[float, float], tuple[float, float]]], float]] = []
+        rad_mag = float(np.clip(curve / max(vv, 1e-6), 0.10, 0.45))
+        for sign in (+1.0, -1.0):  # CCW / CW bend
+            ctrl = mid + (sign * curve) * perp
+            tt = np.linspace(0.0, 1.0, 19)
+            bez = []
+            a = np.array([ax0, ay0], dtype=float)
+            b = np.array([lx0, ly0], dtype=float)
+            for t in tt:
+                p = ((1.0 - t) ** 2) * a + 2.0 * (1.0 - t) * t * ctrl + (t**2) * b
+                bez.append((float(p[0]), float(p[1])))
+            out.append((_polyline_to_segments(np.asarray(bez, dtype=float)), float(sign * rad_mag)))
+        return out
 
     h = np.asarray(h, dtype=float)
     gamma_hat = np.asarray(gamma_hat, dtype=float)
     n_pairs = np.asarray(n_pairs, dtype=float)
-
     valid = np.isfinite(h) & np.isfinite(gamma_hat) & np.isfinite(n_pairs) & (n_pairs > 0)
     if not np.any(valid):
         return
 
-    base = 14.0
-    diag = 11.0
-    candidate_offsets_pts = [
-        (0.0, base),
-        (0.0, -base),
-        (-base, 0.0),
-        (base, 0.0),
-        (-diag, diag),
-        (diag, diag),
-        (-diag, -diag),
-        (diag, -diag),
-    ]
+    # Keep some breathing room for outward label placement.
+    try:
+        ax.margins(x=0.05, y=0.19)
+    except Exception:
+        pass
 
     fig = ax.figure
+    if fig.canvas is not None:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+    else:
+        renderer = None
+
+    debug_env = str(os.environ.get("GPR_NPAIR_DEBUG", "0")).strip().lower()
+    debug_enabled = debug_env not in {"", "0", "false", "no", "off"}
+
     px_per_pt = float(fig.dpi) / 72.0
     trans = ax.transData
-    mask_points = np.isfinite(h) & np.isfinite(gamma_hat)
-    points_xy = np.column_stack([h[mask_points], gamma_hat[mask_points]])
-    points_disp = trans.transform(points_xy) if len(points_xy) else np.empty((0, 2), dtype=float)
     axes_box = ax.get_window_extent()
+    axes_center = np.array(
+        [0.5 * (float(axes_box.x0) + float(axes_box.x1)), 0.5 * (float(axes_box.y0) + float(axes_box.y1))],
+        dtype=float,
+    )
+    marker_radius_px = max(2.5, 0.5 * 4.0 * px_per_pt)  # plot markers use ms=4 in these semivariogram plots.
+
+    # 16-direction ring sampling.
+    angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+    unit_dirs = [(float(np.cos(aa)), float(np.sin(aa))) for aa in angles]
+
+    points_xy = np.column_stack([h[valid], gamma_hat[valid]])
+    points_disp = trans.transform(points_xy) if len(points_xy) else np.empty((0, 2), dtype=float)
 
     if (model_h is not None) and (model_gamma is not None):
         model_h = np.asarray(model_h, dtype=float)
@@ -293,75 +442,343 @@ def _annotate_semivariogram_n_pairs_dynamic(
     else:
         model_disp = points_disp if len(points_disp) >= 2 else None
 
-    placed_disp: list[np.ndarray] = []
+    stages = [
+        # Stage 1: no leader line, but farther than the point to avoid text-on-marker collisions.
+        {"name": "no_leader", "leader": False, "radii_pts": [22.0, 30.0, 40.0]},
+        # Stage 2: short elbow leader.
+        {"name": "elbow_short", "leader": True, "radii_pts": [24.0, 34.0, 46.0, 58.0]},
+        # Stage 3: long elbow leader.
+        {"name": "elbow_long", "leader": True, "radii_pts": [68.0, 84.0, 102.0]},
+    ]
+    # Stage-0 placements are already offset; always draw elbow leaders for readability.
+    no_leader_auto_leader_radius_pts = 22.0
+    # Final safety guard for dense plots: avoid very long connectors; skip instead.
+    max_leader_distance_px = 92.0
+    leader_point_clearance_px = marker_radius_px + 3.8
+
+    placed_leader_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    actual_drawn_rects: list[tuple[float, float, float, float]] = []
+    actual_drawn_centers: list[np.ndarray] = []
+    stage_counts = {"no_leader": 0, "elbow_short": 0, "elbow_long": 0, "skipped": 0}
+
     for hh, gg, nn in zip(h, gamma_hat, n_pairs):
         if not (np.isfinite(hh) and np.isfinite(gg) and np.isfinite(nn) and nn > 0):
             continue
 
         label_txt = f"n={int(nn)}"
-        # Approximate text half-size in display pixels to keep bbox inside axes.
-        half_w_px = max((0.32 * float(fontsize) * len(label_txt) * px_per_pt) + 4.0, 8.0)
-        half_h_px = max((0.60 * float(fontsize) * px_per_pt) + 4.0, 6.0)
-        min_anchor_px = 8.0
+        if renderer is not None:
+            probe = ax.annotate(
+                label_txt,
+                xy=(0.0, 0.0),
+                xytext=(0.0, 0.0),
+                textcoords="offset points",
+                ha="center",
+                va="center",
+                fontsize=float(fontsize),
+                bbox=dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.88),
+            )
+            probe.set_visible(False)
+            bb = probe.get_window_extent(renderer=renderer)
+            probe.remove()
+            # Conservative safety padding so collision checks match rendered rounded bbox.
+            half_w_px = 0.5 * float(bb.width) + 15.0
+            half_h_px = 0.5 * float(bb.height) + 11.0
+        else:
+            half_w_px = max((0.38 * float(fontsize) * len(label_txt) * px_per_pt) + 11.0, 12.0)
+            half_h_px = max((0.72 * float(fontsize) * px_per_pt) + 9.0, 10.0)
 
         anchor_disp = trans.transform((float(hh), float(gg)))
-        best_offset = None
-        best_score = -np.inf
+        to_center = axes_center - anchor_disp
+        norm = float(np.hypot(to_center[0], to_center[1]))
+        if norm > 0:
+            ux_c, uy_c = float(to_center[0] / norm), float(to_center[1] / norm)
+            ordered_dirs = sorted(unit_dirs, key=lambda d: (d[0] * ux_c + d[1] * uy_c), reverse=True)
+        else:
+            ordered_dirs = list(unit_dirs)
 
-        for dx_pt, dy_pt in candidate_offsets_pts:
-            cand_disp = anchor_disp + np.array([dx_pt * px_per_pt, dy_pt * px_per_pt], dtype=float)
-            cx, cy = float(cand_disp[0]), float(cand_disp[1])
+        # Keep full label patch inside axes with safety padding.
+        edge_pad_x = max(8.0, 0.04 * float(axes_box.width))
+        edge_pad_y = max(8.0, 0.05 * float(axes_box.height))
+        cx_min = float(axes_box.x0) + edge_pad_x + half_w_px
+        cx_max = float(axes_box.x1) - edge_pad_x - half_w_px
+        cy_min = float(axes_box.y0) + edge_pad_y + half_h_px
+        cy_max = float(axes_box.y1) - edge_pad_y - half_h_px
+        if (cx_min >= cx_max) or (cy_min >= cy_max):
+            stage_counts["skipped"] += 1
+            continue
 
-            left_margin = cx - axes_box.x0 - half_w_px
-            right_margin = axes_box.x1 - cx - half_w_px
-            bottom_margin = cy - axes_box.y0 - half_h_px
-            top_margin = axes_box.y1 - cy - half_h_px
-            edge_margin = min(left_margin, right_margin, bottom_margin, top_margin)
-            edge_overflow = (
-                max(0.0, -left_margin)
-                + max(0.0, -right_margin)
-                + max(0.0, -bottom_margin)
-                + max(0.0, -top_margin)
-            )
-            d_anchor = float(np.hypot(cx - anchor_disp[0], cy - anchor_disp[1]))
-            d_points = float(np.min(np.hypot(points_disp[:, 0] - cx, points_disp[:, 1] - cy))) if len(points_disp) else np.inf
-            d_curve = _polyline_distance(cx, cy, model_disp)
-            d_prev = np.inf
-            if placed_disp:
-                d_prev = min(float(np.hypot(cx - pp[0], cy - pp[1])) for pp in placed_disp)
+        accepted = False
+        for stage in stages:
+            stage_name = str(stage["name"])
+            is_leader = bool(stage["leader"])
+            radii_pts = list(stage["radii_pts"])
+            candidates: list[
+                tuple[
+                    tuple[float, float, float, float, float, float],
+                    tuple[float, float, tuple[float, float, float, float], np.ndarray, list, float, bool],
+                ]
+            ] = []
 
-            # Penalize overlap/out-of-bounds, but never hard-reject so one candidate is always chosen.
-            anchor_penalty = max(0.0, min_anchor_px - d_anchor)
-            score = (
-                (2.20 * edge_margin)
-                + (0.28 * d_curve)
-                + (0.24 * d_points)
-                + (0.18 * d_prev)
-                - (45.0 * edge_overflow)
-                - (35.0 * anchor_penalty)
-            )
-            if score > best_score:
-                best_score = score
-                best_offset = (dx_pt, dy_pt)
+            for ridx, rr in enumerate(radii_pts):
+                for ux, uy in ordered_dirs:
+                    cand_disp_raw = anchor_disp + np.array([rr * ux * px_per_pt, rr * uy * px_per_pt], dtype=float)
+                    cx = float(cand_disp_raw[0])
+                    cy = float(cand_disp_raw[1])
+                    if (cx < cx_min) or (cx > cx_max) or (cy < cy_min) or (cy > cy_max):
+                        continue
+                    cand_disp = np.array([cx, cy], dtype=float)
+                    rect = (cx - half_w_px, cy - half_h_px, cx + half_w_px, cy + half_h_px)
+                    use_leader = bool(is_leader or ((not is_leader) and (rr >= no_leader_auto_leader_radius_pts)))
 
-        if best_offset is None:
-            best_offset = (0.0, -base)
+                    # Hard gates: box cannot overlap existing labels, points, own anchor, or fitted curve.
+                    label_sep_pad_px = 6.0 if not use_leader else 4.0
+                    rect_sep = _expand_rect(rect, label_sep_pad_px)
+                    if any(_rect_intersects(rect_sep, _expand_rect(rr0, label_sep_pad_px)) for rr0 in actual_drawn_rects):
+                        continue
+                    # New label cannot sit on top of previously drawn leader lines.
+                    if any(_segment_intersects_rect(seg, rect_sep) for seg in placed_leader_segments):
+                        continue
 
-        dx_pt, dy_pt = best_offset
-        placed_disp.append(anchor_disp + np.array([dx_pt * px_per_pt, dy_pt * px_per_pt], dtype=float))
-        ax.annotate(
-            label_txt,
-            xy=(float(hh), float(gg)),
-            xytext=(float(dx_pt), float(dy_pt)),
-            textcoords="offset points",
-            ha="center",
-            va="center",
-            fontsize=float(fontsize),
-            color="#4f4f4f",
-            alpha=0.95,
-            bbox=dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.88),
-            zorder=12,
-            clip_on=True,
+                    center_sep_min = max(10.0, 0.70 * np.hypot(half_w_px, half_h_px)) if not use_leader else max(
+                        8.0, 0.55 * np.hypot(half_w_px, half_h_px)
+                    )
+                    if any(float(np.hypot(cx - cc[0], cy - cc[1])) < center_sep_min for cc in actual_drawn_centers):
+                        continue
+
+                    min_point_rect_dist = (
+                        min(_point_to_rect_distance(float(pp[0]), float(pp[1]), rect) for pp in points_disp)
+                        if len(points_disp)
+                        else np.inf
+                    )
+                    anchor_rect_dist = _point_to_rect_distance(float(anchor_disp[0]), float(anchor_disp[1]), rect)
+                    curve_rect_dist = _polyline_min_distance_to_rect(model_disp, rect)
+
+                    # No-leader stage uses stricter clearances so labels do not sit on/near points.
+                    point_clearance_px = (marker_radius_px + 8.0) if not use_leader else (marker_radius_px + 3.0)
+                    curve_clearance_px = (marker_radius_px + 6.0) if not use_leader else (marker_radius_px + 2.2)
+                    anchor_clear_no_leader_px = marker_radius_px + 14.0
+                    anchor_clear_leader_px = marker_radius_px + 5.5
+                    anchor_clear_px = anchor_clear_leader_px if use_leader else anchor_clear_no_leader_px
+
+                    if min_point_rect_dist < point_clearance_px:
+                        continue
+                    if curve_rect_dist < curve_clearance_px:
+                        continue
+                    if anchor_rect_dist < anchor_clear_px:
+                        continue
+
+                    leader_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+                    leader_rad = 0.0
+                    leader_cross_count = 0
+                    leader_rect_hits = 0
+                    leader_point_hits = 0
+                    if use_leader:
+                        leader_dist_px = float(np.hypot(cand_disp[0] - anchor_disp[0], cand_disp[1] - anchor_disp[1]))
+                        if leader_dist_px > max_leader_distance_px:
+                            continue
+                        curvature_px = float(np.clip(0.14 * leader_dist_px, 4.0, 14.0))
+                        best_pack = None
+                        for seg_opt, seg_rad in _leader_curve_segment_options(anchor_disp, cand_disp, curvature_px=curvature_px):
+                            cross_count = 0
+                            rect_hits = 0
+                            point_hits = 0
+                            min_point_dist = np.inf
+                            for seg in seg_opt:
+                                for prev in placed_leader_segments:
+                                    if _segments_intersect(seg[0], seg[1], prev[0], prev[1]):
+                                        cross_count += 1
+                                for rr0 in actual_drawn_rects:
+                                    if _segment_intersects_rect(seg, rr0):
+                                        rect_hits += 1
+                            for pp in points_disp:
+                                if float(np.hypot(float(pp[0]) - float(anchor_disp[0]), float(pp[1]) - float(anchor_disp[1]))) <= (
+                                    marker_radius_px + 0.8
+                                ):
+                                    continue
+                                dpt = _point_to_polyline_distance(float(pp[0]), float(pp[1]), seg_opt)
+                                min_point_dist = min(min_point_dist, dpt)
+                                if dpt < leader_point_clearance_px:
+                                    point_hits += 1
+                            rank_opt = (float(point_hits), float(cross_count), float(rect_hits), -float(min_point_dist))
+                            if best_pack is None or rank_opt < best_pack[0]:
+                                best_pack = (rank_opt, seg_opt, float(seg_rad), int(cross_count), int(rect_hits), int(point_hits))
+                        if best_pack is not None:
+                            _, leader_segments, leader_rad, leader_cross_count, leader_rect_hits, leader_point_hits = best_pack
+
+                    clearance_floor = float(min(min_point_rect_dist, curve_rect_dist, anchor_rect_dist))
+                    edge_dist = min(cx - cx_min, cx_max - cx, cy - cy_min, cy_max - cy)
+                    inward = float((cand_disp[0] - anchor_disp[0]) * ux_c + (cand_disp[1] - anchor_disp[1]) * uy_c) if norm > 0 else 0.0
+                    # Stage ranking: fewer leader issues, shorter rings, higher geometric clearance.
+                    rank = (
+                        float(leader_point_hits),
+                        float(leader_cross_count),
+                        float(leader_rect_hits),
+                        float(ridx),
+                        -clearance_floor,
+                        -float(edge_dist),
+                        -inward,
+                    )
+                    payload = (rr * ux, rr * uy, rect, cand_disp, leader_segments, float(leader_rad), use_leader)
+                    candidates.append((rank, payload))
+
+            if not candidates:
+                continue
+            candidates.sort(key=lambda it: it[0])
+
+            for _rank, payload in candidates:
+                dx_pt_raw, dy_pt_raw, rect, cand_disp, leader_segments, leader_rad, use_leader = payload
+                dx_pt_eff = float((cand_disp[0] - anchor_disp[0]) / px_per_pt)
+                dy_pt_eff = float((cand_disp[1] - anchor_disp[1]) / px_per_pt)
+                text_zorder = 40.0
+                arrowprops = None
+                if use_leader:
+                    arrowprops = dict(
+                        arrowstyle="-",
+                        color="#7a7a7a",
+                        lw=0.6,
+                        alpha=0.85,
+                        shrinkA=0.0,
+                        shrinkB=2.0,
+                        connectionstyle=f"arc3,rad={float(leader_rad):.3f}",
+                    )
+
+                ann = ax.annotate(
+                    label_txt,
+                    xy=(float(hh), float(gg)),
+                    xytext=(dx_pt_eff, dy_pt_eff),
+                    textcoords="offset points",
+                    ha="center",
+                    va="center",
+                    fontsize=float(fontsize),
+                    color="#4f4f4f",
+                    alpha=0.95,
+                    bbox=dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.88),
+                    arrowprops=arrowprops,
+                    zorder=text_zorder,
+                    clip_on=True,
+                )
+
+                rect_drawn = rect
+                if renderer is not None:
+                    fig.canvas.draw()
+                    # Use the label patch extent (not full annotation extent) so
+                    # leader lines do not inflate collision geometry.
+                    bb_patch = ann.get_bbox_patch()
+                    if bb_patch is not None:
+                        bb_drawn = bb_patch.get_window_extent(renderer=renderer)
+                    else:
+                        bb_drawn = ann.get_window_extent(renderer=renderer)
+                    rect_drawn = (
+                        float(bb_drawn.x0),
+                        float(bb_drawn.y0),
+                        float(bb_drawn.x1),
+                        float(bb_drawn.y1),
+                    )
+
+                # Post-draw hard checks (true rendered geometry).
+                inside_axes = (
+                    (rect_drawn[0] >= axes_box.x0)
+                    and (rect_drawn[1] >= axes_box.y0)
+                    and (rect_drawn[2] <= axes_box.x1)
+                    and (rect_drawn[3] <= axes_box.y1)
+                )
+                if not inside_axes:
+                    ann.remove()
+                    continue
+
+                draw_sep_pad = 6.0 if not use_leader else 4.0
+                rect_drawn_sep = _expand_rect(rect_drawn, draw_sep_pad)
+                if any(_rect_intersects(rect_drawn_sep, _expand_rect(rr0, draw_sep_pad)) for rr0 in actual_drawn_rects):
+                    ann.remove()
+                    continue
+                if any(_segment_intersects_rect(seg, rect_drawn_sep) for seg in placed_leader_segments):
+                    ann.remove()
+                    continue
+
+                center_drawn = np.array(
+                    [
+                        0.5 * (float(rect_drawn[0]) + float(rect_drawn[2])),
+                        0.5 * (float(rect_drawn[1]) + float(rect_drawn[3])),
+                    ],
+                    dtype=float,
+                )
+                center_sep_drawn_min = max(10.0, 0.70 * np.hypot(half_w_px, half_h_px)) if not use_leader else max(
+                    8.0, 0.55 * np.hypot(half_w_px, half_h_px)
+                )
+                if any(float(np.hypot(center_drawn[0] - cc[0], center_drawn[1] - cc[1])) < center_sep_drawn_min for cc in actual_drawn_centers):
+                    ann.remove()
+                    continue
+
+                min_point_rect_dist_drawn = (
+                    min(_point_to_rect_distance(float(pp[0]), float(pp[1]), rect_drawn) for pp in points_disp)
+                    if len(points_disp)
+                    else np.inf
+                )
+                anchor_rect_dist_drawn = _point_to_rect_distance(float(anchor_disp[0]), float(anchor_disp[1]), rect_drawn)
+                curve_rect_dist_drawn = _polyline_min_distance_to_rect(model_disp, rect_drawn)
+
+                point_clearance_px_drawn = (marker_radius_px + 8.0) if not use_leader else (marker_radius_px + 3.0)
+                curve_clearance_px_drawn = (marker_radius_px + 6.0) if not use_leader else (marker_radius_px + 2.2)
+                anchor_clear_px_drawn = (marker_radius_px + 14.0) if not use_leader else (marker_radius_px + 5.5)
+                if (
+                    (min_point_rect_dist_drawn < point_clearance_px_drawn)
+                    or (curve_rect_dist_drawn < curve_clearance_px_drawn)
+                    or (anchor_rect_dist_drawn < anchor_clear_px_drawn)
+                ):
+                    ann.remove()
+                    continue
+
+                if use_leader:
+                    leader_segments_drawn = leader_segments
+                    leader_cross_count = 0
+                    leader_rect_hits = 0
+                    leader_point_hits = 0
+                    for seg in leader_segments_drawn:
+                        for prev in placed_leader_segments:
+                            if _segments_intersect(seg[0], seg[1], prev[0], prev[1]):
+                                leader_cross_count += 1
+                        for rr0 in actual_drawn_rects:
+                            if _segment_intersects_rect(seg, rr0):
+                                leader_rect_hits += 1
+                    for pp in points_disp:
+                        if float(np.hypot(float(pp[0]) - float(anchor_disp[0]), float(pp[1]) - float(anchor_disp[1]))) <= (
+                            marker_radius_px + 0.8
+                        ):
+                            continue
+                        dpt = _point_to_polyline_distance(float(pp[0]), float(pp[1]), leader_segments_drawn)
+                        if dpt < leader_point_clearance_px:
+                            leader_point_hits += 1
+                    if (leader_point_hits > 0) or (leader_cross_count > 0) or (leader_rect_hits > 0):
+                        ann.remove()
+                        continue
+                else:
+                    leader_segments_drawn = []
+
+                # Accept this drawn candidate.
+                actual_drawn_rects.append(rect_drawn)
+                actual_drawn_centers.append(center_drawn)
+                if use_leader:
+                    if getattr(ann, "arrow_patch", None) is not None:
+                        ann.arrow_patch.set_zorder(text_zorder - 8.0)
+                    placed_leader_segments.extend(leader_segments_drawn)
+                stage_counts[stage_name] = int(stage_counts.get(stage_name, 0)) + 1
+                accepted = True
+                break
+
+            if accepted:
+                break
+
+        if not accepted:
+            stage_counts["skipped"] += 1
+
+    if debug_enabled:
+        title = ax.get_title() or "<untitled>"
+        print(
+            "[n_pairs][annot] "
+            f"{title}: no_leader={stage_counts['no_leader']}, "
+            f"elbow_short={stage_counts['elbow_short']}, "
+            f"elbow_long={stage_counts['elbow_long']}, "
+            f"skipped={stage_counts['skipped']}"
         )
 
 
