@@ -94,10 +94,10 @@ def main():
     # =========================================================================
 
     # --- Pipeline lane switches ---
-    run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
-    run_patient_plots = False  # if True, write per-biopsy and paired patient figures
-    run_kernel_sensitivity_and_calibtration_flag = False  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
-    run_cohort_plots = False  # if True, write cohort-level production figures
+    run_semivariogram_plots = True  # if True, write per-biopsy semivariogram figures
+    run_patient_plots = True  # if True, write per-biopsy and paired patient figures
+    run_kernel_sensitivity_and_calibtration_flag = True  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
+    run_cohort_plots = True  # if True, write cohort-level production figures
     run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
     run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
     run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
@@ -184,11 +184,11 @@ def main():
 
     blocked_cv_target_stat = gp_target_stat  # options: "median", "mean"; blocked_CV target summary statistic
     blocked_cv_mean_mode = gp_mean_mode  # options: "ordinary", "zero"; blocked_CV mean-mode for GP posterior
-    blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; canonical blocked_CV standardization mode
+    blocked_cv_primary_predictive_variance_mode = "observed_mc"  # options: "latent", "observed_mc", "observed_mc_plus_nugget"; manuscript-facing runs use latent/observed_mc
     # Recommended default: observed_mc for observed-target calibration reporting.
     # Rationale: denominator matches uncertainty of the observed MC summary target.
     blocked_cv_compare_variance_modes = True  # if True, also score additional variance modes on identical folds/predictions
-    blocked_cv_variance_modes_to_compare = ["latent", "observed_mc"]  # each entry must be one of: "latent", "observed_mc", "observed_mc_plus_nugget"
+    blocked_cv_variance_modes_to_compare = ["latent", "observed_mc"]  # manuscript-facing comparison set; optional diagnostic mode: observed_mc_plus_nugget
     blocked_cv_kernel_specs = [
         ("matern", 1.5, "matern_nu_1_5"),
         ("matern", 2.5, "matern_nu_2_5"),
@@ -233,7 +233,7 @@ def main():
     # None -> all kernels included in this blocked_CV run; or explicit label subset.
     # Labels must match kernel labels used by blocked_cv_kernel_specs (e.g., "matern_nu_1_5", "matern_nu_2_5", "rbf", "exp").
     blocked_cv_plot_kernel_labels = None
-    blocked_cv_plot_variance_mode = "primary"  # options: "primary", "latent", "observed_mc", "observed_mc_plus_nugget"
+    blocked_cv_plot_variance_mode = "primary"  # options: "primary", "latent", "observed_mc", "observed_mc_plus_nugget" (last is diagnostic-only unless explicitly reported)
     # Centralized blocked_CV plot gating to avoid one variable per figure type.
     # Implemented keys currently used: paired_semivariogram_profile, profile_grids, semivariogram_grids,
     # write_report_figures, write_diagnostic_figures.
@@ -265,6 +265,24 @@ def main():
     anonymize_unmapped_biopsy_plot_labels = True  # if True, auto-label every unmapped biopsy on plots as "Biopsy A", "Biopsy B", ... while preserving explicit label_map entries
     anonymized_biopsy_label_prefix = "Biopsy"  # prefix used for auto-generated anonymized labels when anonymize_unmapped_biopsy_plot_labels=True
     include_kernel_legend_in_primary_histograms = True  # if True, append kernel label on primary single-kernel plot legends/axes where supported
+    # Global plot math notation (single source for baseline + kernel sensitivity + blocked_CV plot text).
+    # Edit these symbols in one place to propagate notation changes across the full pipeline.
+    plot_notation_symbols = {
+        "sigma_mc_voxel": r"\widehat{\sigma}_{b,v}",
+        "sigma_mc_mean": r"\overline{\widehat{\sigma}}_b",
+        "sigma_gp_latent_voxel": r"\sigma^{\mathrm{GP}}_{b,v}",
+        "sigma_gp_latent_mean": r"\overline{\sigma}^{\mathrm{GP}}_b",
+        "sigma_gp_observed_voxel": r"\sigma^{\mathrm{pred,obs}}_{b,v}",
+        "sigma_gp_observed_mean": r"\overline{\sigma}^{\mathrm{pred,obs}}_b",
+        "sigma_gp_observed_nugget_voxel": r"\sigma^{\mathrm{pred,obs+nug}}_{b,v}",
+        "sigma_gp_observed_nugget_mean": r"\overline{\sigma}^{\mathrm{pred,obs+nug}}_b",
+        "rstd_base": r"r^{\mathrm{std}}_{b,v}",
+        "rstd_latent": r"r^{\mathrm{std,lat}}_{b,v}",
+        "rstd_observed": r"r^{\mathrm{std,obs}}_{b,v}",
+        "rstd_observed_nugget": r"r^{\mathrm{std,obs+nug}}_{b,v}",
+        "delta_sd": r"\Delta_b^{(\mathrm{SD})}",
+        "delta_sd_test_latent": r"\Delta_{b,f}^{(\mathrm{SD,test,lat})}",
+    }
     # Baseline semivariogram n-pairs labels: independent toggles for paired and grid figures.
     baseline_plot_semivariogram_show_n_pairs_paired = False
     baseline_plot_semivariogram_show_n_pairs_grids = False
@@ -290,6 +308,9 @@ def main():
 
 
 
+
+    # Apply global plot notation overrides once so all downstream plotters share symbols.
+    GPR_production_plots.set_plot_notation(plot_notation_symbols)
 
     _print_section("GPR PIPELINE: DATA LOADING")
     ### Set main output path ###
