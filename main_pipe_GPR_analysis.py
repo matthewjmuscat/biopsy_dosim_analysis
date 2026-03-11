@@ -94,13 +94,13 @@ def main():
     # =========================================================================
 
     # --- Pipeline lane switches ---
-    run_semivariogram_plots = True  # if True, write per-biopsy semivariogram figures
+    run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
     run_patient_plots = True  # if True, write per-biopsy and paired patient figures
     run_kernel_sensitivity_and_calibtration_flag = True  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
     run_cohort_plots = True  # if True, write cohort-level production figures
-    run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
-    run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
-    run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
+    run_blocked_cv = False  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
+    run_blocked_cv_fit_predict = False  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
+    run_blocked_cv_plots = False  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
 
     # --- Cohort filtering / plot cohort selection ---
     simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets

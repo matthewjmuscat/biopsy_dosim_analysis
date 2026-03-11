@@ -3205,6 +3205,8 @@ def plot_residuals_pair(
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
     )
+    # Keep annotation math compact and manuscript-consistent (no kernel suffix in moments).
+    rstd_symbol_annot = _std_residual_symbol(include_kernel_legend=False)
     nrows, ncols = 1, 2
     fig, axes = plt.subplots(
         nrows,
@@ -3240,13 +3242,20 @@ def plot_residuals_pair(
         ax.set_ylim(-ylim, ylim)
     mean_rs = float(np.nanmean(res_std)) if res_std.size else float("nan")
     sd_rs = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
-    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
     header_left = ", ".join([
-        rf"$\mathrm{{mean}} = {mean_rs:.2f}$",
-        rf"$\mathrm{{SD}} = {sd_rs:.2f}$",
-        rf"$|{rstd_symbol}|\leq 1: {pct_le1:.1f}\%$",
+        rf"$\mathrm{{mean}}\!\left({rstd_symbol_annot}\right) = {mean_rs:.2f}$",
+        rf"$\mathrm{{SD}}\!\left({rstd_symbol_annot}\right) = {sd_rs:.2f}$",
     ])
-    _finalize_legend_and_header(ax, header=header_left, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
+    _finalize_legend_and_header(
+        ax,
+        header=header_left,
+        ncol=1,
+        header_loc="right",
+        header_fontsize=None,
+        header_fontstyle="normal",
+        legend_width_mode="subplot",
+        expand_figure=False,
+    )
 
     # Right: standardized residuals histogram
     ax = axes[1]
@@ -3289,10 +3298,9 @@ def plot_residuals_pair(
     bin_width = float(np.nanmean(np.diff(edges))) if edges.size > 1 else np.nan
     s = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
     pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
-    pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
-    ann = "\n".join([
-        rf"$\mathrm{{mean}} = {m:.2f},\ \mathrm{{bin\ width}} = {bin_width:.3f}$",
-        rf"$|{rstd_symbol}|\leq 1: {pct_le1:.1f}\%$, $|{rstd_symbol}|\leq 2: {pct_le2:.1f}\%$",
+    ann = ", ".join([
+        rf"$\mathrm{{bin\ width}} = {bin_width:.3f}$",
+        rf"$|{rstd_symbol_annot}|\leq 1: {pct_le1:.1f}\%$",
     ])
     handles, labels = ax.get_legend_handles_labels()
     _finalize_legend_and_header(
@@ -3301,6 +3309,7 @@ def plot_residuals_pair(
         ncol=len(handles) if handles else 1,
         header_loc="right",
         header_fontsize=_fs_legend(),
+        header_fontstyle="normal",
         handles=handles if handles else None,
         labels=labels if labels else None,
         legend_width_mode="subplot",
