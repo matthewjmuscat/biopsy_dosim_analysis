@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Iterable, Sequence
+import warnings
 
 import inspect
 from contextlib import contextmanager
@@ -110,6 +111,28 @@ KERNEL_SHORT_LABEL_MAP = {
     "exp": "Exp",
 }
 
+# Centralized math notation for plot text/labels. Override from the main pipeline
+# via `set_plot_notation(...)` so figure symbols remain consistent manuscript-wide.
+PLOT_NOTATION_DEFAULTS: dict[str, str] = {
+    "sigma_mc_voxel": r"\widehat{\sigma}_{b,v}",
+    "sigma_mc_mean": r"\overline{\widehat{\sigma}}_b",
+    "partial_sill_hat": r"\widehat{c}_b",
+    "nugget": r"\widehat{\tau}_b",
+    "sigma_gp_latent_voxel": r"\sigma^{\mathrm{GP}}_{b,v}",
+    "sigma_gp_latent_mean": r"\overline{\sigma}^{\mathrm{GP}}_b",
+    "sigma_gp_observed_voxel": r"\sigma^{\mathrm{pred,obs}}_{b,v}",
+    "sigma_gp_observed_mean": r"\overline{\sigma}^{\mathrm{pred,obs}}_b",
+    "sigma_gp_observed_nugget_voxel": r"\sigma^{\mathrm{pred,obs+nug}}_{b,v}",
+    "sigma_gp_observed_nugget_mean": r"\overline{\sigma}^{\mathrm{pred,obs+nug}}_b",
+    "rstd_base": r"r^{\mathrm{std}}_{b,v}",
+    "rstd_latent": r"r^{\mathrm{std,lat}}_{b,v}",
+    "rstd_observed": r"r^{\mathrm{std,obs}}_{b,v}",
+    "rstd_observed_nugget": r"r^{\mathrm{std,obs+nug}}_{b,v}",
+    "delta_sd": r"\Delta_b^{(\mathrm{SD})}",
+    "delta_sd_test_latent": r"\Delta_{b,f}^{(\mathrm{SD,test,lat})}",
+}
+PLOT_NOTATION: dict[str, str] = dict(PLOT_NOTATION_DEFAULTS)
+
 plt.ioff()
 
 # Global figure size for single-panel per-biopsy plots
@@ -204,6 +227,81 @@ def _with_kernel_suffix(stem: str, kernel_suffix: str | None = None) -> str:
     if not suffix:
         return stem
     return f"{stem}_kernel_{suffix}"
+
+
+def set_plot_notation(
+    notation_overrides: dict[str, str] | None = None,
+    *,
+    strict: bool = True,
+) -> dict[str, str]:
+    """
+    Override plot math symbols globally for this module.
+
+    Only keys present in PLOT_NOTATION_DEFAULTS are accepted.
+    If strict=True, unknown keys raise KeyError; otherwise they are ignored with a warning.
+    """
+    global PLOT_NOTATION
+    merged = dict(PLOT_NOTATION_DEFAULTS)
+    if notation_overrides:
+        unknown_keys = sorted(set(notation_overrides) - set(PLOT_NOTATION_DEFAULTS))
+        if unknown_keys:
+            msg = (
+                "Unknown plot notation key(s): "
+                + ", ".join(unknown_keys)
+                + ". Allowed keys are: "
+                + ", ".join(sorted(PLOT_NOTATION_DEFAULTS))
+            )
+            if strict:
+                raise KeyError(msg)
+            warnings.warn(msg, RuntimeWarning, stacklevel=2)
+        for key, val in notation_overrides.items():
+            if key not in PLOT_NOTATION_DEFAULTS:
+                continue
+            sval = str(val).strip()
+            if sval:
+                merged[key] = sval
+    PLOT_NOTATION = merged
+    return dict(PLOT_NOTATION)
+
+
+def get_plot_notation() -> dict[str, str]:
+    """Return the active plot notation dictionary."""
+    return dict(PLOT_NOTATION)
+
+
+def _notation_symbol(key: str) -> str:
+    return str(PLOT_NOTATION.get(key, PLOT_NOTATION_DEFAULTS[key]))
+
+
+def _normalize_variance_mode(mode_name: str | None) -> str | None:
+    if mode_name is None:
+        return None
+    mode = str(mode_name).strip().lower()
+    mode_map = {
+        "primary": "primary",
+        "latent": "latent",
+        "lat": "latent",
+        "observed_mc": "observed_mc",
+        "obs": "observed_mc",
+        "observed_mc_plus_nugget": "observed_mc_plus_nugget",
+        "obs+nug": "observed_mc_plus_nugget",
+    }
+    return mode_map.get(mode, mode)
+
+
+def _sigma_mc_symbol(*, mean: bool = False) -> str:
+    return _notation_symbol("sigma_mc_mean" if mean else "sigma_mc_voxel")
+
+
+def _sigma_gp_symbol(mode_name: str | None = "latent", *, mean: bool = False) -> str:
+    mode = _normalize_variance_mode(mode_name)
+    if mode == "observed_mc":
+        key = "sigma_gp_observed_mean" if mean else "sigma_gp_observed_voxel"
+    elif mode == "observed_mc_plus_nugget":
+        key = "sigma_gp_observed_nugget_mean" if mean else "sigma_gp_observed_nugget_voxel"
+    else:
+        key = "sigma_gp_latent_mean" if mean else "sigma_gp_latent_voxel"
+    return _notation_symbol(key)
 
 
 def _gp_mean_legend_label(
@@ -795,7 +893,7 @@ def _gp_sd_legend_label(
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
 ) -> str:
-    base = r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$"
+    base = rf"GP SD ${_sigma_gp_symbol('latent', mean=False)}$"
     if not include_kernel_legend:
         return base
     short = _kernel_short_label(kernel_legend_label)
@@ -807,23 +905,26 @@ def _gp_sd_legend_label(
 def _mean_gp_sd_symbol(
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
+    mode_name: str | None = "latent",
 ) -> str:
-    base = r"\overline{\sigma}^{\mathrm{GP}}_b"
+    base = _sigma_gp_symbol(mode_name, mean=True)
     if not include_kernel_legend:
         return base
     short = _kernel_short_label(kernel_legend_label)
     if short is None:
         return base
-    return rf"\overline{{\sigma}}^{{\mathrm{{GP}}}}_b\ (\mathrm{{{short}}})"
+    return f"{base}\\ (\\mathrm{{{short}}})"
 
 
 def _mean_gp_sd_ylabel(
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
+    mode_name: str | None = "latent",
 ) -> str:
     symbol = _mean_gp_sd_symbol(
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
+        mode_name=mode_name,
     )
     return rf"Mean GP SD ${symbol}\ \text{{(Gy)}}$"
 
@@ -831,37 +932,56 @@ def _mean_gp_sd_ylabel(
 def _ratio_ylabel(
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
+    mode_name: str | None = "latent",
 ) -> str:
+    sigma_mc = _sigma_mc_symbol(mean=False)
+    sigma_gp = _sigma_gp_symbol(mode_name, mean=False)
     if not include_kernel_legend:
-        return r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$"
+        return rf"$R_{{b,v}} = {sigma_mc} / {sigma_gp}$"
     short = _kernel_short_label(kernel_legend_label)
     if short is None:
-        return r"$R_{b,v} = \widehat{\sigma}_{b,v} / \sigma^{\mathrm{GP}}_{b,v}$"
-    return rf"$R_{{b,v}} = \widehat{{\sigma}}_{{b,v}} / \sigma^{{\mathrm{{GP}}}}_{{b,v}}\ (\mathrm{{{short}}})$"
+        return rf"$R_{{b,v}} = {sigma_mc} / {sigma_gp}$"
+    return rf"$R_{{b,v}} = {sigma_mc} / {sigma_gp}\ (\mathrm{{{short}}})$"
 
 
 def _std_residual_symbol(
+    mode_name: str | None = None,
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
 ) -> str:
-    base = r"r^{\mathrm{std}}_{b,v}"
+    mode = _normalize_variance_mode(mode_name)
+    if mode == "latent":
+        base = _notation_symbol("rstd_latent")
+    elif mode == "observed_mc":
+        base = _notation_symbol("rstd_observed")
+    elif mode == "observed_mc_plus_nugget":
+        base = _notation_symbol("rstd_observed_nugget")
+    else:
+        base = _notation_symbol("rstd_base")
     if not include_kernel_legend:
         return base
     short = _kernel_short_label(kernel_legend_label)
     if short is None:
         return base
-    return rf"r^{{\mathrm{{std}}}}_{{b,v}}\ (\mathrm{{{short}}})"
+    return rf"{base}\ (\mathrm{{{short}}})"
 
 
 def _std_residual_axis_label(
+    mode_name: str | None = None,
     include_kernel_legend: bool = True,
     kernel_legend_label: str | None = None,
 ) -> str:
     symbol = _std_residual_symbol(
+        mode_name=mode_name,
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
     )
     return rf"Standardized residual ${symbol}$"
+
+
+def _delta_sd_symbol(*, test_fold_latent: bool = False) -> str:
+    key = "delta_sd_test_latent" if test_fold_latent else "delta_sd"
+    return _notation_symbol(key)
 
 
 def _fd_bins(
@@ -1771,8 +1891,13 @@ def plot_kernel_sensitivity_scatter(
     # Axis labels per requested outputs
     if file_name_base.startswith("kernel_sensitivity_ratio_scatter"):
         ax.set_xlabel(r"$\mathrm{Mean}\ R_{b,v}$", fontsize=fs_label)
-        ax.set_ylabel("Percent difference $\\Delta_b^{(\\mathrm{SD})}$\n" 
-                      r"$\overline{\sigma}^{\mathrm{GP}}_b$ vs $\overline{\widehat{\sigma}}_b$ (%)", fontsize=fs_label)
+        ax.set_ylabel(
+            "Percent difference "
+            + rf"${_delta_sd_symbol()}$"
+            + "\n"
+            + rf"${_mean_gp_sd_symbol(include_kernel_legend=False)}$ vs ${_sigma_mc_symbol(mean=True)}$ (%)",
+            fontsize=fs_label,
+        )
         header = None
     else:
         ax.set_xlabel(x_label, fontsize=fs_label)
@@ -1826,6 +1951,7 @@ def plot_gp_profile_production(
     mu_X = gp_res.get("mu_X", np.array([]))
     sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
+    sigma_mc_voxel = _sigma_mc_symbol(mean=False)
     gp_mean_label = _gp_mean_legend_label(
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
@@ -1837,14 +1963,14 @@ def plot_gp_profile_production(
     if ci_level == "both":
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
         ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band")
-        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
-        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$")
+        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$")
+        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$")
     elif ci_level in (0.68, 1):
         ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.2, color=PRIMARY_LINE_COLOR, label="68% band")
-        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$")
+        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$")
     elif ci_level in (0.95, 2):
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.15, color=PRIMARY_LINE_COLOR, label="95% band")
-        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
+        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$")
     else:
         raise ValueError(f"Unsupported ci_level={ci_level}")
 
@@ -1860,8 +1986,8 @@ def plot_gp_profile_production(
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
     mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
     metrics_str = (
-        rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
-        rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+        rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+        rf"{_delta_sd_symbol()} = {shrink:.1f}\%$"
     )
     # Reorder legend entries: mu, 68% band, 95% band, 1σ, 2σ
     handles, labels = ax.get_legend_handles_labels()
@@ -1869,8 +1995,8 @@ def plot_gp_profile_production(
         gp_mean_label,
         "68% band",
         "95% band",
-        r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
-        r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$",
+        rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$",
+        rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$",
     ]
     order_map = {lab: i for i, lab in enumerate(order_keys)}
     ordered = sorted(zip(handles, labels), key=lambda hl: order_map.get(hl[1], 99))
@@ -1917,8 +2043,24 @@ def plot_noise_profile_production(
     if per_voxel is None:
         raise ValueError("gp_res must contain 'per_voxel' with x_mm and var_n columns.")
     fig, ax = plt.subplots(figsize=figsize)
-    ax.plot(per_voxel["x_mm"], np.sqrt(np.maximum(per_voxel["var_n"], 0)), marker="o", ms=4, lw=1.2, color=PRIMARY_LINE_COLOR, label=r"MC SD $\widehat{\sigma}_{b,v}$")
-    ax.plot(gp_res["X"], gp_res["sd_X"], marker="s", ms=3.5, lw=1.1, color=OVERLAY_LINE_COLOR, label=r"GP SD $\sigma^{\mathrm{GP}}_{b,v}$")
+    ax.plot(
+        per_voxel["x_mm"],
+        np.sqrt(np.maximum(per_voxel["var_n"], 0)),
+        marker="o",
+        ms=4,
+        lw=1.2,
+        color=PRIMARY_LINE_COLOR,
+        label=rf"MC SD ${_sigma_mc_symbol(mean=False)}$",
+    )
+    ax.plot(
+        gp_res["X"],
+        gp_res["sd_X"],
+        marker="s",
+        ms=3.5,
+        lw=1.1,
+        color=OVERLAY_LINE_COLOR,
+        label=rf"GP SD ${_sigma_gp_symbol('latent', mean=False)}$",
+    )
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(r"Dose standard deviation (Gy)", fontsize=_fs_label())
     if title_on:
@@ -1961,7 +2103,7 @@ def plot_uncertainty_reduction_production(
         kernel_legend_label=kernel_legend_label,
     )
     fig, ax = plt.subplots(figsize=figsize)
-    ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=r"MC SD $\widehat{\sigma}_{b,v}$", color=OVERLAY_LINE_COLOR)
+    ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=rf"MC SD ${_sigma_mc_symbol(mean=False)}$", color=OVERLAY_LINE_COLOR)
     ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=gp_sd_label, color=PRIMARY_LINE_COLOR)
     ax.fill_between(X, sd_X, indep_sd, where=indep_sd>=sd_X, color=PRIMARY_LINE_COLOR, alpha=0.12)
     fs_label = _fs_label(label_fontsize)
@@ -1974,7 +2116,7 @@ def plot_uncertainty_reduction_production(
     int_mc = float(np.nansum(indep_sd) * spacing)
     int_gp = float(np.nansum(sd_X) * spacing)
     red_pct = 100.0 * (1 - int_gp / int_mc) if int_mc > 0 else np.nan
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {red_pct:.1f}\%$"
+    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ {_delta_sd_symbol()} = {red_pct:.1f}\%$"
     top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=_fs_legend(legend_fontsize))
     title_txt = title_label if title_label else (f"P{patient_id} Bx{bx_index}" if title_on else None)
     if title_txt:
@@ -2011,9 +2153,9 @@ def plot_uncertainty_ratio_production(
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(X, ratio, "-o", ms=4, lw=1.2, color=PRIMARY_LINE_COLOR)
     ax.axhline(1.0, color="black", lw=0.9, ls="--", alpha=0.7, label=r"$R_{b,v}=1$")
-    ax.axhline(1.25, color="#c75000", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.25$")
-    ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
-    ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
+    ax.axhline(1.25, color="black", lw=0.9, ls=":", alpha=0.6, label=r"$R_{b,v}=1.25$")
+    ax.axhline(1.5, color="#c75000", lw=0.9, ls=":", alpha=0.8, label=r"$R_{b,v}=1.5$")
+    ax.fill_between(ax.get_xlim(), 1.5, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     fs_label = _fs_label(label_fontsize)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=fs_label)
     ax.set_ylabel(
@@ -2026,7 +2168,7 @@ def plot_uncertainty_ratio_production(
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
-    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+    metrics_str = rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ {_delta_sd_symbol()} = {shrink:.1f}\%$"
     top = _finalize_legend_and_header(ax, header=metrics_str, ncol=3, header_loc="right", header_fontsize=None)
     title_txt = title_label if title_label else (f"P{patient_id} Bx{bx_index}" if title_on else None)
     if title_txt:
@@ -2100,16 +2242,20 @@ def plot_residuals_vs_z_production(
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     if standardized:
+        rstd_symbol = _std_residual_symbol(
+            include_kernel_legend=include_kernel_legend,
+            kernel_legend_label=kernel_legend_label,
+        )
         header = ", ".join([
             rf"$\mathrm{{mean}} = {mean_rs:.2f}$",
             rf"$\mathrm{{SD}} = {sd_rs:.2f}$",
-            rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$",
+            rf"$|{rstd_symbol}|\leq 1: {pct_le1:.1f}\%$",
         ])
     else:
         mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
         median_abs_r = float(np.nanmedian(np.abs(res))) if res.size else float("nan")
         header = ", ".join([
-            rf"$\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$",
+            rf"${_delta_sd_symbol()} = {shrink:.1f}\%$",
             rf"$\mathrm{{median}}\ |r_b| = {median_abs_r:.2f}$",
         ])
     _finalize_legend_and_header(ax, header=header, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
@@ -2139,6 +2285,10 @@ def plot_standardized_residuals_hist_production(
     kernel_legend_label: str | None = None,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    rstd_symbol = _std_residual_symbol(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
     res_std = (gp_res["y"] - gp_res["mu_X"]) / np.maximum(gp_res["sd_X"], 1e-12)
     res_std = res_std[np.isfinite(res_std)]
     bins = _fd_bins(res_std, min_bins=None, max_bins=None, context=file_name_base)
@@ -2166,7 +2316,7 @@ def plot_standardized_residuals_hist_production(
     ax.plot(res_std, np.full_like(res_std, ymin + 0.01*(ax.get_ylim()[1]-ymin)), "|", color=OVERLAY_LINE_COLOR, alpha=0.6, markersize=6)
     xs = np.linspace(-4, 4, 200)
     ax.plot(xs, stats.norm.pdf(xs), color=OVERLAY_LINE_COLOR, lw=1.2, label=r"$\mathcal{N}(0,1)$")
-    ax.axvline(0, color="black", lw=0.9, ls="-", label=r"$r^{\mathrm{std}}=0$")
+    ax.axvline(0, color="black", lw=0.9, ls="-", label=rf"${rstd_symbol}=0$")
     m = float(np.nanmean(res_std))
     ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
     lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
@@ -2187,7 +2337,7 @@ def plot_standardized_residuals_hist_production(
     pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
     ann = "\n".join([
         rf"$\mathrm{{mean}} = {m:.2f},\ \mathrm{{bin\ width}} = {bin_width:.3f}$",
-        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$, $|r^{{\mathrm{{std}}}}|\leq 2: {pct_le2:.1f}\%$",
+        rf"$|{rstd_symbol}|\leq 1: {pct_le1:.1f}\%$, $|{rstd_symbol}|\leq 2: {pct_le2:.1f}\%$",
     ])
     handles, labels = ax.get_legend_handles_labels()
     _finalize_legend_and_header(
@@ -2227,6 +2377,7 @@ def plot_standardized_residuals_qq_production(
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    rstd_symbol = _std_residual_symbol(include_kernel_legend=False)
     res_std = (gp_res["y"] - gp_res["mu_X"]) / np.maximum(gp_res["sd_X"], 1e-12)
     res_std = res_std[np.isfinite(res_std)]
     n = len(res_std)
@@ -2259,7 +2410,7 @@ def plot_standardized_residuals_qq_production(
     )
     ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
     ax.set_xlabel(r"Theoretical quantiles $\Phi^{-1}(p)$", fontsize=_fs_label())
-    ax.set_ylabel(r"Sample quantiles of $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_ylabel(rf"Sample quantiles of ${rstd_symbol}$", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     mean_mc, mean_gp, shrink = _compute_shrinkage_stats(gp_res)
@@ -2300,6 +2451,7 @@ def plot_standardized_residuals_ecdf_production(
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    rstd_symbol = _std_residual_symbol(include_kernel_legend=False)
     res_std = (gp_res["y"] - gp_res["mu_X"]) / np.maximum(gp_res["sd_X"], 1e-12)
     res_std = res_std[np.isfinite(res_std)]
     n = len(res_std)
@@ -2311,7 +2463,7 @@ def plot_standardized_residuals_ecdf_production(
     ax.step(data, y, where="post", color=PRIMARY_LINE_COLOR, label="ECDF")
     xs = np.linspace(min(-4, data.min()), max(4, data.max()), 400)
     ax.plot(xs, stats.norm.cdf(xs), color=OVERLAY_LINE_COLOR, lw=1.2, label=r"$\Phi(x)$")
-    ax.set_xlabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    ax.set_xlabel(rf"Standardized residual ${rstd_symbol}$", fontsize=_fs_label())
     ax.set_ylabel("Empirical CDF", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
@@ -2320,8 +2472,8 @@ def plot_standardized_residuals_ecdf_production(
     pct_ge3 = float(np.nanmean(np.abs(res_std) >= 3.0) * 100.0) if res_std.size else float("nan")
     median_abs = float(np.nanmedian(np.abs(res_std))) if res_std.size else float("nan")
     header = "\n".join([
-        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%,\ |r^{{\mathrm{{std}}}}|\leq 2: {pct_le2:.1f}\%$",
-        rf"$|r^{{\mathrm{{std}}}}|\geq 3: {pct_ge3:.1f}\%,\ \mathrm{{median}}|r^{{\mathrm{{std}}}}| = {median_abs:.2f}$",
+        rf"$|{rstd_symbol}|\leq 1: {pct_le1:.1f}\%,\ |{rstd_symbol}|\leq 2: {pct_le2:.1f}\%$",
+        rf"$|{rstd_symbol}|\geq 3: {pct_ge3:.1f}\%,\ \mathrm{{median}}|{rstd_symbol}| = {median_abs:.2f}$",
     ])
     _finalize_legend_and_header(ax, header=header, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="axes", expand_figure=False)
     title_txt = title_label if title_label else f"P{patient_id} Bx{bx_index}"
@@ -2349,6 +2501,7 @@ def plot_residuals_production(
     show: bool = False,
 ):
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    rstd_symbol = _std_residual_symbol(include_kernel_legend=False)
     X = gp_res["X"]
     y = gp_res["y"]
     mu_X = gp_res["mu_X"]
@@ -2361,7 +2514,7 @@ def plot_residuals_production(
         axes[0].axhline(-lvl, color=color, lw=0.9, ls="--", alpha=0.6)
     axes[0].plot(X, res_std, "o-", ms=4, lw=1.1, color=PRIMARY_LINE_COLOR)
     axes[0].set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
-    axes[0].set_ylabel(r"Standardized residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    axes[0].set_ylabel(rf"Standardized residual ${rstd_symbol}$", fontsize=_fs_label())
     _apply_axis_style(axes[0])
     _apply_per_biopsy_ticks(axes[0])
 
@@ -2383,7 +2536,7 @@ def plot_residuals_production(
         color="0.4",
         linewidth=0.5,
     )
-    axes[1].set_xlabel(r"Standardised residual $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+    axes[1].set_xlabel(rf"Standardised residual ${rstd_symbol}$", fontsize=_fs_label())
     axes[1].set_ylabel("Density", fontsize=_fs_label())
     # overlay standard normal
     xs = np.linspace(-4, 4, 200)
@@ -2403,8 +2556,8 @@ def plot_residuals_production(
         "\n".join([
             f"mean={mean_rs:.2f}",
             f"sd={std_rs:.2f}",
-            f"|r_std|<=1: {pct_le1:.1f}%",
-            f"|r_std|<=2: {pct_le2:.1f}%",
+            rf"$|{rstd_symbol}|\leq 1$: {pct_le1:.1f}%",
+            rf"$|{rstd_symbol}|\leq 2$: {pct_le2:.1f}%",
         ]),
         ha="right",
         va="top",
@@ -2457,9 +2610,15 @@ def plot_variogram_overlay_production(
     ax.plot(h, gamma_hat, "o", ms=4, color=PRIMARY_LINE_COLOR, label=r"Empirical $\widehat{\gamma}_b(h)$")
     ax.plot(h, gamma_model, "-", lw=2.0, color=OVERLAY_LINE_COLOR, label=label_model)
     if add_sill:
-        ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+        ax.axhline(
+            hyperparams.sigma_f2 + hyperparams.nugget,
+            color="#bbbbbb",
+            ls="--",
+            lw=0.9,
+            label=rf"Sill ${_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2$",
+        )
     if add_nugget:
-        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=rf"Nugget ${_notation_symbol('nugget')}^2$")
     ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
@@ -2468,7 +2627,7 @@ def plot_variogram_overlay_production(
     if metrics_str is None:
         metrics_str = (
             rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}},\ "
-            rf"\hat{{\tau}}_b^2 = {_format_nugget(hyperparams.nugget)}\ \mathrm{{Gy}}^2$"
+            rf"{_notation_symbol('nugget')}^2 = {_format_nugget(hyperparams.nugget)}\ \mathrm{{Gy}}^2$"
         )
     top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None)
     if title_label:
@@ -2556,9 +2715,15 @@ def plot_variogram_and_profile_pair(
             model_gamma=gamma_model,
         )
     if add_sill:
-        ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+        ax.axhline(
+            hyperparams.sigma_f2 + hyperparams.nugget,
+            color="#bbbbbb",
+            ls="--",
+            lw=0.9,
+            label=rf"Sill ${_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2$",
+        )
     if add_nugget:
-        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=rf"Nugget ${_notation_symbol('nugget')}^2$")
     ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
@@ -2571,7 +2736,7 @@ def plot_variogram_and_profile_pair(
         nug_tmp = metrics_row.get("nugget", np.nan)
         if pd.notna(nug_tmp):
             nug_val = float(nug_tmp)
-    metrics_left = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+    metrics_left = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ {_notation_symbol('nugget')}^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
     if metrics_left_override is not None:
         metrics_left = str(metrics_left_override)
     top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
@@ -2586,6 +2751,7 @@ def plot_variogram_and_profile_pair(
     mu_X = gp_res.get("mu_X", np.array([]))
     sd_X = gp_res.get("sd_X", np.array([]))
     indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
+    sigma_mc_voxel = _sigma_mc_symbol(mean=False)
     gp_mean_label = _gp_mean_legend_label(
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
@@ -2593,8 +2759,8 @@ def plot_variogram_and_profile_pair(
     ax.plot(X_star, mu_star, lw=2.4, color=PRIMARY_LINE_COLOR, label=gp_mean_label)
     ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band")
     ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band")
-    ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$")
-    ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$")
+    ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.5, lw=1.0, color="#1b8a5a", label=rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$")
+    ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.5, lw=1.0, color="#c75000", label=rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$")
     X_test_arr = np.asarray([] if X_test is None else X_test, dtype=float).ravel()
     y_test_arr = np.asarray([] if y_test is None else y_test, dtype=float).ravel()
     if X_test_arr.size and y_test_arr.size:
@@ -2621,8 +2787,8 @@ def plot_variogram_and_profile_pair(
         gp_mean_label,
         "68% band",
         "95% band",
-        r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$",
-        r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$",
+        rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$",
+        rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$",
         heldout_legend_label,
     ]
     order_map = {lab: i for i, lab in enumerate(order_keys)}
@@ -2636,7 +2802,7 @@ def plot_variogram_and_profile_pair(
         shrink_tmp = metrics_row.get("pct_reduction_mean_sd", np.nan)
         if pd.notna(shrink_tmp):
             shrink_pct = float(shrink_tmp)
-    metrics_right = rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ \Delta_b^{{(\mathrm{{SD}})}} = {shrink_pct:.1f}\%$"
+    metrics_right = rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ {_delta_sd_symbol()} = {shrink_pct:.1f}\%$"
     if metrics_right_override is not None:
         metrics_right = str(metrics_right_override)
     top_right = _finalize_legend_and_header(
@@ -2729,12 +2895,13 @@ def plot_gp_profiles_grid(
         X = gp_res["X"]
         y = gp_res["y"]
         indep_sd = np.sqrt(np.maximum(gp_res["var_n"], 0))
+        sigma_mc_voxel = _sigma_mc_symbol(mean=False)
 
         ax.plot(X_star, mu_star, lw=2.0, color=PRIMARY_LINE_COLOR, label=gp_mean_label, zorder=3)
         ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=PRIMARY_LINE_COLOR, label="95% band", zorder=1)
         ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=PRIMARY_LINE_COLOR, label="68% band", zorder=2)
-        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$", zorder=4)
-        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.0, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$", zorder=5)
+        ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$", zorder=4)
+        ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.0, lw=1.0, color="#c75000", label=rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$", zorder=5)
         ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
         ax.set_ylabel(r"Dose along core $D_b(z)$ (Gy)", fontsize=_fs_label())
         # Keep y-axis non-negative like single-profile plotter
@@ -2763,8 +2930,8 @@ def plot_gp_profiles_grid(
             _, _, shrink = _compute_shrinkage_stats(gp_res)
         mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
         metrics_str = (
-            rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
-            rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+            rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+            rf"{_delta_sd_symbol()} = {shrink:.1f}\%$"
         )
         ax.text(
             0.98, 1.04, metrics_str,
@@ -2861,9 +3028,15 @@ def plot_variogram_overlays_grid(
                 model_gamma=gamma_model,
             )
         if add_sill:
-            ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+            ax.axhline(
+                hyperparams.sigma_f2 + hyperparams.nugget,
+                color="#bbbbbb",
+                ls="--",
+                lw=0.9,
+                label=rf"Sill ${_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2$",
+            )
         if add_nugget:
-            ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+            ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=rf"Nugget ${_notation_symbol('nugget')}^2$")
         ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
         ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
         _apply_axis_style(ax)
@@ -2882,7 +3055,7 @@ def plot_variogram_overlays_grid(
                     ell_val = float(mr["ell"].iloc[0])
                 if "nugget" in mr.columns and pd.notna(mr["nugget"].iloc[0]):
                     nug_val = float(mr["nugget"].iloc[0])
-        metrics_str = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+        metrics_str = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ {_notation_symbol('nugget')}^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
         ax.text(
             0.98, 1.04, metrics_str,
             ha="right", va="bottom",
@@ -2954,7 +3127,7 @@ def plot_uncertainty_pair(
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
     )
-    ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=r"MC SD $\widehat{\sigma}_{b,v}$", color=OVERLAY_LINE_COLOR)
+    ax.plot(X, indep_sd, "o-", ms=4, lw=1.2, label=rf"MC SD ${_sigma_mc_symbol(mean=False)}$", color=OVERLAY_LINE_COLOR)
     ax.plot(X, sd_X, "o-", ms=4, lw=1.2, label=gp_sd_label, color=PRIMARY_LINE_COLOR)
     ax.fill_between(X, sd_X, indep_sd, where=indep_sd>=sd_X, color=PRIMARY_LINE_COLOR, alpha=0.12)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
@@ -2973,8 +3146,8 @@ def plot_uncertainty_pair(
         if "mean_gp_sd" in metrics_row and pd.notna(metrics_row["mean_gp_sd"]):
             mean_gp_sd = float(metrics_row["mean_gp_sd"])
     metrics_left = (
-        rf"$\overline{{\widehat{{\sigma}}}}_b = {mean_mc_sd:.2f}\ \mathrm{{Gy}},\ "
-        rf"\overline{{\sigma}}_b^{{\mathrm{{GP}}}} = {mean_gp_sd:.2f}\ \mathrm{{Gy}}$"
+        rf"${_sigma_mc_symbol(mean=True)} = {mean_mc_sd:.2f}\ \mathrm{{Gy}},\ "
+        rf"{_mean_gp_sd_symbol(include_kernel_legend=False)} = {mean_gp_sd:.2f}\ \mathrm{{Gy}}$"
     )
     top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
 
@@ -2983,9 +3156,9 @@ def plot_uncertainty_pair(
     ratio = np.divide(indep_sd, sd_X, out=np.ones_like(indep_sd), where=sd_X > 0)
     ax.plot(X, ratio, "-o", ms=4, lw=1.2, color=PRIMARY_LINE_COLOR)
     ax.axhline(1.0, color="black", lw=0.9, ls="--", alpha=0.7, label=r"$R_{b,v}=1$")
-    ax.axhline(1.25, color="#c75000", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.25$")
-    ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
-    ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
+    ax.axhline(1.25, color="black", lw=0.9, ls=":", alpha=0.6, label=r"$R_{b,v}=1.25$")
+    ax.axhline(1.5, color="#c75000", lw=0.9, ls=":", alpha=0.8, label=r"$R_{b,v}=1.5$")
+    ax.fill_between(ax.get_xlim(), 1.5, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(
         _ratio_ylabel(
@@ -3001,7 +3174,9 @@ def plot_uncertainty_pair(
     if metrics_row is not None:
         if "median_ratio" in metrics_row and pd.notna(metrics_row["median_ratio"]):
             median_ratio = float(metrics_row["median_ratio"])
-        if "pct_vox_ge_50" in metrics_row and pd.notna(metrics_row["pct_vox_ge_50"]):
+        if "pct_vox_ratio_ge_1p50" in metrics_row and pd.notna(metrics_row["pct_vox_ratio_ge_1p50"]):
+            frac_ge_1_5 = float(metrics_row["pct_vox_ratio_ge_1p50"])
+        elif "pct_vox_ge_50" in metrics_row and pd.notna(metrics_row["pct_vox_ge_50"]):
             frac_ge_1_5 = float(metrics_row["pct_vox_ge_50"])
     metrics_right = rf"$\mathrm{{median}}(R_{{b,v}}) = {median_ratio:.2f},\ f(R_{{b,v}}\geq 1.5) = {frac_ge_1_5:.1f}\%$"
     top_right = _finalize_legend_and_header(ax, header=metrics_right, ncol=3, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
@@ -3048,6 +3223,12 @@ def plot_residuals_pair(
     Mirrors styling of other paired panels.
     """
     _setup_matplotlib_defaults(font_scale=font_scale, seaborn_style=seaborn_style, seaborn_context=seaborn_context)
+    rstd_symbol = _std_residual_symbol(
+        include_kernel_legend=include_kernel_legend,
+        kernel_legend_label=kernel_legend_label,
+    )
+    # Keep annotation math compact and manuscript-consistent (no kernel suffix in moments).
+    rstd_symbol_annot = _std_residual_symbol(include_kernel_legend=False)
     nrows, ncols = 1, 2
     fig, axes = plt.subplots(
         nrows,
@@ -3083,13 +3264,20 @@ def plot_residuals_pair(
         ax.set_ylim(-ylim, ylim)
     mean_rs = float(np.nanmean(res_std)) if res_std.size else float("nan")
     sd_rs = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
-    pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
     header_left = ", ".join([
-        rf"$\mathrm{{mean}} = {mean_rs:.2f}$",
-        rf"$\mathrm{{SD}} = {sd_rs:.2f}$",
-        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$",
+        rf"$\mathrm{{mean}}\!\left({rstd_symbol_annot}\right) = {mean_rs:.2f}$",
+        rf"$\mathrm{{SD}}\!\left({rstd_symbol_annot}\right) = {sd_rs:.2f}$",
     ])
-    _finalize_legend_and_header(ax, header=header_left, ncol=1, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
+    _finalize_legend_and_header(
+        ax,
+        header=header_left,
+        ncol=1,
+        header_loc="right",
+        header_fontsize=None,
+        header_fontstyle="normal",
+        legend_width_mode="subplot",
+        expand_figure=False,
+    )
 
     # Right: standardized residuals histogram
     ax = axes[1]
@@ -3114,7 +3302,7 @@ def plot_residuals_pair(
     )
     xs = np.linspace(-4, 4, 200)
     ax.plot(xs, stats.norm.pdf(xs), color=OVERLAY_LINE_COLOR, lw=1.2, label=r"$\mathcal{N}(0,1)$")
-    ax.axvline(0, color="black", lw=0.9, ls="-", label=r"$r^{\mathrm{std}}=0$")
+    ax.axvline(0, color="black", lw=0.9, ls="-", label=rf"${rstd_symbol}=0$")
     m = float(np.nanmean(res_std)) if res_std.size else float("nan")
     ax.axvline(m, color="red", lw=0.9, ls="-", label="Mean")
     lim = max(3, np.percentile(np.abs(res_std), 99, method="linear") if res_std.size else 3)
@@ -3132,10 +3320,9 @@ def plot_residuals_pair(
     bin_width = float(np.nanmean(np.diff(edges))) if edges.size > 1 else np.nan
     s = float(np.nanstd(res_std, ddof=1)) if res_std.size > 1 else float("nan")
     pct_le1 = float(np.nanmean(np.abs(res_std) <= 1.0) * 100.0) if res_std.size else float("nan")
-    pct_le2 = float(np.nanmean(np.abs(res_std) <= 2.0) * 100.0) if res_std.size else float("nan")
-    ann = "\n".join([
-        rf"$\mathrm{{mean}} = {m:.2f},\ \mathrm{{bin\ width}} = {bin_width:.3f}$",
-        rf"$|r^{{\mathrm{{std}}}}|\leq 1: {pct_le1:.1f}\%$, $|r^{{\mathrm{{std}}}}|\leq 2: {pct_le2:.1f}\%$",
+    ann = ", ".join([
+        rf"$\mathrm{{bin\ width}} = {bin_width:.3f}$",
+        rf"$|{rstd_symbol_annot}|\leq 1: {pct_le1:.1f}\%$",
     ])
     handles, labels = ax.get_legend_handles_labels()
     _finalize_legend_and_header(
@@ -3144,6 +3331,7 @@ def plot_residuals_pair(
         ncol=len(handles) if handles else 1,
         header_loc="right",
         header_fontsize=_fs_legend(),
+        header_fontstyle="normal",
         handles=handles if handles else None,
         labels=labels if labels else None,
         legend_width_mode="subplot",
@@ -3214,7 +3402,7 @@ def cohort_plots_production(
         if unit_label == "mm":
             bw_fmt = "{:.2f}"
             med_fmt = "{:.2f}"
-        elif "tau_b^2" in var_label:
+        elif _notation_symbol("nugget") in var_label:
             bw_fmt = "{:.2f}"
             med_fmt = "{:.2f}"
         else:
@@ -3269,7 +3457,13 @@ def cohort_plots_production(
 
     _hist(metrics_df["mean_ratio"], r"Mean shrinkage ratio $\overline{R}_b$", "cohort_hist_mean_ratio", unit_label="", var_label=r"\overline{R}_b")
     _hist(metrics_df["ell"], r"Fitted axial coherence length $\hat{\ell}_b$ (mm)", "cohort_hist_length_scale", unit_label="mm", var_label=r"\ell_b", bins_override=4)
-    _hist(metrics_df.get("nugget_fraction", metrics_df["nugget"]), r"Nugget fraction $\tau_b^2 / (\sigma_{f,b}^2 + \tau_b^2)$", "cohort_hist_nugget_fraction", unit_label="", var_label=r"\tau_b^2/(\sigma_{f,b}^2+\tau_b^2)")
+    _hist(
+        metrics_df.get("nugget_fraction", metrics_df["nugget"]),
+        rf"Nugget fraction ${_notation_symbol('nugget')}^2 / ({_notation_symbol('partial_sill_hat')} + {_notation_symbol('nugget')}^2)$",
+        "cohort_hist_nugget_fraction",
+        unit_label="",
+        var_label=rf"{_notation_symbol('nugget')}^2/({_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2)",
+    )
     if "sv_rmse" in metrics_df.columns:
         _hist(metrics_df["sv_rmse"], r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)", "cohort_hist_variogram_rmse", unit_label="Gy^2", var_label=r"\mathrm{RMSE}_b^{(\gamma)}")
 
@@ -3278,7 +3472,11 @@ def cohort_plots_production(
     integ_red = metrics_df.get("delta_int_percent", metrics_df.get("pct_reduction_integ_sd")).dropna()
     if isinstance(integ_red, pd.Series):
         integ_red = integ_red / 100.0
-    frac_high = metrics_df.get("pct_vox_ge_20", np.nan)
+    frac_high = (
+        metrics_df["pct_vox_ratio_ge_1p50"]
+        if "pct_vox_ratio_ge_1p50" in metrics_df.columns
+        else metrics_df.get("pct_vox_ge_50", np.nan)
+    )
     if isinstance(frac_high, pd.Series):
         frac_high = (frac_high.dropna() / 100.0)
     else:
@@ -3286,12 +3484,12 @@ def cohort_plots_production(
 
     metric_map = {
         "mean_ratio": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
-        "integrated_reduction": (integ_red, r"Mean SD reduction $\Delta_b^{(SD)}/100$"),
-        "frac_high": (frac_high, r"Fraction with $R_{b,v} \geq 1.25$"),
+        "integrated_reduction": (integ_red, rf"Mean SD reduction ${_delta_sd_symbol()}/100$"),
+        "frac_high": (frac_high, r"Fraction with $R_{b,v} \geq 1.5$"),
         # backward-compatible aliases
         "mean": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
-        "median": (frac_high, r"Fraction with $R_{b,v} \geq 1.25$"),
-        "delta_int": (integ_red, r"Mean SD reduction $\Delta_b^{(SD)}/100$"),
+        "median": (frac_high, r"Fraction with $R_{b,v} \geq 1.5$"),
+        "delta_int": (integ_red, rf"Mean SD reduction ${_delta_sd_symbol()}/100$"),
     }
     selected = [m for m in boxplot_metrics if m in metric_map]
     if selected:
@@ -3333,7 +3531,7 @@ def cohort_plots_production(
     lims = [0, lim_hi * 1.05 if lim_hi > 0 else 1.0]
     ax.plot(lims, lims, "k--", lw=1.0)
     ax.set_xlim(lims); ax.set_ylim(lims)
-    ax.set_xlabel(r"Mean MC SD $\overline{\widehat{\sigma}}_b\ \text{(Gy)}$", fontsize=_fs_label())
+    ax.set_xlabel(rf"Mean MC SD ${_sigma_mc_symbol(mean=True)}\ \text{{(Gy)}}$", fontsize=_fs_label())
     ax.set_ylabel(
         _mean_gp_sd_ylabel(
             include_kernel_legend=include_kernel_legend,
@@ -3372,6 +3570,7 @@ def calibration_plots_production(
     hue_col: str | None = None,
     kernel_color_map: dict[str, str] | None = None,
     kernel_suffix: str | None = None,
+    rstd_label_mode: str | None = None,
     make_histograms: bool = True,
     make_scatter: bool = True,
 ):
@@ -3385,6 +3584,11 @@ def calibration_plots_production(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     saved_paths_all: list[str] = []
+
+    rstd_symbol = _std_residual_symbol(
+        mode_name=rstd_label_mode,
+        include_kernel_legend=False,
+    )
 
     def _calib_hist(series, xlabel, fname, target_line, target_label, caption, modes_use, as_percent: bool = False):
         # Optional grouping (e.g., overlay kernels)
@@ -3563,25 +3767,25 @@ def calibration_plots_production(
             mode_suffix = "_".join(modes_use) if isinstance(modes_use, (list, tuple)) else str(modes_use)
             _calib_hist(
                 calib_df["mean_resstd"],
-                r"$\mathrm{Mean}\ r^{\mathrm{std}}_{b,v}$",
+                rf"$\mathrm{{Mean}}\ {rstd_symbol}$",
                 f"calib_hist_mean_resstd_{mode_suffix}",
                 target_line=0.0,
-                target_label=r"$\mathrm{mean}\ r^{\mathrm{std}}_{b,v} = 0\ \mathrm{(ideal)}$",
+                target_label=rf"$\mathrm{{mean}}\ {rstd_symbol} = 0\ \mathrm{{(ideal)}}$",
                 caption="Means cluster near 0 → little systematic bias.",
                 modes_use=modes_use,
             )
             _calib_hist(
                 calib_df["std_resstd"],
-                r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v}$",
+                rf"$\mathrm{{SD}}\ {rstd_symbol}$",
                 f"calib_hist_sd_resstd_{mode_suffix}",
                 target_line=1.0,
-                target_label=r"$\mathrm{SD}\ r^{\mathrm{std}}_{b,v} = 1\ \mathrm{(ideal)}$",
+                target_label=rf"$\mathrm{{SD}}\ {rstd_symbol} = 1\ \mathrm{{(ideal)}}$",
                 caption="SD near 1 → predictive variances on the right scale.",
                 modes_use=modes_use,
             )
             _calib_hist(
                 calib_df["pct_abs_le1"],
-                r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 1$",
+                rf"Percent |${rstd_symbol}$| $\leq 1$",
                 f"calib_hist_cov_le1_{mode_suffix}",
                 target_line=68.0,
                 target_label=r"$1\,\sigma\ \mathrm{(68\%, ideal)}$",
@@ -3591,7 +3795,7 @@ def calibration_plots_production(
             )
             _calib_hist(
                 calib_df["pct_abs_le2"],
-                r"Percent |$r^{\mathrm{std}}_{b,v}$| $\leq 2$",
+                rf"Percent |${rstd_symbol}$| $\leq 2$",
                 f"calib_hist_cov_le2_{mode_suffix}",
                 target_line=95.0,
                 target_label=r"$2\,\sigma\ \mathrm{(95\%, ideal)}$",
@@ -3681,8 +3885,8 @@ def calibration_plots_production(
             label="Near ideal region",
         )
         ax.add_patch(rect)
-        ax.set_xlabel(r"Mean $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
-        ax.set_ylabel(r"SD $r^{\mathrm{std}}_{b,v}$", fontsize=_fs_label())
+        ax.set_xlabel(rf"Mean ${rstd_symbol}$", fontsize=_fs_label())
+        ax.set_ylabel(rf"SD ${rstd_symbol}$", fontsize=_fs_label())
         _apply_axis_style(ax)
         _apply_per_biopsy_ticks(ax)
         handles, labels = ax.get_legend_handles_labels()
@@ -3723,6 +3927,7 @@ def plot_blocked_cv_calibration_report(
     kde_bw_scale: float | None = None,
     kernel_color_map: dict[str, str] | None = None,
     kernel_suffix: str | None = None,
+    rstd_label_mode: str | None = None,
     make_histograms: bool = True,
     make_scatter: bool = True,
 ) -> list[str]:
@@ -3785,6 +3990,7 @@ def plot_blocked_cv_calibration_report(
         hue_col=hue_col,
         kernel_color_map=kernel_color_map,
         kernel_suffix=kernel_suffix,
+        rstd_label_mode=rstd_label_mode,
         make_histograms=make_histograms,
         make_scatter=make_scatter,
     )
@@ -3947,37 +4153,32 @@ def plot_blocked_cv_variance_mode_comparison(
     ]
     key_cols = [c for c in key_cols if c in df.columns]
 
-    def _mode_tag(mode_name: str) -> str:
-        mode_map = {
-            "latent": r"\mathrm{lat}",
-            "observed_mc": r"\mathrm{obs}",
-            "observed_mc_plus_nugget": r"\mathrm{obs+nug}",
-        }
-        mode_str = str(mode_name)
-        return mode_map.get(mode_str, rf"\mathrm{{{mode_str.replace('_', r'\_')}}}")
-
     def _metric_label_by_mode(metric_name: str, mode_name: str) -> str:
-        tag = _mode_tag(mode_name)
+        rstd_mode_symbol = _std_residual_symbol(
+            mode_name=mode_name,
+            include_kernel_legend=False,
+        )
         if metric_name == "sd_rstd":
-            return rf"$\mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{tag}}}\right)$"
+            return rf"$\mathrm{{SD}}\!\left({rstd_mode_symbol}\right)$"
         if metric_name == "mean_rstd":
-            return rf"$\mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{tag}}}\right)$"
+            return rf"$\mathrm{{mean}}\!\left({rstd_mode_symbol}\right)$"
         return metric_name
 
     def _delta_metric_label(metric_name: str, obs_mode_name: str, lat_mode_name: str) -> str:
-        obs_tag = _mode_tag(obs_mode_name)
-        lat_tag = _mode_tag(lat_mode_name)
+        obs_symbol = _std_residual_symbol(mode_name=obs_mode_name, include_kernel_legend=False)
+        lat_symbol = _std_residual_symbol(mode_name=lat_mode_name, include_kernel_legend=False)
+        base_symbol = _std_residual_symbol(mode_name=None, include_kernel_legend=False)
         if metric_name == "sd_rstd":
             return (
-                rf"$\Delta \mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v}}\right)"
-                rf"=\mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{obs_tag}}}\right)"
-                rf"-\mathrm{{SD}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{lat_tag}}}\right)$"
+                rf"$\Delta \mathrm{{SD}}\!\left({base_symbol}\right)"
+                rf"=\mathrm{{SD}}\!\left({obs_symbol}\right)"
+                rf"-\mathrm{{SD}}\!\left({lat_symbol}\right)$"
             )
         if metric_name == "mean_rstd":
             return (
-                rf"$\Delta \mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v}}\right)"
-                rf"=\mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{obs_tag}}}\right)"
-                rf"-\mathrm{{mean}}\!\left(r^{{\mathrm{{std}}}}_{{b,v,{lat_tag}}}\right)$"
+                rf"$\Delta \mathrm{{mean}}\!\left({base_symbol}\right)"
+                rf"=\mathrm{{mean}}\!\left({obs_symbol}\right)"
+                rf"-\mathrm{{mean}}\!\left({lat_symbol}\right)$"
             )
         return rf"$\Delta {metric_name}$"
 
@@ -4238,7 +4439,7 @@ def plot_mean_sd_scatter_with_fits_production(
         bo = float(s["origin_slope"])
         ax.plot(xs, bo * xs, lw=1.5, ls="-.", color="#7a5195", label=f"Through-origin: y={bo:.3f}x")
 
-    ax.set_xlabel(r"Mean MC SD $\overline{\widehat{\sigma}}_b$ (Gy)", fontsize=_fs_label())
+    ax.set_xlabel(rf"Mean MC SD ${_sigma_mc_symbol(mean=True)}$ (Gy)", fontsize=_fs_label())
     ax.set_ylabel(
         _mean_gp_sd_ylabel(
             include_kernel_legend=include_kernel_legend,
@@ -4393,8 +4594,8 @@ def plot_kernel_sensitivity_mean_sd_with_fits(
     lims = [0.0, lim_hi * 1.05 if lim_hi > 0 else 1.0]
     ax.set_xlim(lims); ax.set_ylim(lims)
     identity_handle, = ax.plot(lims, lims, "k--", lw=1.0, label="Identity")
-    ax.set_xlabel(r"Mean MC SD $\overline{\widehat{\sigma}}_b$ (Gy)", fontsize=_fs_label())
-    ax.set_ylabel(r"Mean GP SD $\overline{\sigma}^{\mathrm{GP}}_b\ \text{(Gy)}$", fontsize=_fs_label())
+    ax.set_xlabel(rf"Mean MC SD ${_sigma_mc_symbol(mean=True)}$ (Gy)", fontsize=_fs_label())
+    ax.set_ylabel(rf"Mean GP SD ${_mean_gp_sd_symbol(include_kernel_legend=False)}\ \text{{(Gy)}}$", fontsize=_fs_label())
     _apply_axis_style(ax)
     _apply_per_biopsy_ticks(ax)
     # Ordered legend: Identity → points → fits → CIs
@@ -4462,14 +4663,20 @@ def plot_mean_sd_bland_altman_production(
         y_span = max(y_max_raw - y_min_raw, 1.0)
         ax.set_ylim(y_min_raw - 0.12 * y_span, y_max_raw + 0.30 * y_span)
 
-    ax.set_xlabel(r"Mean SD, $(\overline{\widehat{\sigma}}_b + \overline{\sigma}^{\mathrm{GP}}_b)/2$ (Gy)", fontsize=_fs_label())
+    mc_mean_symbol = _sigma_mc_symbol(mean=True)
     gp_mean_symbol = _mean_gp_sd_symbol(
         include_kernel_legend=include_kernel_legend,
         kernel_legend_label=kernel_legend_label,
     )
+    ax.set_xlabel(
+        rf"Mean SD, $({mc_mean_symbol} + {gp_mean_symbol})/2$ (Gy)",
+        fontsize=_fs_label(),
+    )
     ax.set_ylabel(
-        "Percent reduction $\\Delta_b^{(\\mathrm{SD})}$\n"
-        + rf"$100\cdot(\overline{{\widehat{{\sigma}}}}_b - {gp_mean_symbol})/\overline{{\widehat{{\sigma}}}}_b$ (%)",
+        "Percent reduction "
+        + rf"${_delta_sd_symbol()}$"
+        + "\n"
+        + rf"$100\cdot({mc_mean_symbol} - {gp_mean_symbol})/{mc_mean_symbol}$ (%)",
         fontsize=_fs_label(),
     )
     _apply_axis_style(ax)
@@ -4561,7 +4768,7 @@ def make_patient_level_gpr_plots(
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
     overlay_metrics = (
         rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ "
-        rf"\hat{{\tau}}_b^2 = {_format_nugget(gp_res['hyperparams'].nugget)}\ \mathrm{{Gy}}^2$"
+        rf"{_notation_symbol('nugget')}^2 = {_format_nugget(gp_res['hyperparams'].nugget)}\ \mathrm{{Gy}}^2$"
     )
 
     plot_gp_profile_production(

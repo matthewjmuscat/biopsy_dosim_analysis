@@ -130,10 +130,12 @@ Row granularity: one row per biopsy (`Patient ID`, `Bx index`) per kernel run.
 - `mean_ratio`: mean of voxelwise ratio `indep_sd / gp_sd`.
 - `median_ratio`: median of voxelwise ratio `indep_sd / gp_sd`.
 - `iqr_ratio`: IQR of voxelwise ratio `indep_sd / gp_sd`.
-- `pct_vox_ge_20`: percent of voxels with ratio >= 1.25
-  (>=20% SD reduction).
-- `pct_vox_ge_50`: percent of voxels with ratio >= 1.5
-  (>=50% SD reduction).
+- `pct_vox_ratio_ge_1p25`: percent of voxels with ratio >= 1.25
+  (>=20% SD reduction); canonical threshold column.
+- `pct_vox_ratio_ge_1p50`: percent of voxels with ratio >= 1.5
+  (>=33.3% SD reduction); canonical threshold column.
+- `pct_vox_ge_20`: legacy alias of `pct_vox_ratio_ge_1p25`.
+- `pct_vox_ge_50`: legacy alias of `pct_vox_ratio_ge_1p50`.
 
 ## 2.3 Integrated SD columns
 
@@ -208,6 +210,7 @@ Columns:
 - `uncertainty_ratio_q95`
 - `uncertainty_ratio_iqr`
 - `pct_biopsies_ge20pct_reduction`
+- `pct_biopsies_majority_vox_ratio_ge_1p25`
 - `pct_reduction_mean_sd_mean`
 - `pct_reduction_mean_sd_std`
 - `pct_reduction_mean_sd_median`

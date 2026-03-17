@@ -2273,10 +2273,10 @@ def _plot_blocked_cv_variogram_profile_pair(
             if np.isfinite(n_test_pts):
                 metrics_right = (
                     rf"$n_{{b,f}}^{{\mathrm{{test}}}} = {int(n_test_pts)},\ "
-                    rf"\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
+                    rf"{gpr_pp._delta_sd_symbol(test_fold_latent=True)} = {delta_test:.1f}\%$"
                 )
             else:
-                metrics_right = rf"$\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
+                metrics_right = rf"${gpr_pp._delta_sd_symbol(test_fold_latent=True)} = {delta_test:.1f}\%$"
 
     out_paths = gpr_pp.plot_variogram_and_profile_pair(
         sv_train,
@@ -2377,8 +2377,9 @@ def _draw_blocked_cv_profile_axis(
     ax.plot(X_star, mu_star, lw=2.0, color=gpr_pp.PRIMARY_LINE_COLOR, label=gp_mean_label, zorder=3)
     ax.fill_between(X_star, mu_star - 1.96 * sd_star, mu_star + 1.96 * sd_star, alpha=0.12, color=gpr_pp.PRIMARY_LINE_COLOR, label="95% band", zorder=1)
     ax.fill_between(X_star, mu_star - 1.0 * sd_star, mu_star + 1.0 * sd_star, alpha=0.22, color=gpr_pp.PRIMARY_LINE_COLOR, label="68% band", zorder=2)
-    ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=r"$\widetilde{D}_{b,v}\pm2\widehat{\sigma}_{b,v}$", zorder=4)
-    ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.0, lw=1.0, color="#c75000", label=r"$\widetilde{D}_{b,v}\pm\widehat{\sigma}_{b,v}$", zorder=5)
+    sigma_mc_voxel = gpr_pp._sigma_mc_symbol(mean=False)
+    ax.errorbar(X, y, yerr=2 * indep_sd, fmt="s", ms=3.0, lw=1.0, color="#1b8a5a", label=rf"$\widetilde{{D}}_{{b,v}}\pm2{sigma_mc_voxel}$", zorder=4)
+    ax.errorbar(X, y, yerr=indep_sd, fmt="o", ms=3.0, lw=1.0, color="#c75000", label=rf"$\widetilde{{D}}_{{b,v}}\pm{sigma_mc_voxel}$", zorder=5)
     if X_test.size:
         ax.plot(X_test, y_test, "x", ms=4.0, mew=1.0, color="black", label=r"Held-out $\widetilde{D}_{b,v}$", zorder=6)
         x_min = float(np.nanmin(X_test))
@@ -2408,17 +2409,17 @@ def _draw_blocked_cv_profile_axis(
         if np.isfinite(n_test_pts):
             metrics_str = (
                 rf"$n_{{b,f}}^{{\mathrm{{test}}}} = {int(n_test_pts)},\ "
-                rf"\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
+                rf"{gpr_pp._delta_sd_symbol(test_fold_latent=True)} = {delta_test:.1f}\%$"
             )
         else:
-            metrics_str = rf"$\Delta_{{b,f}}^{{(\mathrm{{SD,test}})}} = {delta_test:.1f}\%$"
+            metrics_str = rf"${gpr_pp._delta_sd_symbol(test_fold_latent=True)} = {delta_test:.1f}\%$"
     else:
         # Fallback if fold-level held-out summary is unavailable.
         mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
         shrink = 100.0 * (1 - np.nanmean(gp_res["sd_X"]) / np.nanmean(indep_sd)) if np.nanmean(indep_sd) > 0 else np.nan
         metrics_str = (
-            rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
-            rf"\Delta_b^{{(\mathrm{{SD}})}} = {shrink:.1f}\%$"
+            rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+            rf"{gpr_pp._delta_sd_symbol()} = {shrink:.1f}\%$"
         )
     ax.text(
         0.98,
@@ -3213,6 +3214,9 @@ def run_blocked_cv_plots(
         try:
             calib_df = _filter_report_biopsy_df(biopsy_metrics_df, use_variance_mode=True)
             if not calib_df.empty:
+                calib_mode_label = str(config.plot_variance_mode)
+                if calib_mode_label == "primary":
+                    calib_mode_label = str(config.primary_predictive_variance_mode)
                 calib_save_dir = (
                     figs_dir
                     .joinpath("report")
@@ -3234,6 +3238,7 @@ def run_blocked_cv_plots(
                         modes_list=report_dist_modes_list,
                         kde_bw_scale=config.plot_report_distribution_kde_bw_scale,
                         kernel_suffix=kernel_suffix,
+                        rstd_label_mode=calib_mode_label,
                         make_histograms=bool(config.plot_make_report_calibration_distributions),
                         make_scatter=bool(config.plot_make_report_calibration_scatter),
                     )
