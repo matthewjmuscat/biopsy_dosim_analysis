@@ -210,6 +210,12 @@ def run_gp_and_collect_metrics(
 
     # Cohort summary numbers
     q = lambda s, p: float(s.quantile(p)) if not s.dropna().empty else float("nan")
+    pct_vox_ge_1p25_series = (
+        metrics_df["pct_vox_ratio_ge_1p25"]
+        if "pct_vox_ratio_ge_1p25" in metrics_df.columns
+        else metrics_df["pct_vox_ge_20"]
+    )
+
     cohort_summary = {
         "n_biopsies": int(len(metrics_df)),
         "mean_uncertainty_ratio": float(metrics_df["mean_ratio"].mean()),
@@ -221,8 +227,11 @@ def run_gp_and_collect_metrics(
         "uncertainty_ratio_q95": q(metrics_df["mean_ratio"], 0.95),
         "uncertainty_ratio_iqr": q(metrics_df["mean_ratio"], 0.75) - q(metrics_df["mean_ratio"], 0.25),
         "pct_biopsies_ge20pct_reduction": float(
-            (metrics_df["pct_vox_ge_20"] > 50).mean() * 100.0
+            (pct_vox_ge_1p25_series > 50).mean() * 100.0
         ),  # >50% of voxels get ≥20% reduction
+        "pct_biopsies_majority_vox_ratio_ge_1p25": float(
+            (pct_vox_ge_1p25_series > 50).mean() * 100.0
+        ),
         "pct_reduction_mean_sd_mean": float(metrics_df["pct_reduction_mean_sd"].mean()),
         "pct_reduction_mean_sd_std": float(metrics_df["pct_reduction_mean_sd"].std(ddof=1)),
         "pct_reduction_mean_sd_median": float(metrics_df["pct_reduction_mean_sd"].median()),
@@ -293,6 +302,7 @@ def run_gp_and_collect_metrics(
                     "uncertainty_ratio_q75",
                     "uncertainty_ratio_q95",
                     "uncertainty_ratio_iqr",
+                    "pct_biopsies_majority_vox_ratio_ge_1p25",
                     "pct_biopsies_ge20pct_reduction",
                 ],
             )

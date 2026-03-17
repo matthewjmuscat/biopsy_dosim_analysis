@@ -94,13 +94,13 @@ def main():
     # =========================================================================
 
     # --- Pipeline lane switches ---
-    run_semivariogram_plots = False  # if True, write per-biopsy semivariogram figures
+    run_semivariogram_plots = True  # if True, write per-biopsy semivariogram figures
     run_patient_plots = True  # if True, write per-biopsy and paired patient figures
     run_kernel_sensitivity_and_calibtration_flag = True  # if True, run full kernel sensitivity lane; if False, run baseline-only calibration outputs
     run_cohort_plots = True  # if True, write cohort-level production figures
-    run_blocked_cv = False  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
-    run_blocked_cv_fit_predict = False  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
-    run_blocked_cv_plots = False  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
+    run_blocked_cv = True  # if True, run blocked_CV lane (fold-map + fit/predict stage below)
+    run_blocked_cv_fit_predict = True  # if True, run blocked_CV all-kernel train-only fit + held-out predict stage
+    run_blocked_cv_plots = True  # if True, run blocked_CV plot lane using in-memory fit/predict artifacts (no CSV rereads)
 
     # --- Cohort filtering / plot cohort selection ---
     simulated_types = ['Real']  # options: ['Real'], ['Centroid DIL'], ['Optimal DIL'], or mixed subsets
@@ -270,6 +270,8 @@ def main():
     plot_notation_symbols = {
         "sigma_mc_voxel": r"\widehat{\sigma}_{b,v}",
         "sigma_mc_mean": r"\overline{\widehat{\sigma}}_b",
+        "partial_sill_hat": r"\widehat{c}_b",
+        "nugget": r"\widehat{\tau}_b",
         "sigma_gp_latent_voxel": r"\sigma^{\mathrm{GP}}_{b,v}",
         "sigma_gp_latent_mean": r"\overline{\sigma}^{\mathrm{GP}}_b",
         "sigma_gp_observed_voxel": r"\sigma^{\mathrm{pred,obs}}_{b,v}",

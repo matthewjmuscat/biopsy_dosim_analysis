@@ -2418,7 +2418,7 @@ def _draw_blocked_cv_profile_axis(
         mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
         shrink = 100.0 * (1 - np.nanmean(gp_res["sd_X"]) / np.nanmean(indep_sd)) if np.nanmean(indep_sd) > 0 else np.nan
         metrics_str = (
-            rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+            rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
             rf"{gpr_pp._delta_sd_symbol()} = {shrink:.1f}\%$"
         )
     ax.text(

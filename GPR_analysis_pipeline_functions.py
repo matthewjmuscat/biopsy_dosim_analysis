@@ -457,8 +457,11 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
     mean_ratio   = float(np.nanmean(ratio_f)) if len(ratio_f) else np.nan
     median_ratio = float(np.nanmedian(ratio_f)) if len(ratio_f) else np.nan
     iqr_ratio    = float(np.nanpercentile(ratio_f, 75) - np.nanpercentile(ratio_f, 25)) if len(ratio_f) else np.nan
-    pct_vox_ge_20 = float(np.nanmean(ratio_f >= 1.25) * 100) if len(ratio_f) else np.nan  # ≥20% reduction ~ ratio>=1.25
-    pct_vox_ge_50 = float(np.nanmean(ratio_f >= 1.5) * 100) if len(ratio_f) else np.nan
+    pct_vox_ge_20 = float(np.nanmean(ratio_f >= 1.25) * 100) if len(ratio_f) else np.nan  # legacy column name
+    pct_vox_ge_50 = float(np.nanmean(ratio_f >= 1.5) * 100) if len(ratio_f) else np.nan   # legacy column name
+    # Canonical threshold columns (keep legacy aliases for backward compatibility).
+    pct_vox_ratio_ge_1p25 = pct_vox_ge_20
+    pct_vox_ratio_ge_1p50 = pct_vox_ge_50
 
 
     # Integrated uncertainty (sum of SD * spacing) — crude trapezoid = spacing * sum(SD)
@@ -545,6 +548,8 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
         mean_ratio=mean_ratio,
         median_ratio=median_ratio,
         iqr_ratio=iqr_ratio,
+        pct_vox_ratio_ge_1p25=pct_vox_ratio_ge_1p25,
+        pct_vox_ratio_ge_1p50=pct_vox_ratio_ge_1p50,
         pct_vox_ge_20=pct_vox_ge_20,
         pct_vox_ge_50=pct_vox_ge_50,
         integ_indep_sd=integ_indep_sd,
@@ -680,6 +685,5 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
 
 

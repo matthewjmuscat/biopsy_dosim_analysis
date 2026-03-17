@@ -116,6 +116,8 @@ KERNEL_SHORT_LABEL_MAP = {
 PLOT_NOTATION_DEFAULTS: dict[str, str] = {
     "sigma_mc_voxel": r"\widehat{\sigma}_{b,v}",
     "sigma_mc_mean": r"\overline{\widehat{\sigma}}_b",
+    "partial_sill_hat": r"\widehat{c}_b",
+    "nugget": r"\widehat{\tau}_b",
     "sigma_gp_latent_voxel": r"\sigma^{\mathrm{GP}}_{b,v}",
     "sigma_gp_latent_mean": r"\overline{\sigma}^{\mathrm{GP}}_b",
     "sigma_gp_observed_voxel": r"\sigma^{\mathrm{pred,obs}}_{b,v}",
@@ -1984,7 +1986,7 @@ def plot_gp_profile_production(
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
     mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
     metrics_str = (
-        rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+        rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
         rf"{_delta_sd_symbol()} = {shrink:.1f}\%$"
     )
     # Reorder legend entries: mu, 68% band, 95% band, 1σ, 2σ
@@ -2151,9 +2153,9 @@ def plot_uncertainty_ratio_production(
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(X, ratio, "-o", ms=4, lw=1.2, color=PRIMARY_LINE_COLOR)
     ax.axhline(1.0, color="black", lw=0.9, ls="--", alpha=0.7, label=r"$R_{b,v}=1$")
-    ax.axhline(1.25, color="#c75000", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.25$")
-    ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
-    ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
+    ax.axhline(1.25, color="black", lw=0.9, ls=":", alpha=0.6, label=r"$R_{b,v}=1.25$")
+    ax.axhline(1.5, color="#c75000", lw=0.9, ls=":", alpha=0.8, label=r"$R_{b,v}=1.5$")
+    ax.fill_between(ax.get_xlim(), 1.5, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     fs_label = _fs_label(label_fontsize)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=fs_label)
     ax.set_ylabel(
@@ -2608,9 +2610,15 @@ def plot_variogram_overlay_production(
     ax.plot(h, gamma_hat, "o", ms=4, color=PRIMARY_LINE_COLOR, label=r"Empirical $\widehat{\gamma}_b(h)$")
     ax.plot(h, gamma_model, "-", lw=2.0, color=OVERLAY_LINE_COLOR, label=label_model)
     if add_sill:
-        ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+        ax.axhline(
+            hyperparams.sigma_f2 + hyperparams.nugget,
+            color="#bbbbbb",
+            ls="--",
+            lw=0.9,
+            label=rf"Sill ${_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2$",
+        )
     if add_nugget:
-        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=rf"Nugget ${_notation_symbol('nugget')}^2$")
     ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
@@ -2619,7 +2627,7 @@ def plot_variogram_overlay_production(
     if metrics_str is None:
         metrics_str = (
             rf"$\hat{{\ell}}_b = {hyperparams.ell:.1f}~\mathrm{{mm}},\ "
-            rf"\hat{{\tau}}_b^2 = {_format_nugget(hyperparams.nugget)}\ \mathrm{{Gy}}^2$"
+            rf"{_notation_symbol('nugget')}^2 = {_format_nugget(hyperparams.nugget)}\ \mathrm{{Gy}}^2$"
         )
     top = _finalize_legend_and_header(ax, header=metrics_str, ncol=2, header_loc="right", header_fontsize=None)
     if title_label:
@@ -2707,9 +2715,15 @@ def plot_variogram_and_profile_pair(
             model_gamma=gamma_model,
         )
     if add_sill:
-        ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+        ax.axhline(
+            hyperparams.sigma_f2 + hyperparams.nugget,
+            color="#bbbbbb",
+            ls="--",
+            lw=0.9,
+            label=rf"Sill ${_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2$",
+        )
     if add_nugget:
-        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+        ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=rf"Nugget ${_notation_symbol('nugget')}^2$")
     ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
     ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
     _apply_axis_style(ax)
@@ -2722,7 +2736,7 @@ def plot_variogram_and_profile_pair(
         nug_tmp = metrics_row.get("nugget", np.nan)
         if pd.notna(nug_tmp):
             nug_val = float(nug_tmp)
-    metrics_left = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+    metrics_left = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ {_notation_symbol('nugget')}^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
     if metrics_left_override is not None:
         metrics_left = str(metrics_left_override)
     top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
@@ -2788,7 +2802,7 @@ def plot_variogram_and_profile_pair(
         shrink_tmp = metrics_row.get("pct_reduction_mean_sd", np.nan)
         if pd.notna(shrink_tmp):
             shrink_pct = float(shrink_tmp)
-    metrics_right = rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ {_delta_sd_symbol()} = {shrink_pct:.1f}\%$"
+    metrics_right = rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ {_delta_sd_symbol()} = {shrink_pct:.1f}\%$"
     if metrics_right_override is not None:
         metrics_right = str(metrics_right_override)
     top_right = _finalize_legend_and_header(
@@ -2916,7 +2930,7 @@ def plot_gp_profiles_grid(
             _, _, shrink = _compute_shrinkage_stats(gp_res)
         mean_dose = float(np.nanmean(gp_res["mu_X"])) if gp_res.get("mu_X") is not None else np.nan
         metrics_str = (
-            rf"$\overline{{D}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
+            rf"$\overline{{\mu}}^{{\mathrm{{GP}}}}_b = {mean_dose:.2f}\ \mathrm{{Gy}},\ "
             rf"{_delta_sd_symbol()} = {shrink:.1f}\%$"
         )
         ax.text(
@@ -3014,9 +3028,15 @@ def plot_variogram_overlays_grid(
                 model_gamma=gamma_model,
             )
         if add_sill:
-            ax.axhline(hyperparams.sigma_f2 + hyperparams.nugget, color="#bbbbbb", ls="--", lw=0.9, label=r"Sill $\sigma_{f,b}^2$")
+            ax.axhline(
+                hyperparams.sigma_f2 + hyperparams.nugget,
+                color="#bbbbbb",
+                ls="--",
+                lw=0.9,
+                label=rf"Sill ${_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2$",
+            )
         if add_nugget:
-            ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=r"Nugget $\tau_b^2$")
+            ax.axhline(hyperparams.nugget, color="#999999", ls=":", lw=0.9, label=rf"Nugget ${_notation_symbol('nugget')}^2$")
         ax.set_xlabel(r"Lag $h\ \text{(mm)}$", fontsize=_fs_label())
         ax.set_ylabel(r"Semivariance $\gamma_b(h)$ (Gy$^2$)", fontsize=_fs_label())
         _apply_axis_style(ax)
@@ -3035,7 +3055,7 @@ def plot_variogram_overlays_grid(
                     ell_val = float(mr["ell"].iloc[0])
                 if "nugget" in mr.columns and pd.notna(mr["nugget"].iloc[0]):
                     nug_val = float(mr["nugget"].iloc[0])
-        metrics_str = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ \hat{{\tau}}_b^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
+        metrics_str = rf"$\hat{{\ell}}_b = {ell_val:.1f}~\mathrm{{mm}},\ {_notation_symbol('nugget')}^2 = {_format_nugget(nug_val)}\ \mathrm{{Gy}}^2$"
         ax.text(
             0.98, 1.04, metrics_str,
             ha="right", va="bottom",
@@ -3127,7 +3147,7 @@ def plot_uncertainty_pair(
             mean_gp_sd = float(metrics_row["mean_gp_sd"])
     metrics_left = (
         rf"${_sigma_mc_symbol(mean=True)} = {mean_mc_sd:.2f}\ \mathrm{{Gy}},\ "
-        rf"${_mean_gp_sd_symbol(include_kernel_legend=False)} = {mean_gp_sd:.2f}\ \mathrm{{Gy}}$"
+        rf"{_mean_gp_sd_symbol(include_kernel_legend=False)} = {mean_gp_sd:.2f}\ \mathrm{{Gy}}$"
     )
     top_left = _finalize_legend_and_header(ax, header=metrics_left, ncol=2, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
 
@@ -3136,9 +3156,9 @@ def plot_uncertainty_pair(
     ratio = np.divide(indep_sd, sd_X, out=np.ones_like(indep_sd), where=sd_X > 0)
     ax.plot(X, ratio, "-o", ms=4, lw=1.2, color=PRIMARY_LINE_COLOR)
     ax.axhline(1.0, color="black", lw=0.9, ls="--", alpha=0.7, label=r"$R_{b,v}=1$")
-    ax.axhline(1.25, color="#c75000", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.25$")
-    ax.axhline(1.5, color="#7a5195", lw=0.9, ls=":", alpha=0.7, label=r"$R_{b,v}=1.5$")
-    ax.fill_between(ax.get_xlim(), 1.25, ax.get_ylim()[1], color="#c75000", alpha=0.08)
+    ax.axhline(1.25, color="black", lw=0.9, ls=":", alpha=0.6, label=r"$R_{b,v}=1.25$")
+    ax.axhline(1.5, color="#c75000", lw=0.9, ls=":", alpha=0.8, label=r"$R_{b,v}=1.5$")
+    ax.fill_between(ax.get_xlim(), 1.5, ax.get_ylim()[1], color="#c75000", alpha=0.08)
     ax.set_xlabel(r"Axial position along biopsy $z$ (mm)", fontsize=_fs_label())
     ax.set_ylabel(
         _ratio_ylabel(
@@ -3154,7 +3174,9 @@ def plot_uncertainty_pair(
     if metrics_row is not None:
         if "median_ratio" in metrics_row and pd.notna(metrics_row["median_ratio"]):
             median_ratio = float(metrics_row["median_ratio"])
-        if "pct_vox_ge_50" in metrics_row and pd.notna(metrics_row["pct_vox_ge_50"]):
+        if "pct_vox_ratio_ge_1p50" in metrics_row and pd.notna(metrics_row["pct_vox_ratio_ge_1p50"]):
+            frac_ge_1_5 = float(metrics_row["pct_vox_ratio_ge_1p50"])
+        elif "pct_vox_ge_50" in metrics_row and pd.notna(metrics_row["pct_vox_ge_50"]):
             frac_ge_1_5 = float(metrics_row["pct_vox_ge_50"])
     metrics_right = rf"$\mathrm{{median}}(R_{{b,v}}) = {median_ratio:.2f},\ f(R_{{b,v}}\geq 1.5) = {frac_ge_1_5:.1f}\%$"
     top_right = _finalize_legend_and_header(ax, header=metrics_right, ncol=3, header_loc="right", header_fontsize=None, legend_width_mode="subplot", expand_figure=False)
@@ -3380,7 +3402,7 @@ def cohort_plots_production(
         if unit_label == "mm":
             bw_fmt = "{:.2f}"
             med_fmt = "{:.2f}"
-        elif "tau_b^2" in var_label:
+        elif _notation_symbol("nugget") in var_label:
             bw_fmt = "{:.2f}"
             med_fmt = "{:.2f}"
         else:
@@ -3435,7 +3457,13 @@ def cohort_plots_production(
 
     _hist(metrics_df["mean_ratio"], r"Mean shrinkage ratio $\overline{R}_b$", "cohort_hist_mean_ratio", unit_label="", var_label=r"\overline{R}_b")
     _hist(metrics_df["ell"], r"Fitted axial coherence length $\hat{\ell}_b$ (mm)", "cohort_hist_length_scale", unit_label="mm", var_label=r"\ell_b", bins_override=4)
-    _hist(metrics_df.get("nugget_fraction", metrics_df["nugget"]), r"Nugget fraction $\tau_b^2 / (\sigma_{f,b}^2 + \tau_b^2)$", "cohort_hist_nugget_fraction", unit_label="", var_label=r"\tau_b^2/(\sigma_{f,b}^2+\tau_b^2)")
+    _hist(
+        metrics_df.get("nugget_fraction", metrics_df["nugget"]),
+        rf"Nugget fraction ${_notation_symbol('nugget')}^2 / ({_notation_symbol('partial_sill_hat')} + {_notation_symbol('nugget')}^2)$",
+        "cohort_hist_nugget_fraction",
+        unit_label="",
+        var_label=rf"{_notation_symbol('nugget')}^2/({_notation_symbol('partial_sill_hat')}+{_notation_symbol('nugget')}^2)",
+    )
     if "sv_rmse" in metrics_df.columns:
         _hist(metrics_df["sv_rmse"], r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)", "cohort_hist_variogram_rmse", unit_label="Gy^2", var_label=r"\mathrm{RMSE}_b^{(\gamma)}")
 
@@ -3444,7 +3472,11 @@ def cohort_plots_production(
     integ_red = metrics_df.get("delta_int_percent", metrics_df.get("pct_reduction_integ_sd")).dropna()
     if isinstance(integ_red, pd.Series):
         integ_red = integ_red / 100.0
-    frac_high = metrics_df.get("pct_vox_ge_20", np.nan)
+    frac_high = (
+        metrics_df["pct_vox_ratio_ge_1p50"]
+        if "pct_vox_ratio_ge_1p50" in metrics_df.columns
+        else metrics_df.get("pct_vox_ge_50", np.nan)
+    )
     if isinstance(frac_high, pd.Series):
         frac_high = (frac_high.dropna() / 100.0)
     else:
@@ -3453,10 +3485,10 @@ def cohort_plots_production(
     metric_map = {
         "mean_ratio": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
         "integrated_reduction": (integ_red, rf"Mean SD reduction ${_delta_sd_symbol()}/100$"),
-        "frac_high": (frac_high, r"Fraction with $R_{b,v} \geq 1.25$"),
+        "frac_high": (frac_high, r"Fraction with $R_{b,v} \geq 1.5$"),
         # backward-compatible aliases
         "mean": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
-        "median": (frac_high, r"Fraction with $R_{b,v} \geq 1.25$"),
+        "median": (frac_high, r"Fraction with $R_{b,v} \geq 1.5$"),
         "delta_int": (integ_red, rf"Mean SD reduction ${_delta_sd_symbol()}/100$"),
     }
     selected = [m for m in boxplot_metrics if m in metric_map]
@@ -4736,7 +4768,7 @@ def make_patient_level_gpr_plots(
     mean_sd_mc, mean_sd_gp, shrink = _compute_shrinkage_stats(gp_res)
     overlay_metrics = (
         rf"$\hat{{\ell}}_b = {gp_res['hyperparams'].ell:.1f}~\mathrm{{mm}},\ "
-        rf"\hat{{\tau}}_b^2 = {_format_nugget(gp_res['hyperparams'].nugget)}\ \mathrm{{Gy}}^2$"
+        rf"{_notation_symbol('nugget')}^2 = {_format_nugget(gp_res['hyperparams'].nugget)}\ \mathrm{{Gy}}^2$"
     )
 
     plot_gp_profile_production(
