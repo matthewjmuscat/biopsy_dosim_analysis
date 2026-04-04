@@ -210,6 +210,9 @@ def run_gp_and_collect_metrics(
 
     # Cohort summary numbers
     q = lambda s, p: float(s.quantile(p)) if not s.dropna().empty else float("nan")
+    manuscript_ratio_series = metrics_df["mean_sd_ratio"]
+    voxelwise_mean_ratio_series = metrics_df["mean_ratio"]
+    voxelwise_median_ratio_series = metrics_df["median_ratio"]
     pct_vox_ge_1p25_series = (
         metrics_df["pct_vox_ratio_ge_1p25"]
         if "pct_vox_ratio_ge_1p25" in metrics_df.columns
@@ -218,14 +221,30 @@ def run_gp_and_collect_metrics(
 
     cohort_summary = {
         "n_biopsies": int(len(metrics_df)),
-        "mean_uncertainty_ratio": float(metrics_df["mean_ratio"].mean()),
-        "median_uncertainty_ratio": float(metrics_df["median_ratio"].median()),
+        # Generic uncertainty-ratio fields follow the manuscript definition:
+        # ratio of mean per-biopsy SD summaries, i.e. \bar{R}_b.
+        "mean_uncertainty_ratio": float(manuscript_ratio_series.mean()),
+        "median_uncertainty_ratio": float(manuscript_ratio_series.median()),
         "mean_integrated_ratio": float(metrics_df["integ_ratio"].mean()),
-        "uncertainty_ratio_q05": q(metrics_df["mean_ratio"], 0.05),
-        "uncertainty_ratio_q25": q(metrics_df["mean_ratio"], 0.25),
-        "uncertainty_ratio_q75": q(metrics_df["mean_ratio"], 0.75),
-        "uncertainty_ratio_q95": q(metrics_df["mean_ratio"], 0.95),
-        "uncertainty_ratio_iqr": q(metrics_df["mean_ratio"], 0.75) - q(metrics_df["mean_ratio"], 0.25),
+        "uncertainty_ratio_q05": q(manuscript_ratio_series, 0.05),
+        "uncertainty_ratio_q25": q(manuscript_ratio_series, 0.25),
+        "uncertainty_ratio_q75": q(manuscript_ratio_series, 0.75),
+        "uncertainty_ratio_q95": q(manuscript_ratio_series, 0.95),
+        "uncertainty_ratio_iqr": q(manuscript_ratio_series, 0.75) - q(manuscript_ratio_series, 0.25),
+        # Explicit aliases for the manuscript definition.
+        "mean_sd_ratio_mean": float(manuscript_ratio_series.mean()),
+        "mean_sd_ratio_median": float(manuscript_ratio_series.median()),
+        "mean_sd_ratio_q05": q(manuscript_ratio_series, 0.05),
+        "mean_sd_ratio_q25": q(manuscript_ratio_series, 0.25),
+        "mean_sd_ratio_q75": q(manuscript_ratio_series, 0.75),
+        "mean_sd_ratio_q95": q(manuscript_ratio_series, 0.95),
+        "mean_sd_ratio_iqr": q(manuscript_ratio_series, 0.75) - q(manuscript_ratio_series, 0.25),
+        # Preserve explicit cohort summaries of the voxelwise-ratio metrics used
+        # elsewhere in exploratory and kernel-sensitivity reporting.
+        "voxelwise_mean_ratio_mean": float(voxelwise_mean_ratio_series.mean()),
+        "voxelwise_mean_ratio_median": float(voxelwise_mean_ratio_series.median()),
+        "voxelwise_median_ratio_mean": float(voxelwise_median_ratio_series.mean()),
+        "voxelwise_median_ratio_median": float(voxelwise_median_ratio_series.median()),
         "pct_biopsies_ge20pct_reduction": float(
             (pct_vox_ge_1p25_series > 50).mean() * 100.0
         ),  # >50% of voxels get ≥20% reduction
@@ -296,12 +315,23 @@ def run_gp_and_collect_metrics(
                     "n_biopsies",
                     "mean_uncertainty_ratio",
                     "median_uncertainty_ratio",
+                    "mean_sd_ratio_mean",
+                    "mean_sd_ratio_median",
                     "mean_integrated_ratio",
                     "uncertainty_ratio_q05",
                     "uncertainty_ratio_q25",
                     "uncertainty_ratio_q75",
                     "uncertainty_ratio_q95",
                     "uncertainty_ratio_iqr",
+                    "mean_sd_ratio_q05",
+                    "mean_sd_ratio_q25",
+                    "mean_sd_ratio_q75",
+                    "mean_sd_ratio_q95",
+                    "mean_sd_ratio_iqr",
+                    "voxelwise_mean_ratio_mean",
+                    "voxelwise_mean_ratio_median",
+                    "voxelwise_median_ratio_mean",
+                    "voxelwise_median_ratio_median",
                     "pct_biopsies_majority_vox_ratio_ge_1p25",
                     "pct_biopsies_ge20pct_reduction",
                 ],
@@ -365,6 +395,8 @@ def run_gp_and_collect_metrics(
         metrics_df.groupby("Patient ID")
         .agg(
             n_bx=("Bx index", "nunique"),
+            mean_sd_ratio_mean=("mean_sd_ratio", "mean"),
+            mean_sd_ratio_sd=("mean_sd_ratio", "std"),
             mean_ratio_mean=("mean_ratio", "mean"),
             mean_ratio_sd=("mean_ratio", "std"),
             ell_median=("ell", "median"),

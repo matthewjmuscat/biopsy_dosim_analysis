@@ -3455,7 +3455,7 @@ def cohort_plots_production(
             create_subdir_for_stem=False,
         )
 
-    _hist(metrics_df["mean_ratio"], r"Mean shrinkage ratio $\overline{R}_b$", "cohort_hist_mean_ratio", unit_label="", var_label=r"\overline{R}_b")
+    _hist(metrics_df["mean_sd_ratio"], r"Biopsy-level shrinkage ratio $\overline{R}_b$", "cohort_hist_mean_ratio", unit_label="", var_label=r"\overline{R}_b")
     _hist(metrics_df["ell"], r"Fitted axial coherence length $\hat{\ell}_b$ (mm)", "cohort_hist_length_scale", unit_label="mm", var_label=r"\ell_b", bins_override=4)
     _hist(
         metrics_df.get("nugget_fraction", metrics_df["nugget"]),
@@ -3468,7 +3468,7 @@ def cohort_plots_production(
         _hist(metrics_df["sv_rmse"], r"Semivariogram $\mathrm{RMSE}_b^{(\gamma)}$ (Gy$^2$)", "cohort_hist_variogram_rmse", unit_label="Gy^2", var_label=r"\mathrm{RMSE}_b^{(\gamma)}")
 
     # Boxplot of selected cohort metrics
-    mean_ratio = metrics_df["mean_ratio"].dropna()
+    mean_sd_ratio = metrics_df["mean_sd_ratio"].dropna()
     integ_red = metrics_df.get("delta_int_percent", metrics_df.get("pct_reduction_integ_sd")).dropna()
     if isinstance(integ_red, pd.Series):
         integ_red = integ_red / 100.0
@@ -3483,11 +3483,12 @@ def cohort_plots_production(
         frac_high = pd.Series([], dtype=float)
 
     metric_map = {
-        "mean_ratio": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
+        "mean_sd_ratio": (mean_sd_ratio, r"Biopsy-level shrinkage ratio $\overline{R}_b$"),
+        "mean_ratio": (mean_sd_ratio, r"Biopsy-level shrinkage ratio $\overline{R}_b$"),
         "integrated_reduction": (integ_red, rf"Mean SD reduction ${_delta_sd_symbol()}/100$"),
         "frac_high": (frac_high, r"Fraction with $R_{b,v} \geq 1.5$"),
         # backward-compatible aliases
-        "mean": (mean_ratio, r"Mean shrinkage ratio $\overline{R}_b$"),
+        "mean": (mean_sd_ratio, r"Biopsy-level shrinkage ratio $\overline{R}_b$"),
         "median": (frac_high, r"Fraction with $R_{b,v} \geq 1.5$"),
         "delta_int": (integ_red, rf"Mean SD reduction ${_delta_sd_symbol()}/100$"),
     }
