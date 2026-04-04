@@ -470,6 +470,8 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
     integ_ratio    = (integ_indep_sd / integ_gp_sd) if (integ_gp_sd > 0) else np.nan
     mean_indep_sd  = float(np.nanmean(indep_sd)) if np.isfinite(indep_sd).any() else np.nan
     mean_gp_sd     = float(np.nanmean(gp_sd))    if np.isfinite(gp_sd).any()    else np.nan
+    # Manuscript biopsy-level shrinkage ratio: ratio of mean SD summaries.
+    mean_sd_ratio  = (mean_indep_sd / mean_gp_sd) if (isfinite(mean_indep_sd) and isfinite(mean_gp_sd) and mean_gp_sd > 0) else np.nan
 
 
     # percent reductions (protect against divide-by-zero)
@@ -548,6 +550,7 @@ def compute_per_biopsy_metrics(pid, bx_idx, res, semivariogram_df, kernel_label:
         mean_ratio=mean_ratio,
         median_ratio=median_ratio,
         iqr_ratio=iqr_ratio,
+        mean_sd_ratio=mean_sd_ratio,
         pct_vox_ratio_ge_1p25=pct_vox_ratio_ge_1p25,
         pct_vox_ratio_ge_1p50=pct_vox_ratio_ge_1p50,
         pct_vox_ge_20=pct_vox_ge_20,
@@ -685,5 +688,4 @@ def fit_mean_sd_regressions(
         save_csv_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_csv_path, index=False)
     return df
-
 

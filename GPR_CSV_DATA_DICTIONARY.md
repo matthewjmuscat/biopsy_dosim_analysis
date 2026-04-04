@@ -127,6 +127,8 @@ Row granularity: one row per biopsy (`Patient ID`, `Bx index`) per kernel run.
 - `mean_gp_sd`: mean voxel GP posterior SD at training voxels (Gy).
 - `mean_sd_mc`: alias of `mean_indep_sd`.
 - `mean_sd_gp`: alias of `mean_gp_sd`.
+- `mean_sd_ratio`: manuscript biopsy-level shrinkage ratio
+  `mean_indep_sd / mean_gp_sd` (this corresponds to `\overline{R}_b` in the paper).
 - `mean_ratio`: mean of voxelwise ratio `indep_sd / gp_sd`.
 - `median_ratio`: median of voxelwise ratio `indep_sd / gp_sd`.
 - `iqr_ratio`: IQR of voxelwise ratio `indep_sd / gp_sd`.
@@ -151,7 +153,8 @@ Row granularity: one row per biopsy (`Patient ID`, `Bx index`) per kernel run.
 - `pct_reduction_integ_sd`: `100 * (1 - integ_gp_sd / integ_indep_sd)`.
 - `delta_mean_percent`: alias of `pct_reduction_mean_sd`.
 - `delta_int_percent`: alias of `pct_reduction_integ_sd`.
-- `pct_reduction_from_ratio`: `100 * (1 - 1 / mean_ratio)`.
+- `pct_reduction_from_ratio`: `100 * (1 - 1 / mean_ratio)` using the mean of
+  voxelwise ratios; this is not the manuscript `\overline{R}_b` definition.
 
 ## 2.5 Residual and calibration-support columns
 
@@ -201,14 +204,25 @@ Row granularity:
 Columns:
 
 - `n_biopsies`
-- `mean_uncertainty_ratio`
-- `median_uncertainty_ratio`
+- `mean_uncertainty_ratio`: cohort mean of `mean_sd_ratio`
+- `median_uncertainty_ratio`: cohort median of `mean_sd_ratio`
 - `mean_integrated_ratio`
 - `uncertainty_ratio_q05`
 - `uncertainty_ratio_q25`
 - `uncertainty_ratio_q75`
 - `uncertainty_ratio_q95`
 - `uncertainty_ratio_iqr`
+- `mean_sd_ratio_mean`: explicit alias of the cohort mean manuscript ratio
+- `mean_sd_ratio_median`: explicit alias of the cohort median manuscript ratio
+- `mean_sd_ratio_q05`
+- `mean_sd_ratio_q25`
+- `mean_sd_ratio_q75`
+- `mean_sd_ratio_q95`
+- `mean_sd_ratio_iqr`
+- `voxelwise_mean_ratio_mean`: cohort mean of biopsy-level `mean_ratio`
+- `voxelwise_mean_ratio_median`: cohort median of biopsy-level `mean_ratio`
+- `voxelwise_median_ratio_mean`: cohort mean of biopsy-level `median_ratio`
+- `voxelwise_median_ratio_median`: cohort median of biopsy-level `median_ratio`
 - `pct_biopsies_ge20pct_reduction`
 - `pct_biopsies_majority_vox_ratio_ge_1p25`
 - `pct_reduction_mean_sd_mean`
@@ -312,6 +326,8 @@ Columns:
 
 - `Patient ID`
 - `n_bx`: number of biopsies for that patient.
+- `mean_sd_ratio_mean`: patient mean of biopsy-level `mean_sd_ratio`.
+- `mean_sd_ratio_sd`: patient SD of biopsy-level `mean_sd_ratio`.
 - `mean_ratio_mean`: patient mean of biopsy-level `mean_ratio`.
 - `mean_ratio_sd`: patient SD of biopsy-level `mean_ratio`.
 - `ell_median`: patient median of biopsy-level `ell`.
