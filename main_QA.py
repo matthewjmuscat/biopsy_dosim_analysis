@@ -15,6 +15,7 @@ from production_plots_QA import (
     plot_path1_p_pass_vs_margin,
     plot_path1_threshold_qa_summary,
 )
+from qa_path1_pipeline import Path1QAOutputs, build_path1_qa_outputs
 
 
 def _ensure_dirs(output_config: QAOutputConfig) -> dict[str, Path]:
@@ -29,32 +30,13 @@ def _ensure_dirs(output_config: QAOutputConfig) -> dict[str, Path]:
     return dirs
 
 
-def _load_existing_path1_inputs(base_dir: Path) -> dict[str, pd.DataFrame]:
-    file_map = {
-        "path1_results_df": base_dir / "Cohort_QA_Path1_biopsy_threshold_probabilities_with_z.csv",
-        "coef_margin_df": base_dir / "2_logit_margin" / "p1_logit_margin_01_coef.csv",
-        "coef_secondary_df": base_dir / "6_secondary_scan" / "p1_secscan_01_coef_margin_plus_all_secondaries.csv",
-        "pred_secondary_df": base_dir / "6_secondary_scan" / "p1_secscan_02_predictions_margin_plus_all_secondaries.csv",
-        "best_secondary_df": base_dir / "6_secondary_scan" / "p1_secscan_05_best_secondary_per_threshold.csv",
-    }
-    missing = [str(path) for path in file_map.values() if not path.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Missing required legacy Path-1 QA CSV inputs for the new QA plot lane: "
-            + ", ".join(missing)
-        )
-    return {name: pd.read_csv(path) for name, path in file_map.items()}
-
-
-def _generate_path1_qa_figures(figures_dir: Path) -> list[Path]:
-    qa_seed_dir = Path(__file__).resolve().parent / "output_data" / "qa_path1"
-    inputs = _load_existing_path1_inputs(qa_seed_dir)
+def _generate_path1_qa_figures(figures_dir: Path, path1_outputs: Path1QAOutputs) -> list[Path]:
     export_config = FigureExportConfig()
 
     figure_paths: list[Path] = []
     figure_paths.extend(
         plot_path1_threshold_qa_summary(
-            inputs["path1_results_df"],
+            path1_outputs.path1_results_df,
             save_dir=figures_dir,
             export_config=export_config,
             file_stem="Fig_Path1_threshold_QA_summary_v2",
@@ -62,28 +44,87 @@ def _generate_path1_qa_figures(figures_dir: Path) -> list[Path]:
     )
     figure_paths.extend(
         plot_path1_p_pass_vs_margin(
-            inputs["path1_results_df"],
+            path1_outputs.path1_results_df,
             save_dir=figures_dir,
             export_config=export_config,
             file_stem="Fig_Path1_p_pass_vs_margin_by_metric",
-            coef_df=inputs["coef_margin_df"],
+            coef_df=path1_outputs.coef_margin_df,
             show_required_margin_line=True,
             required_prob=0.95,
         )
     )
     figure_paths.extend(
         plot_path1_best_secondary_families(
-            inputs["pred_secondary_df"],
-            inputs["coef_secondary_df"],
+            path1_outputs.pred_secondary_df,
+            path1_outputs.coef_secondary_df,
             save_dir=figures_dir,
             export_config=export_config,
             file_stem="Fig_Path1_logit_margin_plus_best_secondary_families",
-            comparison_df=inputs["best_secondary_df"],
+            comparison_df=path1_outputs.best_secondary_df,
             overlay_1d_model=True,
-            coef1_df=inputs["coef_margin_df"],
+            coef1_df=path1_outputs.coef_margin_df,
         )
     )
     return figure_paths
+
+
+def _write_path1_tables(csv_dir: Path, path1_outputs: Path1QAOutputs) -> None:
+    path1_root = csv_dir / "qa_path1"
+    core_dir = path1_root / "1_core"
+    margin_dir = path1_root / "2_logit_margin"
+    grad_dir = path1_root / "3_logit_grad"
+    secondary_dir = path1_root / "6_secondary_scan"
+    for path in [path1_root, core_dir, margin_dir, grad_dir, secondary_dir]:
+        path.mkdir(parents=True, exist_ok=True)
+
+    path1_outputs.path1_results_df.to_csv(
+        path1_root / "Cohort_QA_Path1_biopsy_threshold_probabilities_with_z.csv",
+        index=False,
+    )
+    path1_outputs.path1_results_df.to_csv(
+        core_dir / "p1_core_01_biopsy_mc_probs_z.csv",
+        index=False,
+    )
+    path1_outputs.path1_enriched_df.to_csv(
+        core_dir / "p1_core_02_biopsy_probs_plus_nominal_predictors.csv",
+        index=False,
+    )
+    path1_outputs.threshold_summary_df.to_csv(
+        core_dir / "p1_core_03_threshold_summary_by_rule.csv",
+        index=False,
+    )
+    path1_outputs.coef_margin_df.to_csv(
+        margin_dir / "p1_logit_margin_01_coef.csv",
+        index=False,
+    )
+    path1_outputs.pred_margin_df.to_csv(
+        margin_dir / "p1_logit_margin_02_predictions.csv",
+        index=False,
+    )
+    path1_outputs.coef_gradient_df.to_csv(
+        grad_dir / "p1_logit_grad_01_coef.csv",
+        index=False,
+    )
+    path1_outputs.pred_gradient_df.to_csv(
+        grad_dir / "p1_logit_grad_02_predictions.csv",
+        index=False,
+    )
+    path1_outputs.coef_secondary_df.to_csv(
+        secondary_dir / "p1_secscan_01_coef_margin_plus_all_secondaries.csv",
+        index=False,
+    )
+    path1_outputs.pred_secondary_df.to_csv(
+        secondary_dir / "p1_secscan_02_predictions_margin_plus_all_secondaries.csv",
+        index=False,
+    )
+    path1_outputs.model_compare_secondary_df.to_csv(
+        secondary_dir / "p1_secscan_03_model_compare_all_vs_margin_raw.csv",
+        index=False,
+    )
+    path1_outputs.best_secondary_df.to_csv(
+        secondary_dir / "p1_secscan_05_best_secondary_per_threshold.csv",
+        index=False,
+    )
 
 
 def main() -> None:
@@ -97,6 +138,7 @@ def main() -> None:
 
     write_inventory_csv = True
     write_dvh_csvs = True
+    write_path1_csvs = True
     generate_path1_qa_figures = True
 
     print("[main_QA] loading common and QA-specific data")
@@ -123,10 +165,23 @@ def main() -> None:
         inventory_df.to_csv(inventory_path, index=False)
         print(f"[main_QA] wrote {inventory_path}")
 
+    path1_outputs = None
+    if write_path1_csvs or generate_path1_qa_figures:
+        print("[main_QA] computing Path-1 QA tables from loaded data")
+        path1_outputs = build_path1_qa_outputs(
+            qa_data.common,
+            qa_data.calculated_dvh_metrics_per_trial_df,
+        )
+        if write_path1_csvs:
+            _write_path1_tables(dirs["csv"], path1_outputs)
+            print(f"[main_QA] wrote Path-1 QA tables under {dirs['csv'] / 'qa_path1'}")
+
     if generate_path1_qa_figures:
         figures_dir = dirs["figures"] / "qa_path1"
         figures_dir.mkdir(parents=True, exist_ok=True)
-        figure_paths = _generate_path1_qa_figures(figures_dir)
+        if path1_outputs is None:
+            raise RuntimeError("Path-1 outputs were not computed before figure generation.")
+        figure_paths = _generate_path1_qa_figures(figures_dir, path1_outputs)
         print(f"[main_QA] wrote {len(figure_paths)} figure files to {figures_dir}")
 
     summary_lines = [
