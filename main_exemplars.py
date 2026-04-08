@@ -23,10 +23,14 @@ from production_plots_exemplars import (
     plot_exemplar_axial_profile_quad,
     plot_exemplar_cumulative_dvh_pair,
     plot_exemplar_delta_lines,
+    plot_exemplar_delta_lines_pair,
     plot_exemplar_length_scale_boxes,
+    plot_exemplar_length_scale_boxes_pair,
     plot_exemplar_ridgeline_pair,
     plot_exemplar_voxel_dualboxes,
+    plot_exemplar_voxel_dualboxes_pair,
     plot_exemplar_voxel_pair_heatmap,
+    plot_exemplar_voxel_pair_heatmap_pair,
 )
 
 
@@ -174,6 +178,10 @@ def _generate_selected_exemplar_figures(
         selected_voxel_df,
         column_name="Dose (Gy)",
     )
+    gradient_length_scale_df = helper_funcs.compute_dose_differences_vectorized(
+        selected_voxel_df,
+        column_name="Dose grad (Gy/mm)",
+    )
     print("[main_exemplars] building selected-biopsy cumulative DVH curves")
     selected_cumulative_dvh_df = build_cumulative_dvh_table(selected_voxel_df)
 
@@ -246,6 +254,40 @@ def _generate_selected_exemplar_figures(
             nominal_dose_deltas_df,
             biopsies=selected_pairs,
             save_dir=figures_dir,
+            fig_name="Fig_exemplars_dose_delta_overlay",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            zero_level_index_str="Dose (Gy)",
+            x_axis="Voxel index",
+            linewidth_signed=2.0,
+            linewidth_abs=3.2,
+            show_markers=True,
+            include_abs=False,
+            legend_fontsize=export_config.legend_fontsize,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_delta_lines(
+            nominal_gradient_deltas_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            fig_name="Fig_exemplars_gradient_delta_overlay",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            zero_level_index_str="Dose grad (Gy/mm)",
+            x_axis="Voxel index",
+            linewidth_signed=2.0,
+            linewidth_abs=3.2,
+            show_markers=True,
+            include_abs=False,
+            legend_fontsize=export_config.legend_fontsize,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_delta_lines(
+            nominal_dose_deltas_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
             fig_name="Fig_exemplars_dose_delta_overlay_with_abs",
             export_config=export_config,
             biopsy_label_map=biopsy_label_map,
@@ -273,6 +315,30 @@ def _generate_selected_exemplar_figures(
             show_markers=True,
             include_abs=True,
             legend_fontsize=export_config.legend_fontsize,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_delta_lines_pair(
+            dose_deltas_df=nominal_dose_deltas_df,
+            gradient_deltas_df=nominal_gradient_deltas_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            fig_name="Fig_exemplars_delta_overlay_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            include_abs=False,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_delta_lines_pair(
+            dose_deltas_df=nominal_dose_deltas_df,
+            gradient_deltas_df=nominal_gradient_deltas_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            fig_name="Fig_exemplars_delta_overlay_with_abs_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            include_abs=True,
         )
     )
     figure_paths.extend(
@@ -314,6 +380,24 @@ def _generate_selected_exemplar_figures(
         )
     )
     figure_paths.extend(
+        plot_exemplar_voxel_dualboxes_pair(
+            mc_deltas,
+            biopsies=selected_pairs,
+            output_dir=figures_dir,
+            plot_name_base="Fig_exemplars_voxel_dualboxes_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            x_axis="Voxel index",
+            lane_gap=2.0,
+            box_width=0.32,
+            pair_gap=0.10,
+            biopsy_gap=0.22,
+            show_points=False,
+            whisker_mode="q05q95",
+            showfliers=False,
+        )
+    )
+    figure_paths.extend(
         plot_exemplar_length_scale_boxes(
             dose_length_scale_df,
             save_dir=figures_dir,
@@ -335,6 +419,147 @@ def _generate_selected_exemplar_figures(
             biopsy_label_map=biopsy_label_map,
         )
     )
+    figure_paths.extend(
+        plot_exemplar_length_scale_boxes(
+            gradient_length_scale_df,
+            save_dir=figures_dir,
+            file_name="Fig_exemplars_length_scale_gradient_abs",
+            export_config=export_config,
+            title=None,
+            figsize=(10, 6),
+            show_points=False,
+            violin_or_box="box",
+            trend_lines=["mean"],
+            annotate_counts=True,
+            annotation_box=False,
+            y_trim=True,
+            y_min_fixed=0,
+            xlabel=None,
+            ylabel=None,
+            multi_pairs=selected_pairs,
+            metric_family="grad",
+            biopsy_label_map=biopsy_label_map,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_length_scale_boxes_pair(
+            dose_length_scale_df,
+            gradient_length_scale_df,
+            save_dir=figures_dir,
+            file_name="Fig_exemplars_length_scale_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            multi_pairs=selected_pairs,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_voxel_pair_heatmap_pair(
+            upper_df=dose_pair_stats_df,
+            lower_df=grad_pair_stats_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            save_name_base="Fig_exemplars_voxel_pair_heatmap_signed_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            upper_mean_col="mean_diff",
+            upper_std_col="std_diff",
+            lower_mean_col="mean_diff",
+            lower_std_col="std_diff",
+            cmap="coolwarm",
+            cbar_label_upper=r"$\overline{M_{b,ij}^{D}}$ (Gy, upper)",
+            cbar_label_lower=r"$\overline{M_{b,ij}^{G}}$ (Gy mm$^{-1}$, lower)",
+            show_title=False,
+            show_annotation_box=False,
+            cell_annot_fontsize=8,
+            cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+            cbar_label_fontsize=export_config.axes_label_fontsize - 1,
+            cell_value_decimals=1,
+            color_bar_positions="left_right",
+            cbar_pad=0.34,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_voxel_pair_heatmap_pair(
+            upper_df=dose_pair_stats_df,
+            lower_df=grad_pair_stats_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            save_name_base="Fig_exemplars_voxel_pair_heatmap_signed_no_std_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            upper_mean_col="mean_diff",
+            upper_std_col=None,
+            lower_mean_col="mean_diff",
+            lower_std_col=None,
+            cmap="coolwarm",
+            cbar_label_upper=r"$\overline{M_{b,ij}^{D}}$ (Gy, upper)",
+            cbar_label_lower=r"$\overline{M_{b,ij}^{G}}$ (Gy mm$^{-1}$, lower)",
+            show_title=False,
+            show_annotation_box=False,
+            cell_annot_fontsize=11,
+            cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+            cbar_label_fontsize=export_config.axes_label_fontsize - 1,
+            cell_value_decimals=1,
+            color_bar_positions="left_right",
+            cbar_pad=0.34,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_voxel_pair_heatmap_pair(
+            upper_df=dose_pair_stats_df,
+            lower_df=grad_pair_stats_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            save_name_base="Fig_exemplars_voxel_pair_heatmap_abs_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            upper_mean_col="mean_abs_diff",
+            upper_std_col="std_abs_diff",
+            lower_mean_col="mean_abs_diff",
+            lower_std_col="std_abs_diff",
+            cmap="Reds",
+            vmin_upper=0.0,
+            vmin_lower=0.0,
+            cbar_label_upper=r"$\overline{|M_{b,ij}^{D}|}$ (Gy, upper)",
+            cbar_label_lower=r"$\overline{|M_{b,ij}^{G}|}$ (Gy mm$^{-1}$, lower)",
+            show_title=False,
+            show_annotation_box=False,
+            cell_annot_fontsize=8,
+            cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+            cbar_label_fontsize=export_config.axes_label_fontsize - 1,
+            cell_value_decimals=1,
+            color_bar_positions="left_right",
+            cbar_pad=0.34,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_voxel_pair_heatmap_pair(
+            upper_df=dose_pair_stats_df,
+            lower_df=grad_pair_stats_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            save_name_base="Fig_exemplars_voxel_pair_heatmap_abs_no_std_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            upper_mean_col="mean_abs_diff",
+            upper_std_col=None,
+            lower_mean_col="mean_abs_diff",
+            lower_std_col=None,
+            cmap="Reds",
+            vmin_upper=0.0,
+            vmin_lower=0.0,
+            cbar_label_upper=r"$\overline{|M_{b,ij}^{D}|}$ (Gy, upper)",
+            cbar_label_lower=r"$\overline{|M_{b,ij}^{G}|}$ (Gy mm$^{-1}$, lower)",
+            show_title=False,
+            show_annotation_box=False,
+            cell_annot_fontsize=11,
+            cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+            cbar_label_fontsize=export_config.axes_label_fontsize - 1,
+            cell_value_decimals=1,
+            color_bar_positions="left_right",
+            cbar_pad=0.34,
+        )
+    )
     for pair in selected_pairs:
         pair_mask = (
             (dose_pair_stats_df["Patient ID"].astype(str) == str(pair[0]))
@@ -344,6 +569,8 @@ def _generate_selected_exemplar_figures(
         grad_pair_sub = grad_pair_stats_df.loc[pair_mask].copy()
         maxabs_upper = max(float(dose_pair_sub["mean_diff"].abs().max()), 1e-9)
         maxabs_lower = max(float(grad_pair_sub["mean_diff"].abs().max()), 1e-9)
+        maxabs_upper_abs = max(float(pd.to_numeric(dose_pair_sub["mean_abs_diff"], errors="coerce").max()), 1e-9)
+        maxabs_lower_abs = max(float(pd.to_numeric(grad_pair_sub["mean_abs_diff"], errors="coerce").max()), 1e-9)
         figure_paths.extend(
             plot_exemplar_voxel_pair_heatmap(
                 upper_df=dose_pair_sub,
@@ -365,8 +592,41 @@ def _generate_selected_exemplar_figures(
                 cbar_label_lower=r"$\overline{M_{b,ij}^{G}}$ (Gy mm$^{-1}$, lower)",
                 show_title=False,
                 show_annotation_box=False,
-                cell_annot_fontsize=export_config.annotation_fontsize - 1,
+                cell_annot_fontsize=8,
+                cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+                cbar_label_fontsize=export_config.axes_label_fontsize - 1,
                 cell_value_decimals=1,
+                color_bar_positions="left_right",
+                cbar_pad=0.34,
+            )
+        )
+        figure_paths.extend(
+            plot_exemplar_voxel_pair_heatmap(
+                upper_df=dose_pair_sub,
+                lower_df=grad_pair_sub,
+                save_dir=figures_dir,
+                save_name_base="Fig_exemplars_voxel_pair_heatmap_abs",
+                export_config=export_config,
+                biopsy_label_map=biopsy_label_map,
+                upper_mean_col="mean_abs_diff",
+                upper_std_col="std_abs_diff",
+                lower_mean_col="mean_abs_diff",
+                lower_std_col="std_abs_diff",
+                vmin_upper=0.0,
+                vmax_upper=maxabs_upper_abs,
+                vmin_lower=0.0,
+                vmax_lower=maxabs_lower_abs,
+                cmap="Reds",
+                cbar_label_upper=r"$\overline{|M_{b,ij}^{D}|}$ (Gy, upper)",
+                cbar_label_lower=r"$\overline{|M_{b,ij}^{G}|}$ (Gy mm$^{-1}$, lower)",
+                show_title=False,
+                show_annotation_box=False,
+                cell_annot_fontsize=8,
+                cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+                cbar_label_fontsize=export_config.axes_label_fontsize - 1,
+                cell_value_decimals=1,
+                color_bar_positions="left_right",
+                cbar_pad=0.34,
             )
         )
         figure_paths.extend(
@@ -391,7 +651,40 @@ def _generate_selected_exemplar_figures(
                 show_title=False,
                 show_annotation_box=False,
                 cell_annot_fontsize=export_config.annotation_fontsize,
+                cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+                cbar_label_fontsize=export_config.axes_label_fontsize - 1,
                 cell_value_decimals=1,
+                color_bar_positions="left_right",
+                cbar_pad=0.34,
+            )
+        )
+        figure_paths.extend(
+            plot_exemplar_voxel_pair_heatmap(
+                upper_df=dose_pair_sub,
+                lower_df=grad_pair_sub,
+                save_dir=figures_dir,
+                save_name_base="Fig_exemplars_voxel_pair_heatmap_abs_no_std",
+                export_config=export_config,
+                biopsy_label_map=biopsy_label_map,
+                upper_mean_col="mean_abs_diff",
+                upper_std_col=None,
+                lower_mean_col="mean_abs_diff",
+                lower_std_col=None,
+                vmin_upper=0.0,
+                vmax_upper=maxabs_upper_abs,
+                vmin_lower=0.0,
+                vmax_lower=maxabs_lower_abs,
+                cmap="Reds",
+                cbar_label_upper=r"$\overline{|M_{b,ij}^{D}|}$ (Gy, upper)",
+                cbar_label_lower=r"$\overline{|M_{b,ij}^{G}|}$ (Gy mm$^{-1}$, lower)",
+                show_title=False,
+                show_annotation_box=False,
+                cell_annot_fontsize=export_config.annotation_fontsize,
+                cbar_tick_fontsize=export_config.tick_label_fontsize - 1,
+                cbar_label_fontsize=export_config.axes_label_fontsize - 1,
+                cell_value_decimals=1,
+                color_bar_positions="left_right",
+                cbar_pad=0.34,
             )
         )
     return figure_paths
