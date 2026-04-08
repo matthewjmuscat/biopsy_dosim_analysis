@@ -1,0 +1,6 @@
+n_selected_exemplars=2
+n_patients_all=15
+n_patients_f2=15
+n_voxel_rows=4290429
+n_point_rows=4290429
+n_cumulative_dvh_rows=not_built
