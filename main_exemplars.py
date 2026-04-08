@@ -10,7 +10,7 @@ os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).resolve().parent / ".mp
 import helper_funcs
 import summary_statistics
 from load_data_exemplars import load_exemplar_data
-from load_data_shared import build_dataframe_inventory
+from load_data_shared import build_cumulative_dvh_table, build_dataframe_inventory
 from pipeline_shared_config import (
     ExemplarSelectionConfig,
     ExemplarsOutputConfig,
@@ -19,6 +19,8 @@ from pipeline_shared_config import (
 )
 from production_plots_exemplars import (
     build_biopsy_heading_map,
+    plot_exemplar_axial_profile_pair,
+    plot_exemplar_cumulative_dvh_pair,
     plot_exemplar_delta_lines,
     plot_exemplar_length_scale_boxes,
     plot_exemplar_voxel_dualboxes,
@@ -120,10 +122,16 @@ def _generate_selected_exemplar_figures(
     export_config = FigureExportConfig()
 
     selected_voxel_df = _filter_df_to_pairs(data.common.all_voxel_wise_dose_df, selected_pairs)
+    selected_point_df = _filter_df_to_pairs(data.common.all_point_wise_dose_df, selected_pairs)
     selected_global_by_voxel_df = _filter_df_to_pairs(
         data.common.cohort_global_dosimetry_by_voxel_df,
         selected_pairs,
     )
+    selected_shifts_df = data.common.all_mc_structure_transformation_df[
+        data.common.all_mc_structure_transformation_df["Patient ID"].astype(str).isin(
+            [str(patient_id) for patient_id, _ in selected_pairs]
+        )
+    ].copy()
 
     print(
         "[main_exemplars] building selected-biopsy figure inputs "
@@ -164,8 +172,50 @@ def _generate_selected_exemplar_figures(
         selected_voxel_df,
         column_name="Dose (Gy)",
     )
+    print("[main_exemplars] building selected-biopsy cumulative DVH curves")
+    selected_cumulative_dvh_df = build_cumulative_dvh_table(selected_voxel_df)
 
     figure_paths: list[Path] = []
+    figure_paths.extend(
+        plot_exemplar_axial_profile_pair(
+            selected_point_df,
+            selected_shifts_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            file_stem="Fig_exemplars_axial_dose_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            value_col="Dose (Gy)",
+            y_label=r"Dose along core $D_b(z)$ (Gy)",
+            num_trials_to_show=3,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_axial_profile_pair(
+            selected_point_df,
+            selected_shifts_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            file_stem="Fig_exemplars_axial_gradient_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            value_col="Dose grad (Gy/mm)",
+            y_label=r"Dose-gradient magnitude $G_b(z)$ (Gy mm$^{-1}$)",
+            num_trials_to_show=3,
+        )
+    )
+    figure_paths.extend(
+        plot_exemplar_cumulative_dvh_pair(
+            selected_cumulative_dvh_df,
+            selected_shifts_df,
+            biopsies=selected_pairs,
+            save_dir=figures_dir,
+            file_stem="Fig_exemplars_cumulative_dvh_pair",
+            export_config=export_config,
+            biopsy_label_map=biopsy_label_map,
+            num_trials_to_show=3,
+        )
+    )
     figure_paths.extend(
         plot_exemplar_delta_lines(
             nominal_dose_deltas_df,
@@ -296,20 +346,20 @@ def main() -> None:
 
     write_inventory_csv = True
     write_selection_manifest = True
-    write_supporting_dvh_csvs = False
+    write_dvh_metric_csvs = True
     generate_selected_exemplar_figures = True
 
     print("[main_exemplars] loading common and exemplar-specific data")
     exemplar_data = load_exemplar_data(
         pipeline_config,
         selection_config,
-        build_supporting_dvh_tables=write_supporting_dvh_csvs,
-        build_cumulative_dvh_table_from_voxels=write_supporting_dvh_csvs,
+        build_supporting_dvh_tables=write_dvh_metric_csvs,
+        build_cumulative_dvh_table_from_voxels=False,
     )
     dirs = _ensure_dirs(output_config)
 
     if (
-        write_supporting_dvh_csvs
+        write_dvh_metric_csvs
         and exemplar_data.calculated_dvh_metrics_per_trial_df is not None
         and exemplar_data.cohort_global_dosimetry_dvh_metrics_df is not None
     ):

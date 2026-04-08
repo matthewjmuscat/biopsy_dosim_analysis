@@ -19,6 +19,16 @@ def _default_file_name(file_stem: str, export_config: FigureExportConfig) -> str
 def _font_rc(export_config: FigureExportConfig):
     with mpl.rc_context(
         {
+            "text.usetex": False,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+            "axes.unicode_minus": True,
+            "axes.facecolor": "white",
+            "figure.facecolor": "white",
+            "axes.edgecolor": "black",
+            "axes.labelcolor": "black",
+            "xtick.color": "black",
+            "ytick.color": "black",
             "axes.labelsize": export_config.axes_label_fontsize,
             "xtick.labelsize": export_config.tick_label_fontsize,
             "ytick.labelsize": export_config.tick_label_fontsize,
@@ -96,4 +106,3 @@ def plot_path1_best_secondary_families(
             save_formats=export_config.save_formats,
             **kwargs,
         )
-
