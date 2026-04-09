@@ -175,12 +175,12 @@ def _add_heatmap_group_heading(
     label: str,
     export_config: FigureExportConfig,
     *,
-    pad: float = 0.016,
+    pad: float = 0.020,
 ) -> None:
     main_pos = ax.get_position()
     aux_positions = [aux_ax.get_position() for aux_ax in aux_axes if aux_ax is not None]
     top_y = max([main_pos.y1] + [pos.y1 for pos in aux_positions])
-    heading_x = max(0.02, main_pos.x0 - 0.040)
+    heading_x = max(0.02, main_pos.x0 - 0.055)
     fig.text(
         heading_x,
         top_y + pad,
@@ -198,6 +198,8 @@ def _add_shared_direction_arrow(
     label: str,
     export_config: FigureExportConfig,
     y_text: float = 0.058,
+    text_x: float = 0.50,
+    arrow_x: float = 0.67,
 ) -> None:
     arrow_token = r"$\rightarrow$"
     display_arrow = "→"
@@ -205,7 +207,7 @@ def _add_shared_direction_arrow(
     if arrow_token in label_text:
         base_text = label_text.replace(arrow_token, "").rstrip()
         fig.text(
-            0.50,
+            text_x,
             y_text,
             base_text,
             ha="center",
@@ -214,7 +216,7 @@ def _add_shared_direction_arrow(
             fontweight="semibold",
         )
         fig.text(
-            0.67,
+            arrow_x,
             y_text + 0.001,
             display_arrow,
             ha="left",
@@ -664,7 +666,13 @@ def plot_exemplar_axial_profile_pair(
                 fontsize=export_config.legend_fontsize + 1,
                 bbox_to_anchor=(0.5, 1.10),
             )
-        _add_shared_direction_arrow(fig, label=shared_arrow_label, export_config=export_config)
+        _add_shared_direction_arrow(
+            fig,
+            label=shared_arrow_label,
+            export_config=export_config,
+            text_x=0.485,
+            arrow_x=0.60,
+        )
         fig.subplots_adjust(top=0.77, bottom=0.20, wspace=0.18)
         out_paths = _save_figure_multi(fig, save_dir, file_stem, export_config)
         plt.close(fig)
@@ -887,7 +895,7 @@ def plot_exemplar_cumulative_dvh_pair(
     num_trials_to_show: int = 3,
 ) -> list[Path]:
     with _font_rc(export_config):
-        fig, axes = plt.subplots(1, len(biopsies), figsize=(6.8 * len(biopsies), 5.35), dpi=export_config.dpi, sharey=False)
+        fig, axes = plt.subplots(1, len(biopsies), figsize=(7.2 * len(biopsies), 5.35), dpi=export_config.dpi, sharey=False)
         if len(biopsies) == 1:
             axes = [axes]
 
@@ -904,7 +912,7 @@ def plot_exemplar_cumulative_dvh_pair(
                 biopsy_label_map=biopsy_label_map,
                 bx_ref=bx_ref,
                 num_trials_to_show=num_trials_to_show,
-                y_label=r"Percent volume (\%)" if idx == 0 else None,
+                y_label=r"Percent volume (\%)",
             )
             if legend_handles is None:
                 legend_handles = handles
@@ -915,16 +923,16 @@ def plot_exemplar_cumulative_dvh_pair(
                 legend_handles,
                 legend_labels,
                 loc="upper center",
-                ncol=3,
+                ncol=len(legend_handles),
                 frameon=True,
                 fancybox=True,
                 facecolor="white",
                 edgecolor="black",
                 framealpha=0.95,
                 fontsize=export_config.legend_fontsize + 1,
-                bbox_to_anchor=(0.5, 1.12),
+                bbox_to_anchor=(0.5, 1.09),
             )
-        fig.subplots_adjust(top=0.76, bottom=0.15, wspace=0.24)
+        fig.subplots_adjust(top=0.78, bottom=0.15, wspace=0.28)
         out_paths = _save_figure_multi(fig, save_dir, file_stem, export_config)
         plt.close(fig)
         return out_paths
@@ -1228,7 +1236,7 @@ def plot_exemplar_delta_lines_pair(
     )
     with _font_rc(export_config):
         sns.set_theme(style="white", rc={"axes.facecolor": "white", "figure.facecolor": "white"})
-        fig, axes = plt.subplots(1, 2, figsize=(14.4, 5.2), dpi=export_config.dpi, sharex=False, sharey=False)
+        fig, axes = plt.subplots(1, 2, figsize=(15.2, 5.2), dpi=export_config.dpi, sharex=False, sharey=False)
         handles = _draw_delta_overlay_axis(
             axes[0],
             payload=dose_payload,
@@ -1262,7 +1270,7 @@ def plot_exemplar_delta_lines_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.995),
+            bbox_to_anchor=(0.5, 0.98),
             ncol=len(handles),
             frameon=True,
             fancybox=True,
@@ -1271,7 +1279,7 @@ def plot_exemplar_delta_lines_pair(
             framealpha=0.95,
             fontsize=legend_fs,
         )
-        fig.subplots_adjust(top=0.84, bottom=0.15, wspace=0.28)
+        fig.subplots_adjust(top=0.83, bottom=0.15, wspace=0.28)
         out_paths = _save_figure_multi(fig, save_dir, fig_name, export_config)
         plt.close(fig)
         return out_paths
@@ -1313,7 +1321,7 @@ def plot_exemplar_delta_lines(
 
     with _font_rc(export_config):
         sns.set_theme(style="white", rc={"axes.facecolor": "white", "figure.facecolor": "white"})
-        fig, ax = plt.subplots(figsize=(11.6, 5.25), dpi=export_config.dpi)
+        fig, ax = plt.subplots(figsize=(13.4, 5.25), dpi=export_config.dpi)
         handles = _draw_delta_overlay_axis(
             ax,
             payload=payload,
@@ -1332,7 +1340,7 @@ def plot_exemplar_delta_lines(
         legend = ax.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.16),
+            bbox_to_anchor=(0.5, 1.11),
             ncol=len(handles),
             frameon=True,
             fancybox=True,
@@ -1343,7 +1351,7 @@ def plot_exemplar_delta_lines(
         )
         for txt in legend.get_texts():
             txt.set_fontsize(legend_fontsize)
-        fig.subplots_adjust(top=0.82, bottom=0.15)
+        fig.subplots_adjust(top=0.80, bottom=0.15)
         out_paths = _save_figure_multi(fig, save_dir, fig_name, export_config)
         plt.close(fig)
         return out_paths
@@ -1508,10 +1516,8 @@ def _draw_voxel_dualboxes_axis(
     for center in lane_centers:
         ax.axvline(center, color="#d4d4d4", linewidth=0.7, alpha=0.85, zorder=0)
 
-    y_min = 0.0
-    y_max = 0.0
-    if not payload["is_grad"]:
-        y_min = 0.0
+    y_min = np.inf
+    y_max = -np.inf
 
     for idx, pair in enumerate(biopsies):
         color = BIOPSY_PALETTE[idx % len(BIOPSY_PALETTE)]
@@ -1600,9 +1606,11 @@ def _draw_voxel_dualboxes_axis(
     if y_tick_decimals is not None:
         ax.yaxis.set_major_formatter(StrMethodFormatter(f"{{x:.{int(y_tick_decimals)}f}}"))
         ax.get_yaxis().get_offset_text().set_visible(False)
-    if np.isfinite(y_max) and y_max > y_min:
+    if np.isfinite(y_min) and np.isfinite(y_max) and y_max > y_min:
         pad = 0.06 * max(y_max - y_min, 1e-6)
         ax.set_ylim(y_min - pad, y_max + pad)
+    else:
+        ax.set_ylim(-1.0, 1.0)
 
     handles = [
         Patch(
@@ -1692,7 +1700,7 @@ def plot_exemplar_voxel_dualboxes_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.99),
+            bbox_to_anchor=(0.5, 0.965),
             ncol=max(2, len(biopsies) + 2),
             frameon=True,
             fancybox=True,
@@ -1701,7 +1709,7 @@ def plot_exemplar_voxel_dualboxes_pair(
             framealpha=0.95,
             fontsize=export_config.legend_fontsize,
         )
-        fig.subplots_adjust(top=0.85, bottom=0.11, hspace=0.26)
+        fig.subplots_adjust(top=0.83, bottom=0.11, hspace=0.26)
         out_paths = _save_figure_multi(fig, output_dir, plot_name_base, export_config)
         plt.close(fig)
         return out_paths
@@ -1924,7 +1932,7 @@ def plot_exemplar_length_scale_boxes_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.99),
+            bbox_to_anchor=(0.5, 0.965),
             ncol=max(2, len(handles)),
             frameon=True,
             fancybox=True,
@@ -1933,7 +1941,7 @@ def plot_exemplar_length_scale_boxes_pair(
             framealpha=0.95,
             fontsize=export_config.legend_fontsize,
         )
-        fig.subplots_adjust(top=0.85, bottom=0.11, hspace=0.26)
+        fig.subplots_adjust(top=0.83, bottom=0.11, hspace=0.26)
         out_paths = _save_figure_multi(fig, save_dir, file_name, export_config)
         plt.close(fig)
         return out_paths
@@ -2126,27 +2134,41 @@ def _draw_voxel_pair_heatmap_axis(
     ax.set_yticks(np.arange(n) + 0.5)
     ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
     ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
-    ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize)
-    ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize)
+    ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=10)
+    ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=14)
     ax.minorticks_off()
-    ax.tick_params(axis="both", which="major", length=4, width=0.7, direction="out")
-    ax.tick_params(axis="both", which="minor", length=0)
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.yaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="both", which="major", length=4, width=0.7, direction="out", top=False, right=False, bottom=True, left=True)
+    ax.tick_params(axis="both", which="minor", length=0, top=False, right=False, bottom=False, left=False)
+    for side in ["bottom", "left", "top", "right"]:
+        ax.spines[side].set_visible(True)
+        ax.spines[side].set_color("black")
+        ax.spines[side].set_linewidth(0.8)
 
     top_ax = ax.secondary_xaxis("top")
     top_ax.set_xticks(ax.get_xticks())
     top_ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
-    top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize)
+    top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=10)
     top_ax.minorticks_off()
-    top_ax.tick_params(axis="x", which="major", length=4, width=0.7, direction="out")
-    top_ax.tick_params(axis="x", which="minor", length=0)
+    top_ax.xaxis.set_minor_locator(NullLocator())
+    top_ax.tick_params(axis="x", which="major", length=4, width=0.7, direction="out", top=True, bottom=False, pad=2)
+    top_ax.tick_params(axis="x", which="minor", length=0, top=False, bottom=False)
+    top_ax.spines["top"].set_visible(True)
+    top_ax.spines["top"].set_color("black")
+    top_ax.spines["top"].set_linewidth(0.8)
 
     right_ax = ax.secondary_yaxis("right")
     right_ax.set_yticks(ax.get_yticks())
     right_ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
-    right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize)
+    right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=14)
     right_ax.minorticks_off()
-    right_ax.tick_params(axis="y", which="major", length=4, width=0.7, direction="out")
-    right_ax.tick_params(axis="y", which="minor", length=0)
+    right_ax.yaxis.set_minor_locator(NullLocator())
+    right_ax.tick_params(axis="y", which="major", length=4, width=0.7, direction="out", right=True, left=False, pad=2)
+    right_ax.tick_params(axis="y", which="minor", length=0, right=False, left=False)
+    right_ax.spines["right"].set_visible(True)
+    right_ax.spines["right"].set_color("black")
+    right_ax.spines["right"].set_linewidth(0.8)
 
     divider = make_axes_locatable(ax)
     if color_bar_positions == "left_right":
@@ -2175,8 +2197,8 @@ def _draw_voxel_pair_heatmap_axis(
         cax_upper.xaxis.set_label_position("top")
     cbar_lower.ax.minorticks_off()
     cbar_upper.ax.minorticks_off()
-    cbar_lower.ax.tick_params(labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7)
-    cbar_upper.ax.tick_params(labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7)
+    cbar_lower.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, left=True, right=False, labelleft=True, labelright=False)
+    cbar_upper.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, left=False, right=True, labelleft=False, labelright=True)
     cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize, labelpad=cbar_label_pad)
     cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize, labelpad=cbar_label_pad)
 
@@ -2294,7 +2316,7 @@ def plot_exemplar_voxel_pair_heatmap(
                 heading_axes,
                 panel["label"],
                 export_config,
-                pad=0.016,
+                pad=0.020,
             )
             file_stem = f"{save_name_base}_{_sanitize_file_label(str(panel['label']))}"
             out_paths.extend(_save_figure_multi(fig, save_dir, file_stem, export_config))
@@ -2400,7 +2422,7 @@ def plot_exemplar_voxel_pair_heatmap_pair(
                 annotation_info=annotation_info,
             )
             heading_specs.append((ax, heading_axes, str(panel["label"])))
-        fig.subplots_adjust(top=0.98, bottom=0.06, hspace=0.34)
+        fig.subplots_adjust(top=0.98, bottom=0.06, hspace=0.28)
         fig.canvas.draw()
         for ax, heading_axes, label in heading_specs:
             _add_heatmap_group_heading(
@@ -2409,7 +2431,7 @@ def plot_exemplar_voxel_pair_heatmap_pair(
                 heading_axes,
                 label,
                 export_config,
-                pad=0.016,
+                pad=0.020,
             )
         out_paths = _save_figure_multi(fig, save_dir, save_name_base, export_config)
         plt.close(fig)
@@ -2435,7 +2457,7 @@ def plot_exemplar_ridgeline_pair(
         return name
 
     with _font_rc(export_config):
-        fig, axes = plt.subplots(1, len(biopsies), figsize=(6.8 * len(biopsies), 8.6), dpi=export_config.dpi, sharey=False)
+        fig, axes = plt.subplots(1, len(biopsies), figsize=(7.2 * len(biopsies), 8.6), dpi=export_config.dpi, sharey=False)
         if len(biopsies) == 1:
             axes = [axes]
         legend_handles: list[Any] | None = None
@@ -2536,8 +2558,8 @@ def plot_exemplar_ridgeline_pair(
             fig.legend(
                 handles=legend_handles,
                 loc="upper center",
-                bbox_to_anchor=(0.5, 1.03),
-                ncol=3,
+                bbox_to_anchor=(0.5, 1.01),
+                ncol=len(legend_handles),
                 frameon=True,
                 fancybox=True,
                 facecolor="white",
@@ -2545,5 +2567,5 @@ def plot_exemplar_ridgeline_pair(
                 framealpha=0.95,
                 fontsize=export_config.legend_fontsize,
             )
-        fig.subplots_adjust(top=0.88, bottom=0.10, wspace=0.28)
+        fig.subplots_adjust(top=0.86, bottom=0.10, wspace=0.30)
         return _save_figure_multi(fig, save_dir, file_stem, export_config)
