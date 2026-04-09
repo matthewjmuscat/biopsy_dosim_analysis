@@ -175,12 +175,12 @@ def _add_heatmap_group_heading(
     label: str,
     export_config: FigureExportConfig,
     *,
-    pad: float = 0.020,
+    pad: float = 0.026,
 ) -> None:
     main_pos = ax.get_position()
     aux_positions = [aux_ax.get_position() for aux_ax in aux_axes if aux_ax is not None]
     top_y = max([main_pos.y1] + [pos.y1 for pos in aux_positions])
-    heading_x = max(0.02, main_pos.x0 - 0.055)
+    heading_x = max(0.02, main_pos.x0 - 0.060)
     fig.text(
         heading_x,
         top_y + pad,
@@ -200,6 +200,7 @@ def _add_shared_direction_arrow(
     y_text: float = 0.058,
     text_x: float = 0.50,
     arrow_x: float = 0.67,
+    text_ha: str = "center",
 ) -> None:
     arrow_token = r"$\rightarrow$"
     display_arrow = "→"
@@ -210,7 +211,7 @@ def _add_shared_direction_arrow(
             text_x,
             y_text,
             base_text,
-            ha="center",
+            ha=text_ha,
             va="center",
             fontsize=export_config.axes_label_fontsize + 1,
             fontweight="semibold",
@@ -670,8 +671,9 @@ def plot_exemplar_axial_profile_pair(
             fig,
             label=shared_arrow_label,
             export_config=export_config,
-            text_x=0.485,
-            arrow_x=0.60,
+            text_x=0.595,
+            arrow_x=0.603,
+            text_ha="right",
         )
         fig.subplots_adjust(top=0.77, bottom=0.20, wspace=0.18)
         out_paths = _save_figure_multi(fig, save_dir, file_stem, export_config)
@@ -1270,7 +1272,7 @@ def plot_exemplar_delta_lines_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.98),
+            bbox_to_anchor=(0.5, 1.005),
             ncol=len(handles),
             frameon=True,
             fancybox=True,
@@ -1279,7 +1281,7 @@ def plot_exemplar_delta_lines_pair(
             framealpha=0.95,
             fontsize=legend_fs,
         )
-        fig.subplots_adjust(top=0.83, bottom=0.15, wspace=0.28)
+        fig.subplots_adjust(top=0.79, bottom=0.15, wspace=0.28)
         out_paths = _save_figure_multi(fig, save_dir, fig_name, export_config)
         plt.close(fig)
         return out_paths
@@ -1340,7 +1342,7 @@ def plot_exemplar_delta_lines(
         legend = ax.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.11),
+            bbox_to_anchor=(0.5, 1.17),
             ncol=len(handles),
             frameon=True,
             fancybox=True,
@@ -1351,7 +1353,7 @@ def plot_exemplar_delta_lines(
         )
         for txt in legend.get_texts():
             txt.set_fontsize(legend_fontsize)
-        fig.subplots_adjust(top=0.80, bottom=0.15)
+        fig.subplots_adjust(top=0.72, bottom=0.15)
         out_paths = _save_figure_multi(fig, save_dir, fig_name, export_config)
         plt.close(fig)
         return out_paths
@@ -1700,7 +1702,7 @@ def plot_exemplar_voxel_dualboxes_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.965),
+            bbox_to_anchor=(0.5, 0.93),
             ncol=max(2, len(biopsies) + 2),
             frameon=True,
             fancybox=True,
@@ -1709,7 +1711,7 @@ def plot_exemplar_voxel_dualboxes_pair(
             framealpha=0.95,
             fontsize=export_config.legend_fontsize,
         )
-        fig.subplots_adjust(top=0.83, bottom=0.11, hspace=0.26)
+        fig.subplots_adjust(top=0.86, bottom=0.11, hspace=0.26)
         out_paths = _save_figure_multi(fig, output_dir, plot_name_base, export_config)
         plt.close(fig)
         return out_paths
@@ -1932,7 +1934,7 @@ def plot_exemplar_length_scale_boxes_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.965),
+            bbox_to_anchor=(0.5, 0.93),
             ncol=max(2, len(handles)),
             frameon=True,
             fancybox=True,
@@ -1941,7 +1943,7 @@ def plot_exemplar_length_scale_boxes_pair(
             framealpha=0.95,
             fontsize=export_config.legend_fontsize,
         )
-        fig.subplots_adjust(top=0.83, bottom=0.11, hspace=0.26)
+        fig.subplots_adjust(top=0.86, bottom=0.11, hspace=0.26)
         out_paths = _save_figure_multi(fig, save_dir, file_name, export_config)
         plt.close(fig)
         return out_paths
@@ -2101,7 +2103,7 @@ def _draw_voxel_pair_heatmap_axis(
         vmax=lower_limits[1],
         mask=~np.isfinite(lower_display),
         cbar=False,
-        linewidths=0.3,
+        linewidths=0.0,
         linecolor="white",
         square=True,
         ax=ax,
@@ -2113,7 +2115,7 @@ def _draw_voxel_pair_heatmap_axis(
         vmax=upper_limits[1],
         mask=~np.isfinite(upper_display),
         cbar=False,
-        linewidths=0.3,
+        linewidths=0.0,
         linecolor="white",
         square=True,
         ax=ax,
@@ -2135,40 +2137,34 @@ def _draw_voxel_pair_heatmap_axis(
     ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
     ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
     ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=10)
-    ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=14)
+    ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=12)
     ax.minorticks_off()
     ax.xaxis.set_minor_locator(NullLocator())
     ax.yaxis.set_minor_locator(NullLocator())
-    ax.tick_params(axis="both", which="major", length=4, width=0.7, direction="out", top=False, right=False, bottom=True, left=True)
+    ax.tick_params(axis="both", which="major", length=3.4, width=0.7, direction="out", top=False, right=False, bottom=True, left=True)
     ax.tick_params(axis="both", which="minor", length=0, top=False, right=False, bottom=False, left=False)
     for side in ["bottom", "left", "top", "right"]:
-        ax.spines[side].set_visible(True)
-        ax.spines[side].set_color("black")
-        ax.spines[side].set_linewidth(0.8)
+        ax.spines[side].set_visible(False)
 
     top_ax = ax.secondary_xaxis("top")
     top_ax.set_xticks(ax.get_xticks())
     top_ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
-    top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=10)
+    top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=15)
     top_ax.minorticks_off()
     top_ax.xaxis.set_minor_locator(NullLocator())
     top_ax.tick_params(axis="x", which="major", length=4, width=0.7, direction="out", top=True, bottom=False, pad=2)
     top_ax.tick_params(axis="x", which="minor", length=0, top=False, bottom=False)
-    top_ax.spines["top"].set_visible(True)
-    top_ax.spines["top"].set_color("black")
-    top_ax.spines["top"].set_linewidth(0.8)
+    top_ax.spines["top"].set_visible(False)
 
     right_ax = ax.secondary_yaxis("right")
     right_ax.set_yticks(ax.get_yticks())
     right_ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
-    right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=14)
+    right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=12)
     right_ax.minorticks_off()
     right_ax.yaxis.set_minor_locator(NullLocator())
     right_ax.tick_params(axis="y", which="major", length=4, width=0.7, direction="out", right=True, left=False, pad=2)
     right_ax.tick_params(axis="y", which="minor", length=0, right=False, left=False)
-    right_ax.spines["right"].set_visible(True)
-    right_ax.spines["right"].set_color("black")
-    right_ax.spines["right"].set_linewidth(0.8)
+    right_ax.spines["right"].set_visible(False)
 
     divider = make_axes_locatable(ax)
     if color_bar_positions == "left_right":
@@ -2178,8 +2174,10 @@ def _draw_voxel_pair_heatmap_axis(
         cbar_upper = plt.colorbar(mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(*upper_limits), cmap=cmap), cax=cax_upper)
         cbar_lower.ax.yaxis.set_ticks_position("left")
         cbar_lower.ax.yaxis.set_label_position("left")
+        cbar_lower.ax.yaxis.tick_left()
         cbar_upper.ax.yaxis.set_ticks_position("right")
         cbar_upper.ax.yaxis.set_label_position("right")
+        cbar_upper.ax.yaxis.tick_right()
     else:
         cax_lower = divider.append_axes("bottom", size="4%", pad=cbar_pad)
         cax_upper = divider.append_axes("top", size="4%", pad=cbar_pad)
@@ -2197,8 +2195,10 @@ def _draw_voxel_pair_heatmap_axis(
         cax_upper.xaxis.set_label_position("top")
     cbar_lower.ax.minorticks_off()
     cbar_upper.ax.minorticks_off()
-    cbar_lower.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, left=True, right=False, labelleft=True, labelright=False)
-    cbar_upper.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, left=False, right=True, labelleft=False, labelright=True)
+    cbar_lower.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, direction="out", left=True, right=False, labelleft=True, labelright=False, pad=2)
+    cbar_upper.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, direction="out", left=False, right=True, labelleft=False, labelright=True, pad=2)
+    cbar_lower.ax.spines["right"].set_visible(False)
+    cbar_upper.ax.spines["left"].set_visible(False)
     cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize, labelpad=cbar_label_pad)
     cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize, labelpad=cbar_label_pad)
 
@@ -2316,7 +2316,7 @@ def plot_exemplar_voxel_pair_heatmap(
                 heading_axes,
                 panel["label"],
                 export_config,
-                pad=0.020,
+                pad=0.022,
             )
             file_stem = f"{save_name_base}_{_sanitize_file_label(str(panel['label']))}"
             out_paths.extend(_save_figure_multi(fig, save_dir, file_stem, export_config))
@@ -2422,7 +2422,7 @@ def plot_exemplar_voxel_pair_heatmap_pair(
                 annotation_info=annotation_info,
             )
             heading_specs.append((ax, heading_axes, str(panel["label"])))
-        fig.subplots_adjust(top=0.98, bottom=0.06, hspace=0.28)
+        fig.subplots_adjust(top=0.98, bottom=0.06, hspace=0.24)
         fig.canvas.draw()
         for ax, heading_axes, label in heading_specs:
             _add_heatmap_group_heading(
@@ -2431,7 +2431,7 @@ def plot_exemplar_voxel_pair_heatmap_pair(
                 heading_axes,
                 label,
                 export_config,
-                pad=0.020,
+                pad=0.022,
             )
         out_paths = _save_figure_multi(fig, save_dir, save_name_base, export_config)
         plt.close(fig)
@@ -2544,6 +2544,8 @@ def plot_exemplar_ridgeline_pair(
             ax.set_xlabel(x_label, fontsize=export_config.axes_label_fontsize)
             ax.set_ylabel(y_label if idx == 0 else "", fontsize=export_config.axes_label_fontsize)
             _apply_publication_axis_style(ax, export_config, show_minor_x=True, show_minor_y=False)
+            ax.xaxis.set_minor_locator(AutoMinorLocator())
+            ax.tick_params(axis="x", which="minor", bottom=True, top=False, length=3.2, width=0.7)
             ax.set_xlim(x_min, x_max)
             _add_panel_label(ax, label, export_config)
             if legend_handles is None:

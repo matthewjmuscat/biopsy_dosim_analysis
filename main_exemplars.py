@@ -508,7 +508,7 @@ def _generate_selected_exemplar_figures(
             cbar_label_fontsize=export_config.axes_label_fontsize - 1,
             cell_value_decimals=1,
             color_bar_positions="left_right",
-            cbar_pad=0.50,
+            cbar_pad=0.92,
         )
     )
     figure_paths.extend(
@@ -534,7 +534,7 @@ def _generate_selected_exemplar_figures(
             cbar_label_fontsize=export_config.axes_label_fontsize - 1,
             cell_value_decimals=1,
             color_bar_positions="left_right",
-            cbar_pad=0.50,
+            cbar_pad=0.92,
         )
     )
     figure_paths.extend(
@@ -562,7 +562,7 @@ def _generate_selected_exemplar_figures(
             cbar_label_fontsize=export_config.axes_label_fontsize - 1,
             cell_value_decimals=1,
             color_bar_positions="left_right",
-            cbar_pad=0.50,
+            cbar_pad=0.92,
         )
     )
     figure_paths.extend(
@@ -590,7 +590,7 @@ def _generate_selected_exemplar_figures(
             cbar_label_fontsize=export_config.axes_label_fontsize - 1,
             cell_value_decimals=1,
             color_bar_positions="left_right",
-            cbar_pad=0.50,
+            cbar_pad=0.92,
         )
     )
     for pair in selected_pairs:
@@ -682,7 +682,7 @@ def _generate_selected_exemplar_figures(
                 cbar_label_fontsize=export_config.axes_label_fontsize - 1,
                 cell_value_decimals=1,
                 color_bar_positions="left_right",
-                cbar_pad=0.50,
+                cbar_pad=0.92,
             )
         )
         figure_paths.extend(
@@ -711,7 +711,7 @@ def _generate_selected_exemplar_figures(
                 cbar_label_fontsize=export_config.axes_label_fontsize - 1,
                 cell_value_decimals=1,
                 color_bar_positions="left_right",
-                cbar_pad=0.50,
+                cbar_pad=0.92,
             )
         )
         figure_paths.extend(
@@ -740,7 +740,7 @@ def _generate_selected_exemplar_figures(
                 cbar_label_fontsize=export_config.axes_label_fontsize - 1,
                 cell_value_decimals=1,
                 color_bar_positions="left_right",
-                cbar_pad=0.50,
+                cbar_pad=0.92,
             )
         )
         figure_paths.extend(
@@ -769,7 +769,7 @@ def _generate_selected_exemplar_figures(
                 cbar_label_fontsize=export_config.axes_label_fontsize - 1,
                 cell_value_decimals=1,
                 color_bar_positions="left_right",
-                cbar_pad=0.50,
+                cbar_pad=0.92,
             )
         )
     return figure_paths
