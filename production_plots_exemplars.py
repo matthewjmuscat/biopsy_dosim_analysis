@@ -237,6 +237,75 @@ def _add_shared_direction_arrow(
     )
 
 
+def _draw_manual_heatmap_bottom_left_axes(
+    ax,
+    *,
+    voxels: Sequence[int],
+    tick_label_fontsize: int,
+    axis_label_fontsize: int,
+    x_axis_label: str,
+    y_axis_label: str,
+) -> None:
+    n = max(len(voxels), 1)
+    for idx, voxel in enumerate(voxels):
+        x_ax = (idx + 0.5) / n
+        y_ax = 1.0 - (idx + 0.5) / n
+        ax.plot(
+            [x_ax, x_ax],
+            [0.0, -0.015],
+            transform=ax.transAxes,
+            color="black",
+            linewidth=0.7,
+            clip_on=False,
+        )
+        ax.text(
+            x_ax,
+            -0.028,
+            str(voxel),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=tick_label_fontsize,
+        )
+        ax.plot(
+            [0.0, -0.015],
+            [y_ax, y_ax],
+            transform=ax.transAxes,
+            color="black",
+            linewidth=0.7,
+            clip_on=False,
+        )
+        ax.text(
+            -0.022,
+            y_ax,
+            str(voxel),
+            transform=ax.transAxes,
+            ha="right",
+            va="center",
+            fontsize=tick_label_fontsize,
+        )
+
+    ax.text(
+        0.5,
+        -0.085,
+        x_axis_label,
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=axis_label_fontsize,
+    )
+    ax.text(
+        -0.095,
+        0.5,
+        y_axis_label,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        rotation=90,
+        fontsize=axis_label_fontsize,
+    )
+
+
 def _biopsy_display_label(
     pair: tuple[str, int],
     biopsy_label_map: Mapping[tuple[str, int], str] | None = None,
@@ -1197,6 +1266,16 @@ def _draw_delta_overlay_axis(
     return handles
 
 
+def _generic_delta_stat_label(kind: str) -> str:
+    if kind == "mean":
+        return r"$j=\mathrm{mean}$"
+    if kind == "mode":
+        return r"$j=\mathrm{mode}$"
+    if kind == "median":
+        return r"$j=\mathrm{Q50}$"
+    return str(kind)
+
+
 def plot_exemplar_delta_lines_pair(
     *,
     dose_deltas_df: pd.DataFrame,
@@ -1254,6 +1333,8 @@ def plot_exemplar_delta_lines_pair(
             y_tick_decimals=1,
             include_style_handles=False,
         )
+        for handle, kind in zip(handles[: len(dose_payload["order_kinds"])], dose_payload["order_kinds"]):
+            handle.set_label(_generic_delta_stat_label(str(kind)))
         _draw_delta_overlay_axis(
             axes[1],
             payload=grad_payload,
@@ -1272,7 +1353,7 @@ def plot_exemplar_delta_lines_pair(
         fig.legend(
             handles=handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.005),
+            bbox_to_anchor=(0.5, 0.985),
             ncol=len(handles),
             frameon=True,
             fancybox=True,
@@ -1281,7 +1362,7 @@ def plot_exemplar_delta_lines_pair(
             framealpha=0.95,
             fontsize=legend_fs,
         )
-        fig.subplots_adjust(top=0.79, bottom=0.15, wspace=0.28)
+        fig.subplots_adjust(top=0.81, bottom=0.15, wspace=0.28)
         out_paths = _save_figure_multi(fig, save_dir, fig_name, export_config)
         plt.close(fig)
         return out_paths
@@ -2132,22 +2213,44 @@ def _draw_voxel_pair_heatmap_axis(
 
     if show_title:
         ax.set_title(title_text, fontsize=export_config.title_fontsize)
-    ax.set_xticks(np.arange(n) + 0.5)
-    ax.set_yticks(np.arange(n) + 0.5)
-    ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
-    ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
-    ax.set_xlabel(x_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=10)
-    ax.set_ylabel(y_axis_lower_tri_label, fontsize=axis_label_fontsize, labelpad=12)
+    tick_positions = np.arange(n) + 0.5
+    ax.set_xticks(tick_positions)
+    ax.set_yticks(tick_positions)
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_xlabel("")
+    ax.set_ylabel("")
     ax.minorticks_off()
     ax.xaxis.set_minor_locator(NullLocator())
     ax.yaxis.set_minor_locator(NullLocator())
-    ax.tick_params(axis="both", which="major", length=3.4, width=0.7, direction="out", top=False, right=False, bottom=True, left=True)
+    ax.tick_params(
+        axis="both",
+        which="major",
+        length=0,
+        width=0.0,
+        direction="out",
+        top=False,
+        right=False,
+        bottom=False,
+        left=False,
+        labelbottom=False,
+        labelleft=False,
+    )
     ax.tick_params(axis="both", which="minor", length=0, top=False, right=False, bottom=False, left=False)
     for side in ["bottom", "left", "top", "right"]:
         ax.spines[side].set_visible(False)
 
+    _draw_manual_heatmap_bottom_left_axes(
+        ax,
+        voxels=voxels,
+        tick_label_fontsize=tick_label_fontsize,
+        axis_label_fontsize=axis_label_fontsize,
+        x_axis_label=x_axis_lower_tri_label,
+        y_axis_label=y_axis_lower_tri_label,
+    )
+
     top_ax = ax.secondary_xaxis("top")
-    top_ax.set_xticks(ax.get_xticks())
+    top_ax.set_xticks(tick_positions)
     top_ax.set_xticklabels(voxels, fontsize=tick_label_fontsize)
     top_ax.set_xlabel(x_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=15)
     top_ax.minorticks_off()
@@ -2157,7 +2260,7 @@ def _draw_voxel_pair_heatmap_axis(
     top_ax.spines["top"].set_visible(False)
 
     right_ax = ax.secondary_yaxis("right")
-    right_ax.set_yticks(ax.get_yticks())
+    right_ax.set_yticks(tick_positions)
     right_ax.set_yticklabels(voxels, fontsize=tick_label_fontsize)
     right_ax.set_ylabel(y_axis_upper_tri_label, fontsize=axis_label_fontsize, labelpad=12)
     right_ax.minorticks_off()
@@ -2175,9 +2278,9 @@ def _draw_voxel_pair_heatmap_axis(
         cbar_lower.ax.yaxis.set_ticks_position("left")
         cbar_lower.ax.yaxis.set_label_position("left")
         cbar_lower.ax.yaxis.tick_left()
-        cbar_upper.ax.yaxis.set_ticks_position("right")
+        cbar_upper.ax.yaxis.set_ticks_position("left")
+        cbar_upper.ax.yaxis.tick_left()
         cbar_upper.ax.yaxis.set_label_position("right")
-        cbar_upper.ax.yaxis.tick_right()
     else:
         cax_lower = divider.append_axes("bottom", size="4%", pad=cbar_pad)
         cax_upper = divider.append_axes("top", size="4%", pad=cbar_pad)
@@ -2196,11 +2299,22 @@ def _draw_voxel_pair_heatmap_axis(
     cbar_lower.ax.minorticks_off()
     cbar_upper.ax.minorticks_off()
     cbar_lower.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, direction="out", left=True, right=False, labelleft=True, labelright=False, pad=2)
-    cbar_upper.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, direction="out", left=False, right=True, labelleft=False, labelright=True, pad=2)
+    cbar_upper.ax.tick_params(axis="y", labelsize=cbar_tick_fontsize, which="major", length=4, width=0.7, direction="out", left=True, right=False, labelleft=True, labelright=False, pad=2)
     cbar_lower.ax.spines["right"].set_visible(False)
     cbar_upper.ax.spines["left"].set_visible(False)
     cbar_lower.set_label(cbar_label_lower, fontsize=cbar_label_fontsize, labelpad=cbar_label_pad)
     cbar_upper.set_label(cbar_label_upper, fontsize=cbar_label_fontsize, labelpad=cbar_label_pad)
+    cbar_upper.ax.yaxis.label.set_horizontalalignment("left")
+    for tick in cbar_lower.ax.yaxis.get_major_ticks():
+        tick.tick1line.set_visible(True)
+        tick.tick2line.set_visible(False)
+        tick.label1.set_visible(True)
+        tick.label2.set_visible(False)
+    for tick in cbar_upper.ax.yaxis.get_major_ticks():
+        tick.tick1line.set_visible(True)
+        tick.tick2line.set_visible(False)
+        tick.label1.set_visible(True)
+        tick.label2.set_visible(False)
 
     if show_annotation_box:
         ann = dict(annotation_info or {})
@@ -2316,7 +2430,7 @@ def plot_exemplar_voxel_pair_heatmap(
                 heading_axes,
                 panel["label"],
                 export_config,
-                pad=0.022,
+                pad=0.036,
             )
             file_stem = f"{save_name_base}_{_sanitize_file_label(str(panel['label']))}"
             out_paths.extend(_save_figure_multi(fig, save_dir, file_stem, export_config))
@@ -2545,7 +2659,13 @@ def plot_exemplar_ridgeline_pair(
             ax.set_ylabel(y_label if idx == 0 else "", fontsize=export_config.axes_label_fontsize)
             _apply_publication_axis_style(ax, export_config, show_minor_x=True, show_minor_y=False)
             ax.xaxis.set_minor_locator(AutoMinorLocator())
+            ax.yaxis.set_minor_locator(NullLocator())
+            ax.grid(False)
+            ax.grid(True, axis="x", which="major", color="#b8b8b8", linewidth=0.6, alpha=0.30)
+            ax.tick_params(axis="x", which="major", bottom=True, top=False, length=5, width=0.9)
             ax.tick_params(axis="x", which="minor", bottom=True, top=False, length=3.2, width=0.7)
+            ax.tick_params(axis="y", which="major", left=True, right=False, length=5, width=0.9)
+            ax.tick_params(axis="y", which="minor", left=False, right=False)
             ax.set_xlim(x_min, x_max)
             _add_panel_label(ax, label, export_config)
             if legend_handles is None:

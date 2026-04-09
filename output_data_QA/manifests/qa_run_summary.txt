@@ -1,6 +1,0 @@
-n_biopsies=27
-n_patients_all=15
-n_patients_f2=15
-n_voxel_rows=4290429
-n_point_rows=4290429
-n_dvh_metric_rows=243
