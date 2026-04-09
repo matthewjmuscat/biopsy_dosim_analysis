@@ -7,6 +7,9 @@
 *.csv
 *.pdf
 output_data/
+output_data_exemplars/
+output_data_QA/
+output_data_validation/
 output_data_GPR_analysis/
 output_data_GPR_analysis_archive/
 chatgpt digests/
