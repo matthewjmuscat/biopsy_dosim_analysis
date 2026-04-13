@@ -12,9 +12,12 @@ from qa_path1_thresholds import (
     attach_margin_z_scores_from_trials,
     compare_path1_logit_models,
     compute_biopsy_threshold_probabilities,
+    compute_delta95_vs_best_secondary_per_threshold,
+    compute_margin_correlations_by_threshold,
     compute_nominal_core_averages_from_voxels,
     drop_influential_d2_biopsy_by_cooks,
     fit_path1_logit_per_threshold,
+    summarize_margin_by_categorical_predictors,
     summarize_path1_by_threshold_v2,
 )
 
@@ -28,10 +31,18 @@ class Path1QAOutputs:
     pred_margin_df: pd.DataFrame
     coef_gradient_df: pd.DataFrame
     pred_gradient_df: pd.DataFrame
+    model_compare_gradient_df: pd.DataFrame
+    design_basic_df: pd.DataFrame
+    design_spatial_radiomics_distances_df: pd.DataFrame
+    margin_correlations_df: pd.DataFrame
+    margin_categorical_summary_df: pd.DataFrame
     coef_secondary_df: pd.DataFrame
     pred_secondary_df: pd.DataFrame
     model_compare_secondary_df: pd.DataFrame
+    model_compare_secondary_sorted_df: pd.DataFrame
     best_secondary_df: pd.DataFrame
+    secondary_ranking_df: pd.DataFrame
+    delta95_secondary_df: pd.DataFrame
 
 
 def default_threshold_configs() -> list[ThresholdConfig]:
@@ -101,6 +112,55 @@ def default_secondary_predictors() -> list[str]:
     ]
 
 
+def default_margin_correlation_predictors() -> list[str]:
+    return [
+        "nominal_core_mean_grad_gy_per_mm",
+        "BX_to_prostate_centroid_distance_norm_mean_dim",
+        "DIL centroid dist mean",
+        "Prostate centroid dist mean",
+        "Rectum centroid dist mean",
+        "Urethra centroid dist mean",
+        "DIL NN dist mean",
+        "Prostate NN dist mean",
+        "Rectum NN dist mean",
+        "Urethra NN dist mean",
+        "Length (mm)",
+        "DIL Volume",
+        "DIL Surface area",
+        "DIL Surface area to volume ratio",
+        "DIL Sphericity",
+        "DIL Compactness 1",
+        "DIL Compactness 2",
+        "DIL Spherical disproportion",
+        "DIL Maximum 3D diameter",
+        "DIL PCA major",
+        "DIL PCA minor",
+        "DIL PCA least",
+        "Prostate Volume",
+        "Prostate Surface area",
+        "Prostate Surface area to volume ratio",
+        "Prostate Sphericity",
+        "Prostate Compactness 1",
+        "Prostate Compactness 2",
+        "Prostate Spherical disproportion",
+        "Prostate Maximum 3D diameter",
+        "Prostate PCA major",
+        "Prostate PCA minor",
+        "Prostate PCA least",
+    ]
+
+
+def default_margin_categorical_predictors() -> list[str]:
+    return [
+        "Bx position in prostate LR",
+        "Bx position in prostate AP",
+        "Bx position in prostate SI",
+        "DIL DIL prostate sextant (LR)",
+        "DIL DIL prostate sextant (AP)",
+        "DIL DIL prostate sextant (SI)",
+    ]
+
+
 def build_path1_qa_outputs(
     common: CommonLoadedData,
     calculated_dvh_metrics_per_trial_df: pd.DataFrame,
@@ -128,12 +188,33 @@ def build_path1_qa_outputs(
         path1_enriched_df,
         predictors=("distance_from_threshold_nominal", "nominal_core_mean_grad_gy_per_mm"),
     )
+    model_compare_gradient_df = compare_path1_logit_models(coef_margin_df, coef_gradient_df)
+
+    design_basic_df = helper_funcs.build_path1_margin_with_spatial_and_radiomics(
+        path1_enriched_df=path1_enriched_df,
+        biopsy_basic_df=common.cohort_biopsy_basic_spatial_features_df,
+        radiomics_df=common.cohort_3d_radiomic_features_all_oar_dil_df,
+    )
 
     design_for_models = helper_funcs.build_path1_margin_with_spatial_radiomics_and_distances(
         path1_enriched_df=path1_enriched_df,
         biopsy_basic_df=common.cohort_biopsy_basic_spatial_features_df,
         radiomics_df=common.cohort_3d_radiomic_features_all_oar_dil_df,
         distances_df=common.cohort_biopsy_level_distances_statistics_filtered_df,
+    )
+    design_spatial_radiomics_distances_df = design_for_models.copy()
+
+    margin_correlations_df = compute_margin_correlations_by_threshold(
+        design_df=design_spatial_radiomics_distances_df,
+        predictor_cols=default_margin_correlation_predictors(),
+        target_col="distance_from_threshold_nominal",
+        label_col="label",
+    )
+    margin_categorical_summary_df = summarize_margin_by_categorical_predictors(
+        design_df=design_spatial_radiomics_distances_df,
+        categorical_cols=default_margin_categorical_predictors(),
+        margin_col="distance_from_threshold_nominal",
+        rule_col="label",
     )
 
     secondary_predictors = default_secondary_predictors()
@@ -175,18 +256,45 @@ def build_path1_qa_outputs(
         coef_secondary_df = pd.concat(coef_rows, ignore_index=True)
         pred_secondary_df = pd.concat(pred_rows, ignore_index=True)
         model_compare_secondary_df = pd.concat(compare_rows, ignore_index=True)
-        sorted_cmp = model_compare_secondary_df.sort_values(
+        model_compare_secondary_sorted_df = model_compare_secondary_df.sort_values(
             by=["metric", "threshold", "label", "delta_aic", "delta_brier_w", "lr_pvalue"],
             ascending=[True, True, True, True, True, True],
         )
         best_secondary_df = (
-            sorted_cmp.groupby(["metric", "threshold", "label"], as_index=False).first().copy()
+            model_compare_secondary_sorted_df.groupby(
+                ["metric", "threshold", "label"], as_index=False
+            ).first().copy()
+        )
+        secondary_ranking_df = (
+            model_compare_secondary_df.groupby("secondary_predictor")
+            .agg(
+                n_rules=("label", "nunique"),
+                median_delta_aic=("delta_aic", "median"),
+                median_delta_brier=("delta_brier_w", "median"),
+                median_delta_rmse=("delta_rmse_prob_w", "median"),
+                frac_aic_better=("delta_aic", lambda x: (x < 0.0).mean()),
+                frac_brier_better=("delta_brier_w", lambda x: (x < 0.0).mean()),
+                frac_rmse_better=("delta_rmse_prob_w", lambda x: (x < 0.0).mean()),
+                frac_lr_sig=("lr_pvalue", lambda x: (x < 0.05).mean()),
+            )
+            .reset_index()
+            .sort_values(by="median_delta_aic", ascending=True)
+            .reset_index(drop=True)
+        )
+        delta95_secondary_df = compute_delta95_vs_best_secondary_per_threshold(
+            path1_results_df=path1_results_df,
+            design_cc=design_cc,
+            coef2_all_df=coef_secondary_df,
+            best_per_rule=best_secondary_df,
         )
     else:
         coef_secondary_df = pd.DataFrame()
         pred_secondary_df = pd.DataFrame()
         model_compare_secondary_df = pd.DataFrame()
+        model_compare_secondary_sorted_df = pd.DataFrame()
         best_secondary_df = pd.DataFrame()
+        secondary_ranking_df = pd.DataFrame()
+        delta95_secondary_df = pd.DataFrame()
 
     return Path1QAOutputs(
         path1_results_df=path1_results_df,
@@ -196,8 +304,16 @@ def build_path1_qa_outputs(
         pred_margin_df=pred_margin_df,
         coef_gradient_df=coef_gradient_df,
         pred_gradient_df=pred_gradient_df,
+        model_compare_gradient_df=model_compare_gradient_df,
+        design_basic_df=design_basic_df,
+        design_spatial_radiomics_distances_df=design_spatial_radiomics_distances_df,
+        margin_correlations_df=margin_correlations_df,
+        margin_categorical_summary_df=margin_categorical_summary_df,
         coef_secondary_df=coef_secondary_df,
         pred_secondary_df=pred_secondary_df,
         model_compare_secondary_df=model_compare_secondary_df,
+        model_compare_secondary_sorted_df=model_compare_secondary_sorted_df,
         best_secondary_df=best_secondary_df,
+        secondary_ranking_df=secondary_ranking_df,
+        delta95_secondary_df=delta95_secondary_df,
     )

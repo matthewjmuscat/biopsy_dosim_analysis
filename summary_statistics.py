@@ -79,25 +79,14 @@ def generate_summary_csv(output_dir, csv_name, df, col_pairs=None, exclude_colum
 
 
 
-def generate_summary_csv_with_argmax(output_dir, csv_name, df, col_pairs=None, exclude_columns=None):
+def summarize_columns_with_argmax(df, col_pairs=None, exclude_columns=None):
     """
-    Generate summary statistics (including 5% & 95% quantiles and KDE-mode)
-    for specified columns in a DataFrame and save the results to CSV.
-    
-    If col_pairs is None, summary stats will be computed for all columns in the DataFrame,
-    except those specified in exclude_columns.
-    
-    Parameters:
-        output_dir (str): Directory path where the summary CSV will be saved.
-        csv_name (str): The name of the CSV file (e.g., 'summary.csv').
-        df (pd.DataFrame): The input DataFrame with a MultiIndex for its columns.
-        col_pairs (list of tuple, optional): List of tuples representing the columns to summarize,
-            e.g. [( 'Dose (Gy)', '' ), ( 'Dose (Gy)', 'grad' )].
-            If None, all columns in the DataFrame (not excluded) will be summarized.
-        exclude_columns (list of tuple, optional): List of column pairings to exclude.
-    """
-    os.makedirs(output_dir, exist_ok=True)
+    Return summary statistics (including 5% & 95% quantiles and KDE-mode)
+    for requested columns without writing to disk.
 
+    This mirrors `generate_summary_csv_with_argmax` so callers that need the
+    dataframe only can reuse the exact same summarisation logic.
+    """
     if col_pairs is None:
         col_pairs = list(df.columns)
     if exclude_columns:
@@ -117,10 +106,8 @@ def generate_summary_csv_with_argmax(output_dir, csv_name, df, col_pairs=None, e
             print(f"Warning: Column {pair} is all-NaN, skipping.")
             continue
 
-        # descriptive stats with extra quantiles
         stats = series.describe(percentiles=quantiles)
 
-        # compute KDE-mode safely
         data = series.values
         if np.unique(data).size < 2:
             mode = data[0]
@@ -133,16 +120,44 @@ def generate_summary_csv_with_argmax(output_dir, csv_name, df, col_pairs=None, e
             except LinAlgError:
                 mode = np.median(data)
 
-        stats['kde_mode'] = mode
-
+        stats["kde_mode"] = mode
         summary_rows.append(stats)
         labels.append(f"{pair[0]} | {pair[1]}" if pair[1] else pair[0])
 
     if not summary_rows:
         print("No valid columns to summarize; no CSV generated.")
-        return
+        return pd.DataFrame()
 
-    summary_df = pd.DataFrame(summary_rows, index=labels)
+    return pd.DataFrame(summary_rows, index=labels)
+
+
+def generate_summary_csv_with_argmax(output_dir, csv_name, df, col_pairs=None, exclude_columns=None):
+    """
+    Generate summary statistics (including 5% & 95% quantiles and KDE-mode)
+    for specified columns in a DataFrame and save the results to CSV.
+    
+    If col_pairs is None, summary stats will be computed for all columns in the DataFrame,
+    except those specified in exclude_columns.
+    
+    Parameters:
+        output_dir (str): Directory path where the summary CSV will be saved.
+        csv_name (str): The name of the CSV file (e.g., 'summary.csv').
+        df (pd.DataFrame): The input DataFrame with a MultiIndex for its columns.
+        col_pairs (list of tuple, optional): List of tuples representing the columns to summarize,
+            e.g. [( 'Dose (Gy)', '' ), ( 'Dose (Gy)', 'grad' )].
+            If None, all columns in the DataFrame (not excluded) will be summarized.
+        exclude_columns (list of tuple, optional): List of column pairings to exclude.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    summary_df = summarize_columns_with_argmax(
+        df,
+        col_pairs=col_pairs,
+        exclude_columns=exclude_columns,
+    )
+    if summary_df.empty:
+        print("No valid columns to summarize; no CSV generated.")
+        return
     output_path = os.path.join(output_dir, csv_name)
     summary_df.to_csv(output_path)
     print(f"Summary CSV successfully saved to: {output_path}")

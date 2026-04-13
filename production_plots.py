@@ -6862,6 +6862,16 @@ def plot_cohort_eff_size_dualtri_mean_std_with_pooled_dfs_v2(
         # put ticks and label on the top edge for the upper bar
         cax_top.xaxis.set_ticks_position("top")
         cax_top.xaxis.set_label_position("top")
+        cbar_upper.ax.xaxis.set_ticks_position("top")
+        cbar_upper.ax.xaxis.set_label_position("top")
+        cbar_upper.ax.tick_params(
+            axis="x",
+            which="both",
+            top=True,
+            bottom=False,
+            labeltop=True,
+            labelbottom=False,
+        )
         # bottom bar keeps default bottom ticks and label
 
 
@@ -12076,6 +12086,11 @@ def production_plot_path1_threshold_qa_summary_v2(
     min_count_inside: int = 2,
     min_frac_inside: float = 0.08,
     legend_outside: bool = True,
+    axis_label_fontsize: float = 16,
+    tick_label_fontsize: float = 14,
+    legend_fontsize: float = 12,
+    annotation_fontsize: float = 16,
+    panel_letter_fontsize: float = 17,
 ):
     """
     Path-1 QA overview figure with a more minimalist, paper-style aesthetic.
@@ -12245,7 +12260,7 @@ def production_plot_path1_threshold_qa_summary_v2(
                         x_mid = rect.get_x() + rect.get_width() / 2.0
                         inside_ok = (int(v) >= int(min_count_inside)) and ((v / tot) >= float(min_frac_inside))
 
-                        label_font = 16
+                        label_font = annotation_fontsize
 
                         if inside_ok:
                             ax_bar.text(
@@ -12288,7 +12303,7 @@ def production_plot_path1_threshold_qa_summary_v2(
 
                 bottoms = bottoms + vals
 
-            ax_bar.set_ylabel("Number of biopsies")
+            ax_bar.set_ylabel("Number of biopsies", fontsize=axis_label_fontsize)
 
             xticklabels = [
                 f"{crit}\n$n_b={int(t)}$"
@@ -12297,12 +12312,13 @@ def production_plot_path1_threshold_qa_summary_v2(
 
             ax_bar.set_xticks(x)
             ax_bar.set_xticklabels(xticklabels, rotation=0)
+            ax_bar.tick_params(axis="both", labelsize=tick_label_fontsize)
 
             # STYLE: slightly smaller title and less bold
             if show_title:
                 ax_bar.set_title(
                     "Per-biopsy threshold QA classification",
-                    fontsize="medium",
+                    fontsize=axis_label_fontsize,
                     fontweight="normal",
                 )
 
@@ -12333,7 +12349,7 @@ def production_plot_path1_threshold_qa_summary_v2(
                     bbox_to_anchor=(0.5, 0.99),
                     ncol=min(len(labels), 3),
                     frameon=False,          # STYLE: frameless legend
-                    fontsize="small",
+                    fontsize=legend_fontsize,
                     borderaxespad=0.2,
                 )
 
@@ -12376,13 +12392,14 @@ def production_plot_path1_threshold_qa_summary_v2(
             ax_box.axhline(prob_pass_high_cut, linestyle="--", linewidth=0.8, color="black")
             ax_box.axhline(prob_pass_low_cut, linestyle="--", linewidth=0.8, color="black")
 
-            ax_box.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
-            ax_box.set_xlabel("Threshold criterion")
+            ax_box.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)", fontsize=axis_label_fontsize)
+            ax_box.set_xlabel("Threshold criterion", fontsize=axis_label_fontsize)
             ax_box.set_ylim(-0.05, 1.05)
             ax_box.tick_params(axis="x", labelrotation=0)
 
             ax_box.set_xticks(np.arange(len(xticklabels)))
             ax_box.set_xticklabels(xticklabels, rotation=0)
+            ax_box.tick_params(axis="both", labelsize=tick_label_fontsize)
 
             # keep, but make subtle on box panel
             ax_box.set_axisbelow(True)
@@ -12395,9 +12412,9 @@ def production_plot_path1_threshold_qa_summary_v2(
                 ax_box.spines[spine].set_visible(False)
 
             ax_bar.text(-0.05, 1.02, "A", transform=ax_bar.transAxes,
-                        fontsize="large", fontweight="bold", va="bottom")
+                        fontsize=panel_letter_fontsize, fontweight="bold", va="bottom")
             ax_box.text(-0.05, 1.02, "B", transform=ax_box.transAxes,
-                        fontsize="large", fontweight="bold", va="bottom")
+                        fontsize=panel_letter_fontsize, fontweight="bold", va="bottom")
 
             if legend_outside:
                 fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
@@ -12443,6 +12460,15 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
     show_required_margin_line: bool = False,
     required_prob: float = 0.95,
     required_line_kwargs: dict | None = None,
+    xlabel_rule_second_line: bool = False,
+    fit_stats_fontsize: float = 10,
+    axis_label_fontsize: float = 15,
+    tick_label_fontsize: float = 12.5,
+    panel_title_fontsize: float = 15,
+    legend_fontsize: float = 12,
+    panel_letter_fontsize: float = 16,
+    panel_letter_x: float = 0.02,
+    panel_letter_y: float = 1.03,
     # NEW: precomputed logistic coefficients / scores
     coef_df: pd.DataFrame | None = None,
     coef_metric_col: str | None = None,
@@ -12525,7 +12551,12 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
             return rf"Nominal margin $\delta_{{b,r}}$ ({mm} nominal margin vs. {t} Gy)"
         """
 
-        def _make_x_label(row, rule_index: int, include_rule: bool = True) -> str:
+        def _make_x_label(
+            row,
+            rule_index: int,
+            include_rule: bool = True,
+            second_line: bool = False,
+        ) -> str:
             """
             Build x-axis label for a given metric/threshold row.
 
@@ -12544,7 +12575,10 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                 crit_inner = crit.strip("$")
 
                 # one math environment: r = 1 : <criterion>
-                label += rf" ($r = {rule_index}: {crit_inner}$)"
+                if second_line:
+                    label += "\n" + rf"($r = {rule_index}: {crit_inner}$)"
+                else:
+                    label += rf" ($r = {rule_index}: {crit_inner}$)"
 
             return label
 
@@ -12912,7 +12946,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                     xa, ya, txt,
                                     transform=ax.transAxes,
                                     ha="left", va="bottom",
-                                    fontsize="small",
+                                    fontsize=fit_stats_fontsize,
                                     bbox=dict(
                                         boxstyle="round,pad=0.2",
                                         facecolor="white",
@@ -12963,7 +12997,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                     xa, ya, txt,
                                     transform=ax.transAxes,
                                     ha="left", va="bottom",
-                                    fontsize="small",
+                                    fontsize=fit_stats_fontsize,
                                     bbox=dict(
                                         boxstyle="round,pad=0.2",
                                         facecolor="white",
@@ -12974,7 +13008,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                 )
 
                 if show_panel_titles:
-                    ax.set_title(_make_criterion(sub.iloc[0]), fontsize="medium")
+                    ax.set_title(_make_criterion(sub.iloc[0]), fontsize=panel_title_fontsize, pad=10)
 
                 # i goes 0,1,2,... so rule index is i+1
                 ax.set_xlabel(
@@ -12982,21 +13016,31 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                         sub.iloc[0],
                         rule_index=i + 1,
                         include_rule=include_rule_in_xlabel,
-                    )
+                        second_line=xlabel_rule_second_line,
+                    ),
+                    fontsize=axis_label_fontsize,
                 )
 
                 ax.tick_params(axis="x", labelbottom=True)
+                ax.tick_params(axis="both", labelsize=tick_label_fontsize)
 
                 if i < len(letters):
                     ax.text(
-                        0.02, 0.98, letters[i],
+                        panel_letter_x,
+                        panel_letter_y,
+                        letters[i],
                         transform=ax.transAxes,
-                        fontsize="large", fontweight="bold",
+                        fontsize=panel_letter_fontsize,
+                        fontweight="bold",
                         va="top", ha="left",
+                        clip_on=False,
                     )
 
                 if (i % ncols) == 0:
-                    ax.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+                    ax.set_ylabel(
+                        r"$p_{b,r}$ (Monte Carlo pass probability)",
+                        fontsize=axis_label_fontsize,
+                    )
                 else:
                     ax.set_ylabel("")
 
@@ -13016,8 +13060,9 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                     loc="upper center",
                     bbox_to_anchor=(0.5, 1.02),
                     ncol=min(len(labels), 4),
-                        frameon=True, framealpha=1.0,
-                    fontsize="small",
+                    frameon=True,
+                    framealpha=1.0,
+                    fontsize=legend_fontsize,
                 )
                 leg.get_frame().set_facecolor("white")
                 leg.get_frame().set_edgecolor("black")
@@ -13617,6 +13662,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
     scatter_alpha: float = 0.9,
     panel_letter_start: str = "A",
     include_rule_in_xlabel: bool = True,   # <<< NEW
+    xlabel_rule_second_line: bool = False,
     # panel fit / comparison stats
     annotate_fit_stats: bool = False,
     fit_stats: Sequence[str] = (
@@ -13654,6 +13700,15 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
     panel_legend_title_fontsize: float | str = 8,
     fit_stats_fontsize: float | str = 9,
     annotation_box_width_fraction: float = 0.28,
+    axis_label_fontsize: float = 15,
+    tick_label_fontsize: float = 12.5,
+    panel_title_fontsize: float = 15,
+    global_legend_fontsize: float = 12,
+    global_legend_title_fontsize: float = 12,
+    panel_letter_fontsize: float = 16,
+    panel_letter_x: float = -0.06,
+    panel_letter_y: float = 1.05,
+    show_panel_secondary_legend: bool = True,
 
 ):
     """
@@ -13866,6 +13921,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
             rule_index: int,
             include_rule: bool = True,
             is_percent: bool | None = None,
+            second_line: bool = False,
         ) -> str:
             """
             X label, e.g.
@@ -13887,7 +13943,10 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                 crit = _make_criterion(metric_name, thr)
                 # strip outer $ so we embed it in one math block
                 crit_inner = crit.strip("$")
-                label += rf" ($r = {rule_index}: {crit_inner}$)"
+                if second_line:
+                    label += "\n" + rf"($r = {rule_index}: {crit_inner}$)"
+                else:
+                    label += rf" ($r = {rule_index}: {crit_inner}$)"
 
             return label
 
@@ -14284,7 +14343,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                     sec_annot = per_label_secondary_annotation[lbl]
                     title_str = title_str + "\n" + sec_annot
 
-                ax.set_title(title_str, fontsize="medium", pad=8)
+                ax.set_title(title_str, fontsize=panel_title_fontsize, pad=10)
 
                 # Is this rule a percent-type margin? (e.g. V150 ≥ 50%)
                 is_percent = ("%" in str(lbl)) or _metric_is_percent(metric_name)
@@ -14296,14 +14355,20 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                         rule_index=idx + 1,
                         include_rule=include_rule_in_xlabel,
                         is_percent=is_percent,
-                    )
+                        second_line=xlabel_rule_second_line,
+                    ),
+                    fontsize=axis_label_fontsize,
                 )
 
                 if (idx % n_cols) == 0:
-                    ax.set_ylabel(r"$p_{b,r}$ (Monte Carlo pass probability)")
+                    ax.set_ylabel(
+                        r"$p_{b,r}$ (Monte Carlo pass probability)",
+                        fontsize=axis_label_fontsize,
+                    )
                 else:
                     ax.set_ylabel("")
 
+                ax.tick_params(axis="both", labelsize=tick_label_fontsize)
 
                 ax.set_ylim(-0.05, 1.05)
 
@@ -14311,20 +14376,20 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                 letter_idx = idx + letter_offset
                 if 0 <= letter_idx < len(panel_letters):
                     ax.text(
-                        -0.06,
-                        1.02,
+                        panel_letter_x,
+                        panel_letter_y,
                         panel_letters[letter_idx],
                         transform=ax.transAxes,
-                        fontsize="large",
+                        fontsize=panel_letter_fontsize,
                         fontweight="bold",
                         va="top",
                         ha="left",
                         clip_on=False,
                     )
 
-                                # per-panel secondary legend (if per_label_* used)
+                # per-panel secondary legend
                 leg_panel = None
-                if per_label_secondary is not None or per_label_grad_label_template is not None:
+                if show_panel_secondary_legend and grad_handles_panel:
                     if per_label_legend_title is not None and lbl in per_label_legend_title:
                         panel_legend_title = per_label_legend_title[lbl]
                     else:
@@ -14434,9 +14499,9 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                     ncol=min(len(handles_global), 4),
                     frameon=True,
                     framealpha=1.0,
-                    fontsize="small",
+                    fontsize=global_legend_fontsize,
                     title=r"QA class and margin-only fit",
-                    title_fontsize="small",
+                    title_fontsize=global_legend_title_fontsize,
                 )
                 leg_global.get_frame().set_facecolor("white")
                 leg_global.get_frame().set_edgecolor("black")
@@ -15251,6 +15316,12 @@ def plot_delta_vs_predictors_pkg_generalized(
         font_scale: float = 1.0,
         seaborn_style: str = "white",
         seaborn_context: str = "paper",
+        shared_legend: bool = False,
+        shared_legend_title: str | None = None,
+        shared_legend_ncol: int | None = None,
+        shared_legend_y: float = 1.02,
+        shared_legend_fontsize: int | None = None,
+        shared_legend_ci_label: str | None = "Shaded band: 95% CI of OLS fit",
     ):
     df = long_df.copy()
     _setup_matplotlib_defaults(
@@ -15309,6 +15380,13 @@ def plot_delta_vs_predictors_pkg_generalized(
     )
 
     stats_rows: list[dict] = []
+    shared_handles: list[Any] = []
+    shared_labels: list[str] = []
+
+    def _pretty_group_label(label: str) -> str:
+        if delta_kind_label_map is not None and label in delta_kind_label_map:
+            return delta_kind_label_map[label]
+        return label
 
     # before the plotting loop
     same_y_range = True
@@ -15367,16 +15445,22 @@ def plot_delta_vs_predictors_pkg_generalized(
         ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
         ax.tick_params(axis="both", labelsize=tick_label_fontsize)
 
-        # legend: now has one entry per bias type
-        leg = ax.legend(title=None, frameon=True, framealpha=1.0)
-        if leg:
-            for txt in leg.get_texts():
-                txt.set_fontsize(max(legend_fontsize - 1, 8))
-                ## map the legend text (each entry) to custom labels
-                if delta_kind_label_map is not None:
-                    txt_str = txt.get_text()
-                    if txt_str in delta_kind_label_map:
-                        txt.set_text(delta_kind_label_map[txt_str])
+        # legend: panel-local or shared figure legend
+        handles, labels = ax.get_legend_handles_labels()
+        pretty_labels = [_pretty_group_label(lbl) for lbl in labels]
+        if shared_legend:
+            if handles and not shared_handles:
+                shared_handles = list(handles)
+                shared_labels = list(pretty_labels)
+            leg = ax.legend(title=None, frameon=True, framealpha=1.0)
+            if leg:
+                leg.remove()
+        else:
+            leg = ax.legend(title=None, frameon=True, framealpha=1.0)
+            if leg:
+                for txt, pretty in zip(leg.get_texts(), pretty_labels):
+                    txt.set_fontsize(max(legend_fontsize - 1, 8))
+                    txt.set_text(pretty)
 
         # Ensure minor ticks on (per-panel) so they survive into saved fig
         try:
@@ -15436,6 +15520,28 @@ def plot_delta_vs_predictors_pkg_generalized(
         fig.suptitle(title, fontsize=axes_label_fontsize)
         fig.subplots_adjust(top=0.90)
 
+    if shared_legend and shared_handles:
+        import matplotlib.patches as mpatches
+
+        legend_handles = list(shared_handles)
+        legend_labels = list(shared_labels)
+        if shared_legend_ci_label:
+            legend_handles.append(
+                mpatches.Patch(facecolor="0.6", edgecolor="none", alpha=0.20)
+            )
+            legend_labels.append(shared_legend_ci_label)
+
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, shared_legend_y),
+            ncol=shared_legend_ncol or len(legend_labels),
+            frameon=True,
+            fontsize=shared_legend_fontsize or legend_fontsize,
+            title=shared_legend_title,
+        )
+
     # gridlines (light, publication-style)
     for ax in axes.flat:
         ax.minorticks_on()
@@ -15456,7 +15562,10 @@ def plot_delta_vs_predictors_pkg_generalized(
     base_name = Path(file_prefix).stem
     base_path = out_dir / base_name
 
-    fig.tight_layout()
+    if shared_legend:
+        fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.90])
+    else:
+        fig.tight_layout()
     saved_paths = _save_figure(
         fig,
         base_path,
