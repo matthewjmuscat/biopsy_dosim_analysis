@@ -23,6 +23,8 @@ import GPR_production_plots
 import GPR_kernel_sensitivity
 import GPR_semivariogram
 import GPR_blocked_cv
+from pipeline_shared_config import SharedPipelineConfig, SimulationFilterConfig
+from uncertainty_summary import load_and_write_uncertainty_summary_outputs
 
 
 def main():
@@ -517,10 +519,27 @@ def main():
     # make dirs
     output_fig_directory = output_dir.joinpath("figures")
     os.makedirs(output_fig_directory, exist_ok=True)
+    output_csv_directory = output_dir.joinpath("csv")
+    os.makedirs(output_csv_directory, exist_ok=True)
+    output_manifest_directory = output_dir.joinpath("manifests")
+    os.makedirs(output_manifest_directory, exist_ok=True)
     cohort_output_figures_dir = output_fig_directory.joinpath("cohort_output_figures")
     os.makedirs(cohort_output_figures_dir, exist_ok=True)
     pt_sp_figures_dir = output_fig_directory.joinpath("patient_specific_output_figures")
     os.makedirs(pt_sp_figures_dir, exist_ok=True)
+
+    uncertainty_paths = load_and_write_uncertainty_summary_outputs(
+        SharedPipelineConfig(
+            output_root=output_dir,
+            sim_filter=SimulationFilterConfig(simulated_type_filter=simulated_types),
+        ),
+        csv_root=output_csv_directory.joinpath("uncertainty_sources"),
+        manifest_root=output_manifest_directory,
+    )
+    print(
+        "Saved uncertainty source summaries to: "
+        f"{uncertainty_paths['configured_biopsy'].parent}"
+    )
 
 
 

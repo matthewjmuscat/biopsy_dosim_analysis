@@ -32,6 +32,7 @@ from production_plots_exemplars import (
     plot_exemplar_voxel_pair_heatmap,
     plot_exemplar_voxel_pair_heatmap_pair,
 )
+from uncertainty_summary import build_uncertainty_summary_outputs, write_uncertainty_summary_outputs
 
 
 def _ensure_dirs(output_config: ExemplarsOutputConfig) -> dict[str, Path]:
@@ -44,6 +45,15 @@ def _ensure_dirs(output_config: ExemplarsOutputConfig) -> dict[str, Path]:
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
     return dirs
+
+
+def _write_uncertainty_tables(csv_dir: Path, manifest_dir: Path, exemplar_data) -> dict[str, Path]:
+    outputs = build_uncertainty_summary_outputs(exemplar_data.common)
+    return write_uncertainty_summary_outputs(
+        csv_root=csv_dir / "uncertainty_sources",
+        manifest_root=manifest_dir,
+        outputs=outputs,
+    )
 
 
 def _selected_exemplar_summary(data) -> pd.DataFrame:
@@ -788,6 +798,7 @@ def main() -> None:
     write_inventory_csv = True
     write_selection_manifest = True
     write_dvh_metric_csvs = True
+    write_uncertainty_csvs = True
     generate_selected_exemplar_figures = True
 
     print("[main_exemplars] loading common and exemplar-specific data")
@@ -840,6 +851,13 @@ def main() -> None:
         inventory_path = dirs["manifests"] / "exemplars_table_inventory.csv"
         inventory_df.to_csv(inventory_path, index=False)
         print(f"[main_exemplars] wrote {inventory_path}")
+
+    if write_uncertainty_csvs:
+        uncertainty_paths = _write_uncertainty_tables(dirs["csv"], dirs["manifests"], exemplar_data)
+        print(
+            "[main_exemplars] wrote uncertainty summaries under "
+            f"{uncertainty_paths['configured_biopsy'].parent}"
+        )
 
     if generate_selected_exemplar_figures:
         figures_dir = dirs["figures"] / "selected_exemplars"

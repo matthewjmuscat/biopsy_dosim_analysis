@@ -16,6 +16,54 @@ from qa_cohort_pipeline import (
 )
 
 
+def _default_path1_best_secondary_plot_metadata():
+    return {
+        "per_label_legend_title": {
+            "D2 ≥ 32 Gy": r"Levels of $\hat{g}_1$",
+            "D50 ≥ 27 Gy": r"Levels of $\hat{g}_2$",
+            "D98 ≥ 20 Gy": r"Levels of $\hat{g}_3$",
+            "V150 ≥ 50%": r"Levels of $\hat{g}_4$",
+        },
+        "per_label_grad_label_template": {
+            "D2 ≥ 32 Gy": r"$\hat{{g}}_1 = {value:.2f}\ {unit}$",
+            "D50 ≥ 27 Gy": r"$\hat{{g}}_2 = {value:.2f}$",
+            "D98 ≥ 20 Gy": r"$\hat{{g}}_3 = {value:.2f}\ {unit}$",
+            "V150 ≥ 50%": r"$\hat{{g}}_4 = {value:.2f}\ {unit}$",
+        },
+        "per_label_secondary_unit": {
+            "D2 ≥ 32 Gy": r"\mathrm{Gy\ mm^{-1}}",
+            "D50 ≥ 27 Gy": "",
+            "D98 ≥ 20 Gy": r"\mathrm{Gy\ mm^{-1}}",
+            "V150 ≥ 50%": r"\mathrm{mm}",
+        },
+        "per_label_secondary_annotation": {
+            "D2 ≥ 32 Gy": (
+                r"Secondary predictor: "
+                r"$\hat{g}_1 = \overline{G}^{(0)}_b$" "\n"
+                r"(core nominal dose gradient, $\mathrm{Gy\ mm^{-1}}$)"
+            ),
+            "D50 ≥ 27 Gy": (
+                r"Secondary predictor: "
+                r"$\hat{g}_2 = \mathrm{SphDisp}_{\mathrm{DIL}}$" "\n"
+                r"(DIL spherical disproportion, dimensionless)"
+            ),
+            "D98 ≥ 20 Gy": (
+                r"Secondary predictor: "
+                r"$\hat{g}_3 = \overline{G}^{(0)}_b$" "\n"
+                r"(core nominal dose gradient, $\mathrm{Gy\ mm^{-1}}$)"
+            ),
+            "V150 ≥ 50%": (
+                r"Secondary predictor: "
+                r"$\hat{g}_4 = \overline{d}^{\mathrm{NN}}_{\mathrm{R}}$" "\n"
+                r"(rectum mean NN distance, $\mathrm{mm}$)"
+            ),
+        },
+        "per_label_stats_box_xy": {
+            "V150 ≥ 50%": (0.02, 0.60),
+        },
+    }
+
+
 def _default_file_name(file_stem: str, export_config: FigureExportConfig) -> str:
     primary_ext = str(export_config.save_formats[0]).lstrip(".")
     return f"{file_stem}.{primary_ext}"
@@ -67,7 +115,7 @@ def plot_path1_threshold_qa_summary(
     kwargs.setdefault("axis_label_fontsize", export_config.axes_label_fontsize + 1)
     kwargs.setdefault("tick_label_fontsize", export_config.tick_label_fontsize + 1)
     kwargs.setdefault("legend_fontsize", export_config.legend_fontsize + 1)
-    kwargs.setdefault("annotation_fontsize", export_config.annotation_fontsize)
+    kwargs.setdefault("annotation_fontsize", export_config.annotation_fontsize + 2)
     kwargs.setdefault("panel_letter_fontsize", export_config.title_fontsize + 1)
     with _font_rc(export_config):
         return production_plots.production_plot_path1_threshold_qa_summary_v2(
@@ -89,16 +137,22 @@ def plot_path1_p_pass_vs_margin(
     **kwargs: Any,
 ):
     file_name = file_name or _default_file_name(file_stem, export_config)
-    kwargs.setdefault("show_panel_titles", True)
+    kwargs.setdefault("show_panel_titles", False)
+    kwargs.setdefault("annotate_fit_stats", True)
+    kwargs.setdefault("fit_stats", ("n", "mcfadden_r2", "wrmse"))
     kwargs.setdefault("dpi", export_config.dpi)
     kwargs.setdefault("axis_label_fontsize", export_config.axes_label_fontsize)
     kwargs.setdefault("tick_label_fontsize", export_config.tick_label_fontsize)
     kwargs.setdefault("panel_title_fontsize", export_config.axes_label_fontsize + 1)
     kwargs.setdefault("legend_fontsize", export_config.legend_fontsize + 1)
     kwargs.setdefault("panel_letter_fontsize", export_config.title_fontsize + 1)
-    kwargs.setdefault("panel_letter_y", 1.04)
+    kwargs.setdefault("panel_letter_y", 1.12)
     kwargs.setdefault("xlabel_rule_second_line", True)
     kwargs.setdefault("fit_stats_fontsize", export_config.annotation_fontsize)
+    kwargs.setdefault("label_required_margin_line", True)
+    kwargs.setdefault("required_margin_label_fontsize", export_config.annotation_fontsize)
+    kwargs.setdefault("required_margin_label_y", 0.50)
+    kwargs.setdefault("include_required_margin_in_fit_box", False)
     with _font_rc(export_config):
         return production_plots.production_plot_path1_p_pass_vs_margin_by_metric(
             df,
@@ -120,19 +174,41 @@ def plot_path1_best_secondary_families(
     **kwargs: Any,
 ):
     file_name = file_name or _default_file_name(file_stem, export_config)
+    comparison_df = kwargs.get("comparison_df")
+    is_best_secondary_plot = comparison_df is not None and hasattr(comparison_df, "columns") and "secondary_predictor" in comparison_df.columns
+
     kwargs.setdefault("dpi", export_config.dpi)
     kwargs.setdefault("axis_label_fontsize", export_config.axes_label_fontsize - 1)
     kwargs.setdefault("tick_label_fontsize", export_config.tick_label_fontsize)
-    kwargs.setdefault("panel_title_fontsize", export_config.axes_label_fontsize + 1)
+    kwargs.setdefault(
+        "panel_title_fontsize",
+        export_config.annotation_fontsize + 1 if is_best_secondary_plot else export_config.axes_label_fontsize + 1,
+    )
     kwargs.setdefault("global_legend_fontsize", export_config.legend_fontsize + 1)
     kwargs.setdefault("global_legend_title_fontsize", export_config.legend_fontsize + 1)
     kwargs.setdefault("panel_legend_fontsize", 9)
     kwargs.setdefault("panel_legend_title_fontsize", 9)
-    kwargs.setdefault("fit_stats_fontsize", 10)
+    kwargs.setdefault("fit_stats_fontsize", 9)
     kwargs.setdefault("panel_letter_fontsize", export_config.title_fontsize + 1)
-    kwargs.setdefault("panel_letter_y", 1.06)
+    kwargs.setdefault("panel_letter_y", 1.14)
     kwargs.setdefault("show_panel_secondary_legend", True)
     kwargs.setdefault("xlabel_rule_second_line", True)
+    kwargs.setdefault("grad_quantiles", (0.10, 0.37, 0.63, 0.90))
+    kwargs.setdefault("annotate_fit_stats", True)
+    if is_best_secondary_plot:
+        meta = _default_path1_best_secondary_plot_metadata()
+        kwargs.setdefault("show_panel_titles", True)
+        kwargs.setdefault("include_criterion_in_panel_title", False)
+        kwargs.setdefault("fit_stats", ("n", "delta_aic", "delta_rmse", "lr_p"))
+        kwargs.setdefault("per_label_legend_title", meta["per_label_legend_title"])
+        kwargs.setdefault("per_label_grad_label_template", meta["per_label_grad_label_template"])
+        kwargs.setdefault("per_label_secondary_unit", meta["per_label_secondary_unit"])
+        kwargs.setdefault("per_label_secondary_annotation", meta["per_label_secondary_annotation"])
+        kwargs.setdefault("per_label_panel_title", meta["per_label_secondary_annotation"])
+        kwargs.setdefault("per_label_stats_box_xy", meta["per_label_stats_box_xy"])
+    else:
+        kwargs.setdefault("show_panel_titles", False)
+        kwargs.setdefault("fit_stats", ("n", "delta_aic", "delta_brier", "lr_p"))
     with _font_rc(export_config):
         return production_plots.production_plot_path1_logit_margin_plus_grad_families_generalized(
             pred_df=pred_df,
@@ -246,9 +322,12 @@ def plot_cohort_delta_vs_predictors(
     kwargs.setdefault("shared_legend", True)
     kwargs.setdefault("shared_legend_title", None)
     kwargs.setdefault("shared_legend_ncol", 4)
-    kwargs.setdefault("shared_legend_y", 1.02)
+    kwargs.setdefault("shared_legend_y", 0.995)
     kwargs.setdefault("shared_legend_fontsize", export_config.legend_fontsize)
     kwargs.setdefault("shared_legend_ci_label", "Shaded band: 95% CI of OLS fit")
+    kwargs.setdefault("show_panel_letters", True)
+    kwargs.setdefault("panel_letter_fontsize", export_config.title_fontsize)
+    kwargs.setdefault("panel_letter_y", 1.15)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     with _font_rc(export_config):

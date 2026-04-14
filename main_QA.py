@@ -22,6 +22,7 @@ from production_plots_QA import (
 )
 from qa_cohort_pipeline import CohortQAOutputs, build_cohort_qa_outputs
 from qa_path1_pipeline import Path1QAOutputs, build_path1_qa_outputs
+from uncertainty_summary import build_uncertainty_summary_outputs, write_uncertainty_summary_outputs
 
 
 def _ensure_dirs(output_config: QAOutputConfig) -> dict[str, Path]:
@@ -71,6 +72,9 @@ def _generate_path1_qa_figures(figures_dir: Path, path1_outputs: Path1QAOutputs)
             save_dir=figures_dir,
             export_config=export_config,
             file_stem="Fig_Path1_logit_margin_plus_grad_families",
+            comparison_df=path1_outputs.model_compare_gradient_df,
+            overlay_1d_model=True,
+            coef1_df=path1_outputs.coef_margin_df,
         )
     )
     figure_paths.extend(
@@ -355,6 +359,15 @@ def _write_cohort_experimental_tables(csv_dir: Path, cohort_outputs: CohortQAOut
     )
 
 
+def _write_uncertainty_tables(csv_dir: Path, manifest_dir: Path, qa_data) -> dict[str, Path]:
+    outputs = build_uncertainty_summary_outputs(qa_data.common)
+    return write_uncertainty_summary_outputs(
+        csv_root=csv_dir / "uncertainty_sources",
+        manifest_root=manifest_dir,
+        outputs=outputs,
+    )
+
+
 def main() -> None:
     pipeline_config = SharedPipelineConfig(
         output_root=Path(__file__).resolve().parent / "output_data_QA",
@@ -365,6 +378,7 @@ def main() -> None:
     write_dvh_csvs = True
     write_path1_csvs = True
     write_cohort_csvs = True
+    write_uncertainty_csvs = True
     generate_path1_qa_figures = True
     generate_cohort_qa_figures = True
 
@@ -391,6 +405,10 @@ def main() -> None:
         inventory_path = dirs["manifests"] / "qa_table_inventory.csv"
         inventory_df.to_csv(inventory_path, index=False)
         print(f"[main_QA] wrote {inventory_path}")
+
+    if write_uncertainty_csvs:
+        uncertainty_paths = _write_uncertainty_tables(dirs["csv"], dirs["manifests"], qa_data)
+        print(f"[main_QA] wrote uncertainty summaries under {uncertainty_paths['configured_biopsy'].parent}")
 
     path1_outputs = None
     if write_path1_csvs or generate_path1_qa_figures:

@@ -12346,12 +12346,14 @@ def production_plot_path1_threshold_qa_summary_v2(
                     handles,
                     labels,
                     loc="upper center",
-                    bbox_to_anchor=(0.5, 0.99),
+                    bbox_to_anchor=(0.5, 1.015),
                     ncol=min(len(labels), 3),
-                    frameon=False,          # STYLE: frameless legend
+                    frameon=True,
                     fontsize=legend_fontsize,
                     borderaxespad=0.2,
                 )
+                leg.get_frame().set_facecolor("white")
+                leg.get_frame().set_edgecolor("black")
 
             # STYLE: subtle grid
             ax_bar.yaxis.grid(False)
@@ -12460,6 +12462,11 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
     show_required_margin_line: bool = False,
     required_prob: float = 0.95,
     required_line_kwargs: dict | None = None,
+    label_required_margin_line: bool = False,
+    required_margin_label: str | None = None,
+    required_margin_label_fontsize: float = 10,
+    required_margin_label_y: float = 0.94,
+    include_required_margin_in_fit_box: bool = True,
     xlabel_rule_second_line: bool = False,
     fit_stats_fontsize: float = 10,
     axis_label_fontsize: float = 15,
@@ -12468,7 +12475,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
     legend_fontsize: float = 12,
     panel_letter_fontsize: float = 16,
     panel_letter_x: float = 0.02,
-    panel_letter_y: float = 1.03,
+    panel_letter_y: float = 1.07,
     # NEW: precomputed logistic coefficients / scores
     coef_df: pd.DataFrame | None = None,
     coef_metric_col: str | None = None,
@@ -12587,6 +12594,13 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
         def _x_units_suffix(metric_name: str) -> str:
             return "%" if _metric_is_percent(metric_name) else " Gy"
 
+        def _format_required_margin_line_label(metric_name: str, x_req: float) -> str:
+            if required_margin_label is not None:
+                return required_margin_label
+            if _metric_is_percent(metric_name):
+                return rf"$\hat{{\delta}}_{{{required_prob:.2f}}}={x_req:.1f}\%$"
+            return rf"$\hat{{\delta}}_{{{required_prob:.2f}}}={x_req:.1f}\,\mathrm{{Gy}}$"
+
         if metric_order is None:
             metric_order = ["D_2% (Gy)", "D_50% (Gy)", "D_98% (Gy)", "V_150% (%)"]
             metric_order = [m for m in metric_order if m in df_plot[metric_col].unique()]
@@ -12700,7 +12714,12 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                     if np.isfinite(wbrier):
                         parts.append("wBrier=" + f"{wbrier:.2f}")
 
-            if show_required_margin_line and (x_req is not None) and np.isfinite(x_req):
+            if (
+                include_required_margin_in_fit_box
+                and show_required_margin_line
+                and (x_req is not None)
+                and np.isfinite(x_req)
+            ):
                 suffix = _x_units_suffix(metric_name)
                 parts.append(rf"$\hat{{\delta}}_{{{required_prob:.2f}}}$={x_req:.1f}{suffix}")
 
@@ -12742,17 +12761,65 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                     if wbrier is not None and np.isfinite(wbrier):
                         parts.append("wBrier=" + f"{wbrier:.2f}")
 
-            if show_required_margin_line and (x_req is not None) and np.isfinite(x_req):
+            if (
+                include_required_margin_in_fit_box
+                and show_required_margin_line
+                and (x_req is not None)
+                and np.isfinite(x_req)
+            ):
                 suffix = _x_units_suffix(metric_name)
                 parts.append(rf"$\hat{{\delta}}_{{{required_prob:.2f}}}$={x_req:.1f}{suffix}")
 
             return "\n".join(parts)
+
+        def _required_margin_label_layout(
+            metric_name: str,
+            x_req: float,
+            x_min_sub: float,
+            x_max_sub: float,
+        ) -> tuple[float, str]:
+            x_span = x_max_sub - x_min_sub
+            x_offset = 0.03 * x_span if np.isfinite(x_span) and x_span > 0 else 0.8
+            x_mid = 0.5 * (x_min_sub + x_max_sub)
+            if x_req >= x_mid:
+                x_text = x_req - x_offset
+                ha = "right"
+            else:
+                x_text = x_req + x_offset
+                ha = "left"
+            return x_text, ha
+
+        def _required_margin_label_rect(
+            x_text: float,
+            ha: str,
+            x_min_sub: float,
+            x_max_sub: float,
+            y_axes: float,
+        ) -> tuple[float, float, float, float] | None:
+            x_span = x_max_sub - x_min_sub
+            if not np.isfinite(x_span) or x_span <= 0:
+                return None
+            xN = (x_text - x_min_sub) / x_span
+            label_w = 0.22
+            label_h = 0.10
+            if ha == "right":
+                xa = xN - label_w
+            else:
+                xa = xN
+            ya = y_axes - label_h / 2.0
+            xa = min(max(xa, 0.01), 0.99 - label_w)
+            ya = min(max(ya, 0.01), 0.99 - label_h)
+            return xa, ya, label_w, label_h
 
         def _choose_fitbox_loc(
             xvals: np.ndarray,
             yvals: np.ndarray,
             txt: str,
             avoid_x: Sequence[float] | None = None,
+            avoid_y: Sequence[float] | None = None,
+            curve_x: np.ndarray | None = None,
+            curve_y: np.ndarray | None = None,
+            avoid_rects: Sequence[tuple[float, float, float, float]] | None = None,
         ) -> tuple[float, float]:
             try:
                 xvals = np.asarray(xvals, float)
@@ -12773,7 +12840,21 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                 yN = (yvals - ymin) / (ymax - ymin)
                 yN = np.clip(yN, 0.0, 1.0)
 
-                # NEW: penalize specific vertical lines (e.g. required margin)
+                if curve_x is not None and curve_y is not None:
+                    cx = np.asarray(curve_x, float)
+                    cy = np.asarray(curve_y, float)
+                    okc = np.isfinite(cx) & np.isfinite(cy)
+                    cx, cy = cx[okc], cy[okc]
+                    if cx.size > 0:
+                        inrange = (cx >= xmin) & (cx <= xmax)
+                        cx, cy = cx[inrange], cy[inrange]
+                        if cx.size > 0:
+                            cxN = (cx - xmin) / (xmax - xmin)
+                            cyN = (cy - ymin) / (ymax - ymin)
+                            cyN = np.clip(cyN, 0.0, 1.0)
+                            xN = np.concatenate([xN, cxN])
+                            yN = np.concatenate([yN, cyN])
+
                 if avoid_x:
                     avoid_arr = np.array(
                         [ax for ax in avoid_x if np.isfinite(ax)], dtype=float
@@ -12792,34 +12873,65 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                             xN = np.concatenate([xN, fake_xN])
                             yN = np.concatenate([yN, fake_yN])
 
+                if avoid_y:
+                    avoid_y_arr = np.array(
+                        [ay for ay in avoid_y if np.isfinite(ay)], dtype=float
+                    )
+                    if avoid_y_arr.size > 0:
+                        avoid_y_arr = avoid_y_arr[(avoid_y_arr >= ymin) & (avoid_y_arr <= ymax)]
+                        if avoid_y_arr.size > 0:
+                            avoid_yN = (avoid_y_arr - ymin) / (ymax - ymin)
+                            n_x_fake = 40
+                            fake_xN = np.tile(np.linspace(0.0, 1.0, n_x_fake), avoid_y_arr.size)
+                            fake_yN = np.repeat(avoid_yN, n_x_fake)
+                            xN = np.concatenate([xN, fake_xN])
+                            yN = np.concatenate([yN, fake_yN])
+
+                if avoid_rects:
+                    for xa, ya, w, h in avoid_rects:
+                        x_grid_fake = np.linspace(xa, xa + w, 10)
+                        y_grid_fake = np.linspace(ya, ya + h, 6)
+                        fake_xN = np.repeat(x_grid_fake, len(y_grid_fake))
+                        fake_yN = np.tile(y_grid_fake, len(x_grid_fake))
+                        xN = np.concatenate([xN, fake_xN])
+                        yN = np.concatenate([yN, fake_yN])
+
                 n_lines = txt.count("\n") + 1
                 box_w = 0.34
                 box_h = min(0.12 + 0.05 * n_lines, 0.42)
 
                 candidates = [
-                    (0.68, 0.45),
-                    (0.68, 0.08),
-                    (0.68, 0.70),
-                    (0.02, 0.70),
-                    (0.02, 0.45),
-                    (0.02, 0.08),
+                    (xa, ya)
+                    for ya in (0.66, 0.50, 0.34, 0.16)
+                    for xa in (0.03, 0.18, 0.33, 0.48, 0.63)
                 ]
 
                 best = None
                 best_score = 1e18
                 for xa, ya in candidates:
+                    xa = min(max(xa, 0.02), 0.98 - box_w)
+                    ya = min(max(ya, 0.04), 0.98 - box_h)
                     xb = min(xa + box_w, 0.99)
                     yb = min(ya + box_h, 0.99)
                     inside = (xN >= xa) & (xN <= xb) & (yN >= ya) & (yN <= yb)
                     score = float(np.sum(inside))
-                    tie = -xa
+                    cx = xa + box_w / 2.0
+                    cy = ya + box_h / 2.0
+                    if xN.size > 0:
+                        d2 = (xN - cx) ** 2 + (yN - cy) ** 2
+                        nearest = float(np.sqrt(np.min(d2)))
+                    else:
+                        nearest = 1.0
+                    tie = (-nearest, abs(0.52 - cx))
                     if (score < best_score) or (
-                        score == best_score and (best is None or tie < -best[0])
+                        score == best_score and (best is None or tie < best[2])
                     ):
-                        best = (xa, ya)
+                        best = (xa, ya, tie)
                         best_score = score
 
-                return best if best is not None else fit_stats_loc
+                if best is not None:
+                    return best[0], best[1]
+                return fit_stats_loc
             except Exception:
                 return fit_stats_loc
 
@@ -12930,6 +13042,50 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                 if required_line_kwargs:
                                     kwargs.update(required_line_kwargs)
                                 ax.axvline(x_req, **kwargs)
+                                label_avoid_rects = []
+                                if label_required_margin_line:
+                                    label_text = _format_required_margin_line_label(metric_name, x_req)
+                                    trans = mpl.transforms.blended_transform_factory(ax.transData, ax.transAxes)
+                                    x_min_sub = float(sub[margin_col].min())
+                                    x_max_sub = float(sub[margin_col].max())
+                                    x_text, ha = _required_margin_label_layout(
+                                        metric_name,
+                                        x_req,
+                                        x_min_sub,
+                                        x_max_sub,
+                                    )
+                                    rect = _required_margin_label_rect(
+                                        x_text,
+                                        ha,
+                                        x_min_sub,
+                                        x_max_sub,
+                                        required_margin_label_y,
+                                    )
+                                    if rect is not None:
+                                        label_avoid_rects.append(rect)
+                                    ax.text(
+                                        x_text,
+                                        required_margin_label_y,
+                                        label_text,
+                                        transform=trans,
+                                        rotation=0,
+                                        ha=ha,
+                                        va="center",
+                                        fontsize=required_margin_label_fontsize,
+                                        color=kwargs.get("color", "black"),
+                                        bbox=dict(
+                                            boxstyle="round,pad=0.18",
+                                            facecolor="white",
+                                            edgecolor="black",
+                                            linewidth=0.8,
+                                            alpha=1.0,
+                                        ),
+                                        zorder=18,
+                                    )
+                            else:
+                                label_avoid_rects = []
+                        else:
+                            label_avoid_rects = []
 
                         if annotate_fit_stats or (show_required_margin_line and x_req is not None):
                             txt = _format_panel_box_from_coef(row_coef=row_coef,
@@ -12941,6 +13097,10 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                     sub[p_pass_col].to_numpy(),
                                     txt,
                                     avoid_x=[x_req] if x_req is not None else None,
+                                    avoid_y=[prob_pass_low_cut, prob_pass_high_cut],
+                                    curve_x=x_grid,
+                                    curve_y=y_pred,
+                                    avoid_rects=label_avoid_rects,
                                 )
                                 ax.text(
                                     xa, ya, txt,
@@ -12951,7 +13111,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                         boxstyle="round,pad=0.2",
                                         facecolor="white",
                                         edgecolor="black",
-                                        alpha=0.9,
+                                        alpha=1.0,
                                     ),
                                     zorder=20,
                                 )
@@ -12980,6 +13140,50 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                 if required_line_kwargs:
                                     kwargs.update(required_line_kwargs)
                                 ax.axvline(x_req, **kwargs)
+                                label_avoid_rects = []
+                                if label_required_margin_line:
+                                    label_text = _format_required_margin_line_label(metric_name, x_req)
+                                    trans = mpl.transforms.blended_transform_factory(ax.transData, ax.transAxes)
+                                    x_min_sub = float(sub[margin_col].min())
+                                    x_max_sub = float(sub[margin_col].max())
+                                    x_text, ha = _required_margin_label_layout(
+                                        metric_name,
+                                        x_req,
+                                        x_min_sub,
+                                        x_max_sub,
+                                    )
+                                    rect = _required_margin_label_rect(
+                                        x_text,
+                                        ha,
+                                        x_min_sub,
+                                        x_max_sub,
+                                        required_margin_label_y,
+                                    )
+                                    if rect is not None:
+                                        label_avoid_rects.append(rect)
+                                    ax.text(
+                                        x_text,
+                                        required_margin_label_y,
+                                        label_text,
+                                        transform=trans,
+                                        rotation=0,
+                                        ha=ha,
+                                        va="center",
+                                        fontsize=required_margin_label_fontsize,
+                                        color=kwargs.get("color", "black"),
+                                        bbox=dict(
+                                            boxstyle="round,pad=0.18",
+                                            facecolor="white",
+                                            edgecolor="black",
+                                            linewidth=0.8,
+                                            alpha=1.0,
+                                        ),
+                                        zorder=18,
+                                    )
+                            else:
+                                label_avoid_rects = []
+                        else:
+                            label_avoid_rects = []
 
                         if annotate_fit_stats or (show_required_margin_line and x_req is not None):
                             txt = _format_panel_box_from_fit(
@@ -12992,6 +13196,10 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                     sub[p_pass_col].to_numpy(),
                                     txt,
                                     avoid_x=[x_req] if x_req is not None else None,
+                                    avoid_y=[prob_pass_low_cut, prob_pass_high_cut],
+                                    curve_x=x_grid,
+                                    curve_y=y_pred,
+                                    avoid_rects=label_avoid_rects,
                                 )
                                 ax.text(
                                     xa, ya, txt,
@@ -13002,7 +13210,7 @@ def production_plot_path1_p_pass_vs_margin_by_metric(
                                         boxstyle="round,pad=0.2",
                                         facecolor="white",
                                         edgecolor="black",
-                                        alpha=0.9,
+                                        alpha=1.0,
                                     ),
                                     zorder=20,
                                 )
@@ -13691,6 +13899,7 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
     # NEW: per-panel units & annotation for the secondary predictor
     per_label_secondary_unit: dict[str, str] | None = None,
     per_label_secondary_annotation: dict[str, str] | None = None,
+    per_label_panel_title: dict[str, str] | None = None,
     # NEW: manual override for stats-box location, per label
     # values can be: "top-left", "top-right", "bottom-left", "bottom-right"
     per_label_stats_box_corner: dict[str, str] | None = None,
@@ -13707,8 +13916,10 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
     global_legend_title_fontsize: float = 12,
     panel_letter_fontsize: float = 16,
     panel_letter_x: float = -0.06,
-    panel_letter_y: float = 1.05,
+    panel_letter_y: float = 1.09,
     show_panel_secondary_legend: bool = True,
+    show_panel_titles: bool = True,
+    include_criterion_in_panel_title: bool = True,
 
 ):
     """
@@ -14335,15 +14546,19 @@ def production_plot_path1_logit_margin_plus_grad_families_generalized(
                 ax.axhline(low_cut, linestyle="--", linewidth=0.9, color="black", zorder=1)
                 ax.axvline(0.0, linestyle=":", linewidth=0.9, color="black", zorder=1)
 
-                # Build 1–2 line title: rule + optional secondary predictor annotation
-                title_str = _make_criterion(metric_name, thr)  # same as before, e.g. "$D_{2\%} \ge 32\,\mathrm{Gy}$"
-
-                if per_label_secondary_annotation is not None and lbl in per_label_secondary_annotation:
-                    # second line: arbitrary LaTeX / text you pass in the dict
-                    sec_annot = per_label_secondary_annotation[lbl]
-                    title_str = title_str + "\n" + sec_annot
-
-                ax.set_title(title_str, fontsize=panel_title_fontsize, pad=10)
+                if show_panel_titles:
+                    if per_label_panel_title is not None and lbl in per_label_panel_title:
+                        title_str = per_label_panel_title[lbl]
+                    else:
+                        title_parts: list[str] = []
+                        if include_criterion_in_panel_title:
+                            title_parts.append(_make_criterion(metric_name, thr))
+                        if per_label_secondary_annotation is not None and lbl in per_label_secondary_annotation:
+                            title_parts.append(per_label_secondary_annotation[lbl])
+                        title_str = "\n".join(part for part in title_parts if part)
+                    ax.set_title(title_str, fontsize=panel_title_fontsize, pad=10)
+                else:
+                    ax.set_title("")
 
                 # Is this rule a percent-type margin? (e.g. V150 ≥ 50%)
                 is_percent = ("%" in str(lbl)) or _metric_is_percent(metric_name)
@@ -15322,6 +15537,11 @@ def plot_delta_vs_predictors_pkg_generalized(
         shared_legend_y: float = 1.02,
         shared_legend_fontsize: int | None = None,
         shared_legend_ci_label: str | None = "Shaded band: 95% CI of OLS fit",
+        show_panel_letters: bool = False,
+        panel_letter_start: str = "A",
+        panel_letter_x: float = -0.06,
+        panel_letter_y: float = 1.04,
+        panel_letter_fontsize: int = 16,
     ):
     df = long_df.copy()
     _setup_matplotlib_defaults(
@@ -15395,6 +15615,9 @@ def plot_delta_vs_predictors_pkg_generalized(
         # round up to a nice number, e.g. nearest 10
         y_max = np.ceil(y_max / 10) * 10
 
+    panel_letters = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    letter_offset = ord(panel_letter_start.upper()) - ord("A")
+
 
     for i, col in enumerate(predictor_cols):
         r, c = divmod(i, ncols)
@@ -15444,6 +15667,21 @@ def plot_delta_vs_predictors_pkg_generalized(
         )
         ax.set_ylabel(y_label, fontsize=axes_label_fontsize)
         ax.tick_params(axis="both", labelsize=tick_label_fontsize)
+
+        if show_panel_letters:
+            letter_idx = i + letter_offset
+            if 0 <= letter_idx < len(panel_letters):
+                ax.text(
+                    panel_letter_x,
+                    panel_letter_y,
+                    panel_letters[letter_idx],
+                    transform=ax.transAxes,
+                    fontsize=panel_letter_fontsize,
+                    fontweight="bold",
+                    va="top",
+                    ha="left",
+                    clip_on=False,
+                )
 
         # legend: panel-local or shared figure legend
         handles, labels = ax.get_legend_handles_labels()
@@ -15531,7 +15769,7 @@ def plot_delta_vs_predictors_pkg_generalized(
             )
             legend_labels.append(shared_legend_ci_label)
 
-        fig.legend(
+        leg = fig.legend(
             legend_handles,
             legend_labels,
             loc="upper center",
@@ -15541,6 +15779,10 @@ def plot_delta_vs_predictors_pkg_generalized(
             fontsize=shared_legend_fontsize or legend_fontsize,
             title=shared_legend_title,
         )
+        if leg is not None:
+            leg.get_frame().set_facecolor("white")
+            leg.get_frame().set_edgecolor("black")
+            leg.get_frame().set_alpha(1.0)
 
     # gridlines (light, publication-style)
     for ax in axes.flat:
